@@ -50,7 +50,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSideQuestions } from "@/hooks/use-side-questions";
-import { api, sseUrl } from "@/lib/api";
+import { api, openSSE } from "@/lib/api";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { MOCK } from "@/lib/mock/enabled";
 import { isBtwCommand } from "@/lib/side-questions";
@@ -969,9 +969,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
           };
         });
         // Open the single task SSE from the snapshot cursor.
-        const es = new EventSource(
-          sseUrl(`/api/exploration/activity/stream?task=${encodeURIComponent(taskId)}&since=${snapshotRef.current}`),
-        );
+        const es = openSSE(`/api/exploration/activity/stream?task=${encodeURIComponent(taskId)}&since=${snapshotRef.current}`);
         esRef.current = es;
         es.onopen = () => setSseLive(true);
         es.onerror = () => setSseLive(false); // EventSource auto-reconnects; DB compensates the gap

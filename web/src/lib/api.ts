@@ -197,6 +197,15 @@ export function sseUrl(path: string): string {
   return token ? `${base}${path}${sep}token=${encodeURIComponent(token)}` : `${base}${path}`;
 }
 
+export function openSSE(path: string): EventSource {
+  const url = sseUrl(path);
+  const target = new URL(url, window.location.href);
+  // Same-origin streams already send cookies. Only opt into cross-port cookies
+  // for the local Next/Go dev pair; keep custom remote SSE endpoints unchanged.
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
+  return new EventSource(url, { withCredentials: local && target.hostname === window.location.hostname });
+}
+
 const get = <T>(p: string) => http<T>(p);
 const post = <T>(p: string, body?: unknown) =>
   http<T>(p, { method: "POST", body: body ? JSON.stringify(body) : undefined });
@@ -812,6 +821,9 @@ export const api = {
 
   // ---- app settings (runtime toggles) ----
   settings: () => get<Settings>(`/settings`),
+  basicAuthSettings: () => get<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth"),
+  setBasicAuthSettings: (settings: { enabled: boolean; username: string; password: string }) =>
+    put<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth", settings),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
   // Run a real "test" search with the given (or saved) config to verify it works.
   testWebSearch: (patch: {
