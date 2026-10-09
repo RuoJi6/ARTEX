@@ -463,7 +463,7 @@ export function FindingCaseFolder({
   onSelect,
   contextTask,
   readOnly = false,
-  presentation = "records",
+  presentation = "compact",
   className,
   renderRecords,
 }: {
@@ -512,46 +512,48 @@ export function FindingCaseFolder({
               漏洞文件夹 · {group.count} 条原始上报 ·{" "}
               {group.report_version !== group.version ? "统一报告待更新" : "统一报告已生成"}
             </CardDescription>
-            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs">
-              {presentation !== "task" && group.task_id ? (
-                <Link
-                  className="max-w-full truncate hover:underline"
-                  href={`/function/tasks/detail?id=${group.task_id}`}
-                  title={row.task_description}
-                >
-                  所属任务 #{group.task_id}
-                  {taskLabel ? ` · ${taskLabel}` : ""}
-                </Link>
-              ) : null}
-              {(row.assets ?? []).length ? (
-                <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
-                  资产：
-                  {row.assets?.map((a) => (
-                    <code
-                      key={a.id}
-                      className="max-w-48 truncate rounded bg-muted px-1"
-                      title={`${a.type} · ${a.label}`}
-                    >
-                      {a.label}
-                    </code>
-                  ))}
-                  {(row.asset_count ?? 0) > 4 ? <span>+{(row.asset_count ?? 0) - 4}</span> : null}
-                </span>
-              ) : (
-                <span>未关联资产</span>
-              )}
-              {row.last_found_at ? (
-                <time dateTime={row.last_found_at}>
-                  最近上报{" "}
-                  {new Date(row.last_found_at).toLocaleString("zh-CN", {
-                    month: "2-digit",
-                    day: "2-digit",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </time>
-              ) : null}
-            </div>
+            {presentation !== "compact" ? (
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs">
+                {presentation !== "task" && group.task_id ? (
+                  <Link
+                    className="max-w-full truncate hover:underline"
+                    href={`/function/tasks/detail?id=${group.task_id}`}
+                    title={row.task_description}
+                  >
+                    所属任务 #{group.task_id}
+                    {taskLabel ? ` · ${taskLabel}` : ""}
+                  </Link>
+                ) : null}
+                {(row.assets ?? []).length ? (
+                  <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
+                    资产：
+                    {row.assets?.map((a) => (
+                      <code
+                        key={a.id}
+                        className="max-w-48 truncate rounded bg-muted px-1"
+                        title={`${a.type} · ${a.label}`}
+                      >
+                        {a.label}
+                      </code>
+                    ))}
+                    {(row.asset_count ?? 0) > 4 ? <span>+{(row.asset_count ?? 0) - 4}</span> : null}
+                  </span>
+                ) : (
+                  <span>未关联资产</span>
+                )}
+                {row.last_found_at ? (
+                  <time dateTime={row.last_found_at}>
+                    最近上报{" "}
+                    {new Date(row.last_found_at).toLocaleString("zh-CN", {
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </time>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           <div className="flex shrink-0 flex-col gap-1">
             <span className="text-muted-foreground text-xs">严 / 高 / 中 / 低</span>
@@ -566,7 +568,6 @@ export function FindingCaseFolder({
           aria-label={`${group.title}的原始子报告`}
           className="border-t bg-muted/20 px-4 py-4 sm:px-6"
         >
-          <p className="mb-3 text-muted-foreground text-xs">原始子报告 · 各自等级和证据保留</p>
           <FindingCaseMembers
             nested
             renderRecords={renderRecords}
