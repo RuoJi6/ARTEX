@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "已存在的正式版本标签，例如 v0.3.17"
+        description: "已存在的正式版本标签，例如 v0.3.15"
         required: true
         type: string
   push:
@@ -30,7 +30,7 @@ jobs:
           ARTEX_DOCKER_IMAGE: ${{ vars.ARTEX_DOCKER_IMAGE }}
         run: |
           if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "正式版本必须是 v主版本.次版本.修订号，例如 v0.3.17" >&2
+            echo "正式版本必须是 v主版本.次版本.修订号，例如 v0.3.15" >&2
             exit 1
           fi
           if [[ ! "$ARTEX_DOCKER_IMAGE" =~ ^[a-z0-9][a-z0-9_-]*/[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
