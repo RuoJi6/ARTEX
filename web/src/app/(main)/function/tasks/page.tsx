@@ -117,8 +117,9 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { TimeSelect } from "@/components/time-select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { api } from "@/lib/api";
+import { api, type ScheduleInput } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { type SortDirection, useStoredSortPreference } from "@/lib/sort-preference";
 import type {
@@ -3096,6 +3097,17 @@ function CreateTaskSheet({
   const [seedFirstIntent, setSeedFirstIntent] = React.useState(false); // 创建时下发种子意图,worker 免等首轮 planner 直接开跑;默认关闭,走标准先规划再执行
   const [coverageEnabled, setCoverageEnabled] = React.useState(true); // 资产覆盖度功能;默认开。关闭=不计算/展示覆盖度、不累积范围、隐藏范围类工具(company 关联不受影响)
   const [interceptRules, setInterceptRules] = React.useState<AssetInterceptRuleInput[]>([]); // 任务级资产拦截规则(仅本任务生效,不进全局表)
+  const [scheduleEnabled, setScheduleEnabled] = React.useState(false);
+  const [schedule, setSchedule] = React.useState<ScheduleInput>({
+    name: "新建任务计划",
+    schedule_type: "weekly",
+    weekdays: [6, 7],
+    start_time: "18:00",
+    end_time: "",
+    task_ids: [],
+    timezone_mode: "beijing",
+    start_immediately: false,
+  });
   // 方式1 文件上传:建任务前把文件暂存到 drafts/<draftId>/uploads/,拿回绝对路径追加进描述。
   const [uploading, setUploading] = React.useState(false);
   const [uploadCount, setUploadCount] = React.useState(0);
@@ -3162,6 +3174,7 @@ function CreateTaskSheet({
         seedFirstIntent,
         planHeartbeatSeconds: heartbeatSec,
         coverageEnabled,
+        schedule: scheduleEnabled ? { ...schedule, task_ids: [] } : undefined,
         interceptRules: interceptRules
           .map((r) => ({ ...r, pattern: r.pattern.trim() }))
           .filter((r) => r.pattern !== ""),
@@ -3180,6 +3193,17 @@ function CreateTaskSheet({
       setSeedFirstIntent(false);
       setCoverageEnabled(true);
       setInterceptRules([]);
+      setScheduleEnabled(false);
+      setSchedule({
+        name: "新建任务计划",
+        schedule_type: "weekly",
+        weekdays: [6, 7],
+        start_time: "18:00",
+        end_time: "",
+        task_ids: [],
+        timezone_mode: "beijing",
+        start_immediately: false,
+      });
       setUploadCount(0);
       draftIdRef.current = "";
       setOpen(false);
@@ -3248,6 +3272,110 @@ function CreateTaskSheet({
               />
               <FieldDescription>可选，单个分类；用于任务列表筛选和归档，不影响 Agent 执行。</FieldDescription>
             </Field>
+            <FieldSet>
+              <FieldLegend>计划启动（可选）</FieldLegend>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={scheduleEnabled} onCheckedChange={(v) => setScheduleEnabled(!!v)} />
+                创建时附加计划，按时间窗口启动和暂停
+              </label>
+              {scheduleEnabled && (
+                <FieldGroup className="rounded-lg border p-3">
+                  <Field>
+                    <FieldLabel>计划名称</FieldLabel>
+                    <Input value={schedule.name} onChange={(e) => setSchedule({ ...schedule, name: e.target.value })} />
+                  </Field>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field>
+                      <FieldLabel>规则</FieldLabel>
+                      <Select
+                        value={schedule.schedule_type}
+                        onValueChange={(value) =>
+                          setSchedule({ ...schedule, schedule_type: value as ScheduleInput["schedule_type"] })
+                        }
+                      >
+                        <SelectTrigger className="h-10 w-full bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="weekly">按周</SelectItem>
+                          <SelectItem value="once">指定日期</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field>
+                      <FieldLabel>时区</FieldLabel>
+                      <Select
+                        value={schedule.timezone_mode}
+                        onValueChange={(value) =>
+                          setSchedule({ ...schedule, timezone_mode: value as ScheduleInput["timezone_mode"] })
+                        }
+                      >
+                        <SelectTrigger className="h-10 w-full bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="beijing">北京时间</SelectItem>
+                          <SelectItem value="system">系统时区</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </div>
+                  {schedule.schedule_type === "once" ? (
+                    <Field>
+                      <FieldLabel>执行日期</FieldLabel>
+                      <Input
+                        type="date"
+                        value={schedule.run_date ?? ""}
+                        onChange={(e) => setSchedule({ ...schedule, run_date: e.target.value })}
+                      />
+                    </Field>
+                  ) : (
+                    <Field>
+                      <FieldLabel>星期（1=周一，7=周日）</FieldLabel>
+                      <Input
+                        value={(schedule.weekdays ?? []).join(",")}
+                        onChange={(e) =>
+                          setSchedule({
+                            ...schedule,
+                            weekdays: e.target.value
+                              .split(",")
+                              .map(Number)
+                              .filter((n) => n >= 1 && n <= 7),
+                          })
+                        }
+                        placeholder="例如 6,7"
+                      />
+                    </Field>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field>
+                      <FieldLabel>开始时间</FieldLabel>
+                      <TimeSelect
+                        value={schedule.start_time}
+                        onValueChange={(value) => setSchedule({ ...schedule, start_time: value })}
+                        aria-label="开始时间"
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel>结束时间（可选）</FieldLabel>
+                      <TimeSelect
+                        value={schedule.end_time ?? ""}
+                        onValueChange={(value) => setSchedule({ ...schedule, end_time: value })}
+                        optional
+                        aria-label="结束时间，可选"
+                      />
+                    </Field>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={schedule.start_immediately}
+                      onCheckedChange={(v) => setSchedule({ ...schedule, start_immediately: !!v })}
+                    />
+                    创建后立即启动，否则等待第一个计划窗口
+                  </label>
+                </FieldGroup>
+              )}
+            </FieldSet>
             <div className="grid gap-2">
               <Label htmlFor="description">描述</Label>
               <Textarea

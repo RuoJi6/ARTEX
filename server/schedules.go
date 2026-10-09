@@ -1,0 +1,225 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Autumn-27/artex/agent"
+	"github.com/Autumn-27/artex/db"
+)
+
+type scheduleRequest struct {
+	Name             string  `json:"name"`
+	Enabled          *bool   `json:"enabled,omitempty"`
+	TimezoneMode     string  `json:"timezone_mode"`
+	ScheduleType     string  `json:"schedule_type"`
+	RunDate          string  `json:"run_date"`
+	Weekdays         []int   `json:"weekdays"`
+	StartTime        string  `json:"start_time"`
+	EndTime          string  `json:"end_time"`
+	StartImmediately bool    `json:"start_immediately"`
+	TaskIDs          []int64 `json:"task_ids"`
+}
+
+func (s *Server) scheduleInput(req scheduleRequest, existing *db.TaskSchedule) db.TaskScheduleInput {
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	} else if existing != nil {
+		enabled = existing.Enabled
+	}
+	return db.TaskScheduleInput{Name: req.Name, Enabled: enabled, TimezoneMode: req.TimezoneMode, ScheduleType: req.ScheduleType,
+		RunDate: req.RunDate, Weekdays: req.Weekdays, StartTime: req.StartTime, EndTime: req.EndTime,
+		StartImmediately: req.StartImmediately, TaskIDs: req.TaskIDs}
+}
+
+func parseScheduleID(r *http.Request) (int64, error) {
+	return strconv.ParseInt(r.PathValue("id"), 10, 64)
+}
+
+func scheduleDTO(item *db.TaskSchedule) map[string]any {
+	raw, _ := json.Marshal(item)
+	var dto map[string]any
+	_ = json.Unmarshal(raw, &dto)
+	window := evaluateScheduleWindow(item, time.Now())
+	dto["timezone"] = scheduleLocation(item.TimezoneMode).String()
+	dto["server_time"] = time.Now()
+	if item.Enabled && item.Status != "completed" {
+		dto["next_start"] = window.nextStart
+		dto["next_end"] = window.nextEnd
+	}
+	return dto
+}
+func (s *Server) listSchedules(w http.ResponseWriter, r *http.Request) {
+	items, err := s.m.pg.ListTaskSchedules()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	dtos := []map[string]any{}
+	for _, item := range items {
+		dtos = append(dtos, scheduleDTO(item))
+	}
+	writeJSON(w, 200, map[string]any{"schedules": dtos})
+}
+
+func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
+	id, err := parseScheduleID(r)
+	if err != nil {
+		writeErr(w, 400, "bad schedule id")
+		return
+	}
+	item, err := s.m.pg.GetTaskSchedule(id)
+	if err != nil {
+		writeErr(w, 404, "计划不存在")
+		return
+	}
+	history, err := s.m.pg.ListScheduleHistory(id)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	dto := scheduleDTO(item)
+	dto["history"] = history
+	writeJSON(w, 200, dto)
+}
+
+func decodeSchedule(r *http.Request) (scheduleRequest, error) {
+	var req scheduleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return req, fmt.Errorf("bad json: %w", err)
+	}
+	if req.Enabled == nil {
+		v := true
+		req.Enabled = &v
+	}
+	return req, nil
+}
+
+func (s *Server) createSchedule(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeSchedule(r)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	item, err := s.m.pg.CreateTaskSchedule(s.scheduleInput(req, nil))
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if req.StartImmediately && item.Enabled {
+		s.runScheduleTasks(item)
+	}
+	writeJSON(w, 201, item)
+}
+
+func (s *Server) updateSchedule(w http.ResponseWriter, r *http.Request) {
+	id, err := parseScheduleID(r)
+	if err != nil {
+		writeErr(w, 400, "bad schedule id")
+		return
+	}
+	old, err := s.m.pg.GetTaskSchedule(id)
+	if err != nil {
+		writeErr(w, 404, "计划不存在")
+		return
+	}
+	req, err := decodeSchedule(r)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	item, err := s.m.pg.UpdateTaskSchedule(id, s.scheduleInput(req, old))
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (s *Server) deleteSchedule(w http.ResponseWriter, r *http.Request) {
+	id, err := parseScheduleID(r)
+	if err != nil {
+		writeErr(w, 400, "bad schedule id")
+		return
+	}
+	if err := s.m.pg.DeleteTaskSchedule(id); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) setScheduleEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	id, err := parseScheduleID(r)
+	if err != nil {
+		writeErr(w, 400, "bad schedule id")
+		return
+	}
+	if err := s.m.pg.SetTaskScheduleEnabled(id, enabled); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if enabled {
+		if item, err := s.m.pg.GetTaskSchedule(id); err == nil {
+			if item.StartImmediately {
+				s.runScheduleTasks(item)
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "enabled": enabled})
+}
+
+func (s *Server) pauseSchedule(w http.ResponseWriter, r *http.Request) {
+	s.setScheduleEnabled(w, r, false)
+}
+func (s *Server) resumeSchedule(w http.ResponseWriter, r *http.Request) {
+	s.setScheduleEnabled(w, r, true)
+}
+
+func (s *Server) runScheduleNow(w http.ResponseWriter, r *http.Request) {
+	id, err := parseScheduleID(r)
+	if err != nil {
+		writeErr(w, 400, "bad schedule id")
+		return
+	}
+	item, err := s.m.pg.GetTaskSchedule(id)
+	if err != nil {
+		writeErr(w, 404, "计划不存在")
+		return
+	}
+	s.runScheduleTasks(item)
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) runScheduleTasks(item *db.TaskSchedule) {
+	for _, taskID := range item.TaskIDs {
+		t, ok := s.m.Task(strconv.FormatInt(taskID, 10))
+		if !ok {
+			continue
+		}
+		state := t.lifecycleSnapshot()
+		if db.IsTerminal(state.Status) || !state.Paused {
+			continue
+		}
+		_, _ = s.applyTaskControlWithCause(t, "resume", agent.AbortPausedByOrchestrator)
+		_ = s.m.pg.SetSchedulePaused(item.ID, taskID, false)
+	}
+}
+
+// scheduleRequestFromTask is used by the task creation handler without making
+// the public task API depend on database internals.
+func scheduleRequestFromTask(raw json.RawMessage) (*scheduleRequest, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var req scheduleRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, err
+	}
+	return &req, nil
+}

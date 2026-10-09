@@ -20,9 +20,10 @@ import (
 // + finding watermark + fired-goal set) so a restart resumes without double-firing.
 // Triggers only attach to CUSTOM agents.
 type Scheduler struct {
-	s    *Server
-	pg   *db.DB
-	tick time.Duration
+	s         *Server
+	pg        *db.DB
+	tick      time.Duration
+	startedAt time.Time
 }
 
 const (
@@ -34,7 +35,7 @@ const (
 )
 
 func newScheduler(s *Server) *Scheduler {
-	return &Scheduler{s: s, pg: s.m.pg, tick: 5 * time.Second}
+	return &Scheduler{s: s, pg: s.m.pg, tick: 5 * time.Second, startedAt: time.Now()}
 }
 
 // Run loops until ctx is done, ticking the scheduler. Started once from server New.
@@ -115,6 +116,7 @@ func (sc *Scheduler) init() {
 }
 
 func (sc *Scheduler) step() {
+	sc.fireTaskSchedules()
 	triggers, err := sc.pg.ListEnabledTriggers()
 	if err != nil {
 		return

@@ -115,6 +115,14 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 			return out, fmt.Errorf("终态任务不能执行暂停")
 		}
 		if lifecycle.Paused {
+			if pauseCause != agent.AbortPausedBySchedule {
+				if _, err := s.m.pg.Exec(`UPDATE tasks SET schedule_paused=false WHERE id=$1`, t.ID); err != nil {
+					return out, err
+				}
+				out.Paused = true
+				out.Status = "paused"
+				return out, nil
+			}
 			return out, fmt.Errorf("任务已经暂停")
 		}
 		wasQueued := lifecycle.Queued
@@ -123,7 +131,7 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 			pauseCause = agent.AbortPausedByUser
 		}
 		s.engine.Pause(t.ID, pauseCause)
-		if err := s.m.ApplyTaskPause(t.ID); err != nil {
+		if err := s.m.ApplyTaskPauseOrigin(t.ID, pauseCause == agent.AbortPausedBySchedule); err != nil {
 			if !wasEnginePaused && !wasQueued {
 				s.engine.Resume(t)
 			}
@@ -136,7 +144,7 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 		out.Paused, out.Status = true, "paused"
 		go s.reconcileConcurrency()
 	case "resume":
-		queued, err := s.admitPausedTask(t)
+		queued, err := s.admitTaskWhenScheduled(t, "resume", true, pauseCause == agent.AbortPausedBySchedule)
 		if err != nil {
 			return out, err
 		}

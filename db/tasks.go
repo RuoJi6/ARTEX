@@ -144,6 +144,7 @@ func (d *DB) CreateTask(description, goal string, llmProfileID *int64, timeoutSe
 // TaskCreateOptions contains the task data that must be committed atomically
 // with the task/exploration row.
 type TaskCreateOptions struct {
+	Schedule             *TaskScheduleInput
 	Name                 string // 可选任务名称;空=未命名
 	CategoryID           *int64
 	SourceTaskIDs        []int64
@@ -247,6 +248,23 @@ RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, descripti
 		t.LLMFailoverState = "default"
 	} else {
 		t.LLMFailoverState = "ready"
+	}
+	if opts.Schedule != nil {
+		in, err := normalizeScheduleInput(*opts.Schedule)
+		if err != nil {
+			return nil, err
+		}
+		in.TaskIDs = []int64{t.ID}
+		if _, err = insertTaskSchedule(tx, in); err != nil {
+			return nil, err
+		}
+		if !in.StartImmediately {
+			if _, err = tx.Exec(`UPDATE tasks SET paused=true,schedule_paused=true,queue_mode='bootstrap' WHERE id=$1`, t.ID); err != nil {
+				return nil, err
+			}
+			t.Paused = true
+			t.QueueMode = "bootstrap"
+		}
 	}
 	return t, tx.Commit()
 }

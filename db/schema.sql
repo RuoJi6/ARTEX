@@ -1028,6 +1028,49 @@ CREATE TABLE IF NOT EXISTS scheduler_state (
 );
 
 -- =====================================================================
+-- J1. Calendar based task schedules
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS task_schedules (
+    id                 BIGSERIAL PRIMARY KEY,
+    name               TEXT NOT NULL,
+    enabled            BOOLEAN NOT NULL DEFAULT true,
+    timezone_mode      TEXT NOT NULL DEFAULT 'beijing'
+                       CHECK (timezone_mode IN ('beijing','system')),
+    schedule_type      TEXT NOT NULL DEFAULT 'weekly'
+                       CHECK (schedule_type IN ('once','weekly')),
+    run_date           DATE,
+    weekdays           TEXT NOT NULL DEFAULT '',
+    start_time         TIME NOT NULL,
+    end_time           TIME,
+    start_immediately  BOOLEAN NOT NULL DEFAULT false,
+    status             TEXT NOT NULL DEFAULT 'waiting'
+                       CHECK (status IN ('waiting','running','outside','completed','error','paused')),
+    last_window_key    TEXT NOT NULL DEFAULT '',
+    last_transition_at TIMESTAMPTZ,
+    last_error         TEXT NOT NULL DEFAULT '',
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((schedule_type = 'once' AND run_date IS NOT NULL) OR
+           (schedule_type = 'weekly' AND run_date IS NULL)),
+    CHECK ((schedule_type = 'once') OR weekdays <> '')
+);
+CREATE INDEX IF NOT EXISTS idx_task_schedules_enabled ON task_schedules(enabled, id);
+DROP TRIGGER IF EXISTS trg_task_schedules_upd ON task_schedules;
+CREATE TRIGGER trg_task_schedules_upd BEFORE UPDATE ON task_schedules
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS task_schedule_tasks (
+    schedule_id BIGINT NOT NULL REFERENCES task_schedules(id) ON DELETE CASCADE,
+    task_id     BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    paused_by_schedule BOOLEAN NOT NULL DEFAULT false,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (schedule_id, task_id)
+);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS schedule_paused BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS idx_task_schedule_tasks_task ON task_schedule_tasks(task_id);
+ALTER TABLE task_schedule_tasks ADD COLUMN IF NOT EXISTS paused_by_schedule BOOLEAN NOT NULL DEFAULT false;
+
+-- =====================================================================
 -- K. 拦截规则
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS intercept_rules (
@@ -1475,3 +1518,14 @@ ALTER TABLE finding_case_review_runs ADD COLUMN IF NOT EXISTS finding_ids JSONB 
 ALTER TABLE finding_case_review_runs ADD COLUMN IF NOT EXISTS reviewed_ids JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE finding_case_review_runs ADD COLUMN IF NOT EXISTS conclusion JSONB NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_finding_case_reviews_active_task ON finding_case_review_runs(task_id) WHERE state IN ('queued','running');
+
+CREATE TABLE IF NOT EXISTS task_schedule_history (
+ id BIGSERIAL PRIMARY KEY,
+ schedule_id BIGINT NOT NULL REFERENCES task_schedules(id) ON DELETE CASCADE,
+ task_id BIGINT,
+ action TEXT NOT NULL,
+ success BOOLEAN NOT NULL,
+ message TEXT NOT NULL DEFAULT '',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_schedule_history ON task_schedule_history(schedule_id,id DESC);

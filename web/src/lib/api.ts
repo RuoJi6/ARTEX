@@ -84,6 +84,7 @@ import type {
   SSTask,
   Stats,
   Task,
+  TaskSchedule,
   TaskArchive,
   TaskArchivePage,
   TaskAssetMutation,
@@ -245,6 +246,34 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
   return query.toString();
 }
 
+export type ScheduleInput = {
+  name: string;
+  enabled?: boolean;
+  timezone_mode?: "beijing" | "system";
+  schedule_type: "once" | "weekly";
+  run_date?: string;
+  weekdays?: number[];
+  start_time: string;
+  end_time?: string;
+  start_immediately?: boolean;
+  task_ids: number[];
+};
+
+function schedulePayload(input: ScheduleInput) {
+  return {
+    name: input.name,
+    enabled: input.enabled ?? true,
+    timezone_mode: input.timezone_mode ?? "beijing",
+    schedule_type: input.schedule_type,
+    run_date: input.run_date ?? "",
+    weekdays: input.weekdays ?? [],
+    start_time: input.start_time,
+    end_time: input.end_time ?? "",
+    start_immediately: input.start_immediately ?? false,
+    task_ids: input.task_ids,
+  };
+}
+
 export const api = {
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; service: string; version: string }>("/health"),
@@ -273,6 +302,7 @@ export const api = {
     planHeartbeatSeconds?: number;
     coverageEnabled?: boolean;
     interceptRules?: AssetInterceptRuleInput[];
+    schedule?: ScheduleInput;
   }) =>
     post<Task>("/tasks", {
       name: input.name ?? "",
@@ -287,7 +317,16 @@ export const api = {
       plan_heartbeat_seconds: input.planHeartbeatSeconds ?? 0, // 0 = 后端归一到默认 600(10min)
       coverage_enabled: input.coverageEnabled ?? true, // 默认开;false=关闭资产覆盖度功能
       intercept_rules: input.interceptRules ?? [], // 任务级资产拦截规则
+      schedule: input.schedule ? schedulePayload(input.schedule) : undefined,
     }),
+  schedules: () => get<{ schedules: TaskSchedule[] }>("/schedules").then((r) => arr(r.schedules)),
+  schedule: (id: number) => get<TaskSchedule>(`/schedules/${id}`),
+  createSchedule: (input: ScheduleInput) => post<TaskSchedule>("/schedules", schedulePayload(input)),
+  updateSchedule: (id: number, input: ScheduleInput) => patch<TaskSchedule>(`/schedules/${id}`, schedulePayload(input)),
+  deleteSchedule: (id: number) => del<{ ok: boolean }>(`/schedules/${id}`),
+  pauseSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/pause`, {}),
+  resumeSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/resume`, {}),
+  runScheduleNow: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/run-now`, {}),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),
