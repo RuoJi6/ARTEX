@@ -1471,3 +1471,7 @@ CREATE TABLE IF NOT EXISTS finding_case_review_runs (
 );
 
 ALTER TABLE finding_case_review_runs ADD COLUMN IF NOT EXISTS finding_ids JSONB NOT NULL DEFAULT '[]';
+
+ALTER TABLE finding_case_review_runs ADD COLUMN IF NOT EXISTS reviewed_ids JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE finding_case_review_runs ADD COLUMN IF NOT EXISTS conclusion JSONB NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_finding_case_reviews_active_task ON finding_case_review_runs(task_id) WHERE state IN ('queued','running');

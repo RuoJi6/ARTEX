@@ -87,7 +87,7 @@ func TestFindingCaseAPIPaginationAndTools(t *testing.T) {
 	}
 	c := result.(map[string]any)["case"].(*db.FindingCase)
 	a.Version = c.Version
-	a.Report = "complete reproducible report"
+	a.Report = completeFindingReviewReport
 	a.Severity = "high"
 	a.SeverityReason = "verified data disclosure"
 	if _, err := s.performFindingCaseTool(ctx, "update_finding_case_report", a); err != nil {
@@ -200,8 +200,8 @@ func TestFindingCaseSelectedReviewCannotRewriteOtherOriginal(t *testing.T) {
 	if err := s.checkCaseReviewScope(ctx, "update_finding_report", findingCaseRequest{FindingID: json.RawMessage(fmt.Sprint(ids[1]))}); err == nil {
 		t.Fatal("unselected original allowed")
 	}
-	if err := s.checkCaseReviewScope(ctx, "update_finding_report", findingCaseRequest{FindingID: json.RawMessage(fmt.Sprint(ids[0]))}); err != nil {
-		t.Fatal(err)
+	if err := s.checkCaseReviewScope(ctx, "update_finding_report", findingCaseRequest{FindingID: json.RawMessage(fmt.Sprint(ids[0]))}); err == nil {
+		t.Fatal("selected original was allowed to be overwritten")
 	}
 }
 

@@ -62,8 +62,15 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 	if ToolResolve != nil {
 		out = ToolResolve(ctx, agentKey, out)
 	}
+	if agentKey == "reporter" && isFindingCaseReview(ctx) {
+		out = historicalFindingCaseTools(out)
+	}
 	out, def.FindingGuidance = findingWorkflowTools(agentKey, out)
 	out, def.CaseGuidance = findingCaseWorkflow(agentKey, out)
+	if agentKey == "reporter" && isFindingCaseReview(ctx) {
+		def.FindingGuidance = ""
+		def.CaseGuidance += historicalFindingReviewGuidance
+	}
 	for i, t := range out {
 		out[i] = guardPanic(t)
 	}

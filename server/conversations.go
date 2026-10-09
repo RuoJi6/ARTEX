@@ -505,6 +505,15 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	// turns may explain the sealed result; the result tool refuses to overwrite it.
 	finishStatus, finishReason := "failed", "Agent 未能启动"
 	if c.AgentKey == "reporter" {
+		manualReview, err := s.isHistoricalFindingReview(c.ID)
+		if err != nil {
+			finishReason = err.Error()
+			_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state='failed',error=$2 WHERE conversation_id=$1`, c.ID, finishReason)
+			return
+		}
+		if manualReview {
+			ctx = agent.WithFindingCaseReview(ctx)
+		}
 		defer func() {
 			state := "done"
 			reason := ""
@@ -513,6 +522,11 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 				reason = finishReason
 				if ctx.Err() != nil {
 					reason = "整理已停止或服务关闭"
+				}
+			}
+			if state == "done" && manualReview {
+				if err := s.validateFindingReviewCompletion(c.ID); err != nil {
+					state, reason = "failed", err.Error()
 				}
 			}
 			_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state=$2,error=$3 WHERE conversation_id=$1 AND state='running'`, c.ID, state, reason)

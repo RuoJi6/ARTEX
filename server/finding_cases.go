@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/Autumn-27/artex/db"
@@ -38,7 +37,7 @@ func (a findingCaseRequest) ids() []int64 {
 }
 func caseHTTPError(w http.ResponseWriter, err error) {
 	code := 400
-	if errors.Is(err, db.ErrFindingCaseConflict) {
+	if errors.Is(err, db.ErrFindingCaseConflict) || errors.Is(err, db.ErrFindingCaseReviewBusy) {
 		code = 409
 	}
 	writeErr(w, code, err.Error())
@@ -211,6 +210,10 @@ func (s *Server) updateCaseReport(w http.ResponseWriter, r *http.Request) {
 	if !decodeCaseRequest(w, r, &a) {
 		return
 	}
+	if err := validateUnifiedFindingReport(a.Report); err != nil {
+		caseHTTPError(w, err)
+		return
+	}
 	if err := s.m.pg.UpdateFindingCaseReport(r.Context(), c.ID, a.Version, a.Title, a.Report, a.Severity, a.SeverityReason); err != nil {
 		caseHTTPError(w, err)
 		return
@@ -260,6 +263,7 @@ func (s *Server) findingCaseTools() []actool.CoreTool {
 			out = append(out, wrTool(spec.name, spec.desc, schema, handler))
 		}
 	}
+	out = append(out, s.toolCompleteFindingCaseReview())
 	return out
 }
 func (s *Server) performFindingCaseTool(ctx context.Context, name string, a findingCaseRequest) (any, error) {
@@ -274,7 +278,15 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 	}
 	switch name {
 	case "search_finding_duplicates":
-		items, total, err := s.m.pg.FindingCaseCandidates(fid, page, 20)
+		scope, err := s.historicalFindingReviewSelection(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var scopes [][]int64
+		if scope != nil {
+			scopes = append(scopes, scope)
+		}
+		items, total, err := s.m.pg.FindingCaseCandidates(fid, page, 20, scopes...)
 		return map[string]any{"items": items, "total": total, "page": page, "page_size": 20}, err
 	case "get_finding_record":
 		f, err := s.m.pg.GetFinding(fid)
@@ -291,6 +303,11 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 		}
 		if cid > 0 {
 			dto.CaseID = i64s(cid)
+		}
+		if conv := intercept.ConvIDFromContext(ctx); conv > 0 {
+			if _, err := s.m.pg.Exec(`UPDATE finding_case_review_runs SET reviewed_ids=CASE WHEN reviewed_ids @> jsonb_build_array($2::bigint) THEN reviewed_ids ELSE reviewed_ids || jsonb_build_array($2::bigint) END WHERE conversation_id=$1 AND finding_ids @> jsonb_build_array($2::bigint)`, conv, f.ID); err != nil {
+				return nil, err
+			}
 		}
 		return map[string]any{"finding": dto, "finding_node_id": f.NodeID}, nil
 	case "merge_finding_records":
@@ -318,6 +335,9 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 		}
 		return map[string]any{"case": c, "members": members, "total": total, "page": page, "page_size": 20}, err
 	case "update_finding_case_report":
+		if err := validateUnifiedFindingReport(a.Report); err != nil {
+			return nil, err
+		}
 		err := s.m.pg.UpdateFindingCaseReport(ctx, cid, a.Version, a.Title, a.Report, a.Severity, a.SeverityReason)
 		return map[string]bool{"ok": err == nil}, err
 	}
@@ -332,17 +352,20 @@ func (s *Server) seedFindingCaseTools() {
 	if err != nil || a == nil {
 		return
 	}
-	const flag = "finding_case_tools_v1"
+	const flag = "finding_case_tools_v2_review"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
 	names := []string{}
+	previous, _, _ := s.m.pg.GetSetting("finding_case_tools_v1")
 	for _, t := range s.findingCaseTools() {
 		schema, _ := json.Marshal(t.InputSchema())
 		if err := s.m.pg.SeedTool(t.Name(), t.Description(), schema, json.RawMessage(`["reporter"]`)); err != nil {
 			return
 		}
-		names = append(names, t.Name())
+		if previous != "true" || t.Name() == "complete_finding_case_review" {
+			names = append(names, t.Name())
+		}
 	}
 	if err := s.m.pg.AddAgentToToolBinding("reporter", names); err != nil {
 		return
@@ -393,39 +416,36 @@ func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 		}
 		batches[*f.TaskID] = append(batches[*f.TaskID], fid)
 	}
-	// Validate every source before starting any batch.
+	// Validate and snapshot every source before starting any batch.
+	taskContexts := map[int64]triggeredRun{}
 	for taskID := range batches {
-		if _, ok := s.m.Task(i64s(taskID)); !ok {
-			writeErr(w, 409, "任务不可用")
-			return
-		}
-	}
-	runs := []map[string]any{}
-	for taskID, fids := range batches {
-		t, ok := s.m.Task(strconv.FormatInt(taskID, 10))
+		t, ok := s.m.Task(i64s(taskID))
 		if !ok {
 			writeErr(w, 409, "任务不可用")
 			return
 		}
+
+		taskContexts[taskID] = triggeredRun{taskDesc: t.Description, taskGoal: t.Goal}
+	}
+	reservations, err := s.m.pg.CreateFindingCaseReviews(r.Context(), batches)
+	if err != nil {
+		caseHTTPError(w, err)
+		return
+	}
+	runs := []map[string]any{}
+	for _, reservation := range reservations {
+		taskID, fids := reservation.TaskID, reservation.FindingIDs
+		taskContext := taskContexts[taskID]
 		raw, _ := json.Marshal(fids)
-		msg := fmt.Sprintf("人工选择整理：仅允许处理本任务所选 finding_ids=%s。先保留/生成各条独立报告，再在所选范围内判断同一缺陷，明确则归并，不确定提交建议，已成组则更新统一报告。不得归并未选择的记录，不探测目标。", raw)
-		c, err := s.m.pg.CreateConversation("reporter", "漏洞整理 · task#"+t.ID, nil)
-		if err != nil {
-			caseHTTPError(w, err)
-			return
-		}
-		if _, err := s.m.pg.Exec(`INSERT INTO finding_case_review_runs(conversation_id,task_id,finding_ids) VALUES($1,$2,$3)`, c.ID, taskID, string(raw)); err != nil {
-			caseHTTPError(w, err)
-			return
-		}
-		item := triggeredRun{agentKey: "reporter", title: c.Title, message: msg, taskID: taskID, taskDesc: t.Description, taskGoal: t.Goal, conversationID: c.ID}
+		msg := fmt.Sprintf("人工选择整理（只读原始记录）：本任务所选 finding_ids=%s。逐条读取已有报告，仅判断同一实际根因，明确则归并，不确定提交建议；已有组更新统一报告。禁止生成或覆盖原始报告、改评级状态、补绑证据，不归并未选记录，不探测目标。结束前调用 complete_finding_case_review 提交逐条判断并通过验收。", raw)
+		item := triggeredRun{agentKey: "reporter", title: "漏洞整理 · task#" + i64s(taskID), message: msg, taskID: taskID, taskDesc: taskContext.taskDesc, taskGoal: taskContext.taskGoal, conversationID: reservation.ConversationID}
 		cfg := s.readTriggerBehavior("reporter")
 		s.queueMu.Lock()
 		s.triggerCfg["reporter"] = cfg
 		s.triggerQ["reporter"] = append(s.triggerQ["reporter"], item)
 		s.pumpLocked("reporter")
 		s.queueMu.Unlock()
-		runs = append(runs, map[string]any{"conversation_id": c.ID, "task_id": i64s(taskID)})
+		runs = append(runs, map[string]any{"conversation_id": reservation.ConversationID, "task_id": i64s(taskID)})
 	}
 	writeJSON(w, 202, map[string]any{"runs": runs})
 }
@@ -460,8 +480,8 @@ func (s *Server) checkCaseReviewScope(ctx context.Context, name string, a findin
 	if conv == 0 {
 		return nil
 	}
-	var raw json.RawMessage
-	err := s.m.pg.QueryRow(`SELECT finding_ids FROM finding_case_review_runs WHERE conversation_id=$1`, conv).Scan(&raw)
+	var raw, conclusion json.RawMessage
+	err := s.m.pg.QueryRow(`SELECT finding_ids,conclusion FROM finding_case_review_runs WHERE conversation_id=$1`, conv).Scan(&raw, &conclusion)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -472,16 +492,22 @@ func (s *Server) checkCaseReviewScope(ctx context.Context, name string, a findin
 	if err := json.Unmarshal(raw, &ids); err != nil {
 		return err
 	}
+	if string(conclusion) != "{}" && (name == "merge_finding_records" || name == "suggest_finding_merge" || name == "update_finding_case_report") {
+		return errors.New("整理判断已提交，不能在验收后继续修改")
+	}
 	allowed := map[int64]bool{}
 	for _, id := range ids {
 		allowed[id] = true
 	}
 	switch name {
-	case "merge_finding_records", "suggest_finding_merge", "update_finding_report":
-		checkIDs := a.ids()
-		if name == "update_finding_report" {
-			checkIDs = []int64{parseProfileID(a.FindingID)}
+	case "search_finding_duplicates":
+		if !allowed[parseProfileID(a.FindingID)] {
+			return errors.New("历史整理只能检索所选记录的候选")
 		}
+	case "update_finding_report", "bind_finding_traffic", "report_finding":
+		return errors.New("历史整理禁止修改原始报告、上报或证据；只能写归并关系及统一报告")
+	case "merge_finding_records", "suggest_finding_merge":
+		checkIDs := a.ids()
 		for _, id := range checkIDs {
 			if !allowed[id] {
 				return errors.New("人工整理只能归并所选记录")

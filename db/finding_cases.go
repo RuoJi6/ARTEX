@@ -479,7 +479,7 @@ func (d *DB) DistinctFindingStats(taskID string) (*FindingDistinctStats, error) 
 }
 
 // Compact candidate pages exclude PoC/report bodies and do not treat severity as identity.
-func (d *DB) FindingCaseCandidates(fid int64, page, size int) ([]map[string]any, int, error) {
+func (d *DB) FindingCaseCandidates(fid int64, page, size int, scope ...[]int64) ([]map[string]any, int, error) {
 	f, err := d.FindingCaseSummary(fid)
 	if err != nil {
 		return nil, 0, err
@@ -502,12 +502,20 @@ func (d *DB) FindingCaseCandidates(fid int64, page, size int) ([]map[string]any,
       AND ((trim($3::text)<>'' AND lower(f.vulnclass)=lower($3)) OR (trim($4::text)<>'' AND lower(f.name)=lower($4))
         OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(f.asset_ids,'null'::jsonb),'[]'::jsonb)) a WHERE a.value IN(SELECT value FROM jsonb_array_elements($5::jsonb))))`
 	args := []any{*f.TaskID, fid, f.VulnClass, f.Name, string(assets)}
+	if len(scope) > 0 {
+		raw, err := json.Marshal(scope[0])
+		if err != nil {
+			return nil, 0, err
+		}
+		where += ` AND f.id IN (SELECT jsonb_array_elements_text($6::jsonb)::bigint)`
+		args = append(args, string(raw))
+	}
 	var total int
 	if err := d.QueryRow(`SELECT count(*) FROM findings f`+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, size, (page-1)*size)
-	rows, err := d.Query(`SELECT f.id,f.name,f.vulnclass,f.severity,left(f.summary,400),f.asset_ids,COALESCE(m.case_id,0) FROM findings f LEFT JOIN finding_case_members m ON m.finding_id=f.id`+where+` ORDER BY f.id DESC LIMIT $6 OFFSET $7`, args...)
+	rows, err := d.Query(`SELECT f.id,f.name,f.vulnclass,f.severity,left(f.summary,400),f.asset_ids,COALESCE(m.case_id,0) FROM findings f LEFT JOIN finding_case_members m ON m.finding_id=f.id`+where+fmt.Sprintf(` ORDER BY f.id DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
