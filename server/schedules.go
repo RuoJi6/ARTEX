@@ -18,6 +18,7 @@ type scheduleRequest struct {
 	TimezoneMode     string  `json:"timezone_mode"`
 	ScheduleType     string  `json:"schedule_type"`
 	RunDate          string  `json:"run_date"`
+	EndDate          string  `json:"end_date"`
 	Weekdays         []int   `json:"weekdays"`
 	StartTime        string  `json:"start_time"`
 	EndTime          string  `json:"end_time"`
@@ -33,7 +34,7 @@ func (s *Server) scheduleInput(req scheduleRequest, existing *db.TaskSchedule) d
 		enabled = existing.Enabled
 	}
 	return db.TaskScheduleInput{Name: req.Name, Enabled: enabled, TimezoneMode: req.TimezoneMode, ScheduleType: req.ScheduleType,
-		RunDate: req.RunDate, Weekdays: req.Weekdays, StartTime: req.StartTime, EndTime: req.EndTime,
+		RunDate: req.RunDate, EndDate: req.EndDate, Weekdays: req.Weekdays, StartTime: req.StartTime, EndTime: req.EndTime,
 		StartImmediately: req.StartImmediately, TaskIDs: req.TaskIDs}
 }
 

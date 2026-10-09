@@ -56,12 +56,32 @@ func evaluateScheduleWindow(s *db.TaskSchedule, now time.Time) scheduleWindow {
 		if err != nil {
 			return scheduleWindow{}
 		}
-		start, end := windowBounds(day, s, loc)
+		var start time.Time
+		var end *time.Time
+		if s.EndDate != "" {
+			endDay, parseErr := time.ParseInLocation("2006-01-02", s.EndDate, loc)
+			if parseErr != nil {
+				return scheduleWindow{}
+			}
+			start = scheduleClock(day, s.StartTime, loc)
+			endClock := s.EndTime
+			if endClock == "" {
+				endClock = "24:00"
+			}
+			endValue := scheduleClock(endDay, endClock, loc)
+			end = &endValue
+		} else {
+			start, end = windowBounds(day, s, loc)
+		}
 		active := !now.Before(start) && (end == nil || now.Before(*end))
 		complete := end != nil && !now.Before(*end)
 		// An open-ended one-shot remains active after its start until manually
 		// paused; there is no end boundary at which it could be considered missed.
-		w := scheduleWindow{active: active, complete: complete, key: "once:" + s.RunDate, nextEnd: end}
+		key := "once:" + s.RunDate
+		if s.EndDate != "" {
+			key += ":" + s.EndDate
+		}
+		w := scheduleWindow{active: active, complete: complete, key: key, nextEnd: end}
 		if now.Before(start) {
 			w.key = ""
 			w.nextStart = &start

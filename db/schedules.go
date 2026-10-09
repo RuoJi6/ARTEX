@@ -18,6 +18,7 @@ type TaskSchedule struct {
 	TimezoneMode     string     `json:"timezone_mode"`
 	ScheduleType     string     `json:"schedule_type"`
 	RunDate          string     `json:"run_date,omitempty"`
+	EndDate          string     `json:"end_date,omitempty"`
 	Weekdays         []int      `json:"weekdays,omitempty"`
 	StartTime        string     `json:"start_time"`
 	EndTime          string     `json:"end_time,omitempty"`
@@ -37,6 +38,7 @@ type TaskScheduleInput struct {
 	TimezoneMode     string
 	ScheduleType     string
 	RunDate          string
+	EndDate          string
 	Weekdays         []int
 	StartTime        string
 	EndTime          string
@@ -46,6 +48,7 @@ type TaskScheduleInput struct {
 
 const scheduleCols = `id,name,enabled,timezone_mode,schedule_type,
 COALESCE(to_char(run_date,'YYYY-MM-DD'),''),weekdays,to_char(start_time,'HH24:MI:SS'),
+COALESCE(to_char(end_date,'YYYY-MM-DD'),''),
 COALESCE(to_char(end_time,'HH24:MI:SS'),''),start_immediately,status,last_window_key,
 last_transition_at,last_error,created_at,updated_at`
 
@@ -61,7 +64,7 @@ func scanSchedule(sc interface{ Scan(...any) error }) (*TaskSchedule, error) {
 	var s TaskSchedule
 	var rawDays string
 	if err := sc.Scan(&s.ID, &s.Name, &s.Enabled, &s.TimezoneMode, &s.ScheduleType,
-		&s.RunDate, &rawDays, &s.StartTime, &s.EndTime, &s.StartImmediately,
+		&s.RunDate, &rawDays, &s.StartTime, &s.EndDate, &s.EndTime, &s.StartImmediately,
 		&s.Status, &s.LastWindowKey, &s.LastTransitionAt, &s.LastError,
 		&s.CreatedAt, &s.UpdatedAt); err != nil {
 		return nil, err
@@ -99,6 +102,21 @@ func normalizeScheduleInput(in TaskScheduleInput) (TaskScheduleInput, error) {
 		if _, err := time.Parse("2006-01-02", in.RunDate); err != nil {
 			return in, fmt.Errorf("run_date 必须为 YYYY-MM-DD")
 		}
+		if in.EndDate != "" {
+			startDate, _ := time.Parse("2006-01-02", in.RunDate)
+			endDate, err := time.Parse("2006-01-02", in.EndDate)
+			if err != nil {
+				return in, fmt.Errorf("end_date 必须为 YYYY-MM-DD")
+			}
+			if endDate.Before(startDate) {
+				return in, fmt.Errorf("end_date 不能早于 run_date")
+			}
+			if endDate.Equal(startDate) && in.EndTime != "" && in.EndTime != "24:00" {
+				if in.EndTime <= in.StartTime {
+					return in, fmt.Errorf("同一天的 end_time 必须晚于 start_time")
+				}
+			}
+		}
 		in.Weekdays = nil
 	} else {
 		seen := map[int]bool{}
@@ -113,6 +131,7 @@ func normalizeScheduleInput(in TaskScheduleInput) (TaskScheduleInput, error) {
 		}
 		sort.Ints(in.Weekdays)
 		in.RunDate = ""
+		in.EndDate = ""
 	}
 	seenTasks := map[int64]bool{}
 	for _, id := range in.TaskIDs {
@@ -152,9 +171,9 @@ func createTaskScheduleTxCommit(tx *sql.Tx, in TaskScheduleInput) (*TaskSchedule
 }
 
 func insertTaskSchedule(tx *sql.Tx, in TaskScheduleInput) (*TaskSchedule, error) {
-	row := tx.QueryRow(`INSERT INTO task_schedules(name,enabled,timezone_mode,schedule_type,run_date,weekdays,start_time,end_time,start_immediately)
-VALUES ($1,$2,$3,$4,NULLIF($5,'')::date,$6,$7::time,NULLIF($8,'')::time,$9) RETURNING `+scheduleCols,
-		in.Name, in.Enabled, in.TimezoneMode, in.ScheduleType, in.RunDate, marshalWeekdays(in.Weekdays), in.StartTime, in.EndTime, in.StartImmediately)
+	row := tx.QueryRow(`INSERT INTO task_schedules(name,enabled,timezone_mode,schedule_type,run_date,end_date,weekdays,start_time,end_time,start_immediately)
+VALUES ($1,$2,$3,$4,NULLIF($5,'')::date,NULLIF($6,'')::date,$7,$8::time,NULLIF($9,'')::time,$10) RETURNING `+scheduleCols,
+		in.Name, in.Enabled, in.TimezoneMode, in.ScheduleType, in.RunDate, in.EndDate, marshalWeekdays(in.Weekdays), in.StartTime, in.EndTime, in.StartImmediately)
 	s, err := scanSchedule(row)
 	if err != nil {
 		return nil, err
@@ -188,8 +207,8 @@ func (d *DB) UpdateTaskSchedule(id int64, in TaskScheduleInput) (*TaskSchedule, 
 		return nil, err
 	}
 	defer tx.Rollback()
-	row := tx.QueryRow(`UPDATE task_schedules SET name=$2,enabled=$3,timezone_mode=$4,schedule_type=$5,run_date=NULLIF($6,'')::date,weekdays=$7,start_time=$8::time,end_time=NULLIF($9,'')::time,start_immediately=$10,status=CASE WHEN $3 THEN CASE WHEN status='completed' THEN 'waiting' ELSE status END ELSE 'paused' END,last_error='',last_window_key='' WHERE id=$1 RETURNING `+scheduleCols,
-		id, in.Name, in.Enabled, in.TimezoneMode, in.ScheduleType, in.RunDate, marshalWeekdays(in.Weekdays), in.StartTime, in.EndTime, in.StartImmediately)
+	row := tx.QueryRow(`UPDATE task_schedules SET name=$2,enabled=$3,timezone_mode=$4,schedule_type=$5,run_date=NULLIF($6,'')::date,end_date=NULLIF($7,'')::date,weekdays=$8,start_time=$9::time,end_time=NULLIF($10,'')::time,start_immediately=$11,status=CASE WHEN $3 THEN CASE WHEN status='completed' THEN 'waiting' ELSE status END ELSE 'paused' END,last_error='',last_window_key='' WHERE id=$1 RETURNING `+scheduleCols,
+		id, in.Name, in.Enabled, in.TimezoneMode, in.ScheduleType, in.RunDate, in.EndDate, marshalWeekdays(in.Weekdays), in.StartTime, in.EndTime, in.StartImmediately)
 	s, err := scanSchedule(row)
 	if err != nil {
 		return nil, err

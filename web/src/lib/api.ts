@@ -252,6 +252,7 @@ export type ScheduleInput = {
   timezone_mode?: "beijing" | "system";
   schedule_type: "once" | "weekly";
   run_date?: string;
+  end_date?: string;
   weekdays?: number[];
   start_time: string;
   end_time?: string;
@@ -266,6 +267,7 @@ function schedulePayload(input: ScheduleInput) {
     timezone_mode: input.timezone_mode ?? "beijing",
     schedule_type: input.schedule_type,
     run_date: input.run_date ?? "",
+    end_date: input.end_date ?? "",
     weekdays: input.weekdays ?? [],
     start_time: input.start_time,
     end_time: input.end_time ?? "",

@@ -5,6 +5,7 @@ import * as React from "react";
 import { CalendarClock, Loader2, Pause, Play, Plus, Search, Trash2, Zap } from "lucide-react";
 import { toast } from "sonner";
 
+import { DateSelect } from "@/components/date-select";
 import { TimeSelect } from "@/components/time-select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -145,9 +146,25 @@ function ScheduleForm({
         </div>
       </div>
       {draft.schedule_type === "once" ? (
-        <div className="grid gap-2">
-          <Label>执行日期</Label>
-          <Input type="date" value={draft.run_date ?? ""} onChange={(e) => set({ run_date: e.target.value })} />
+        <div className="grid grid-cols-2 gap-3">
+          <div className="grid gap-2">
+            <Label>开始日期</Label>
+            <DateSelect
+              value={draft.run_date ?? ""}
+              onValueChange={(value) => set({ run_date: value })}
+              aria-label="开始日期"
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>截止日期（可选）</Label>
+            <DateSelect
+              value={draft.end_date ?? ""}
+              onValueChange={(value) => set({ end_date: value })}
+              optional
+              placeholder="不设置截止日期"
+              aria-label="截止日期，可选"
+            />
+          </div>
         </div>
       ) : (
         <div className="grid gap-2">
@@ -186,7 +203,7 @@ function ScheduleForm({
         </div>
       </div>
       <p className="text-muted-foreground text-xs">
-        结束时间为空表示开始后持续运行；结束时间早于开始时间表示跨午夜窗口。
+        一次性计划可设置截止日期；截止日期为空时仅按结束时间控制。结束时间为空表示持续运行，结束时间早于开始时间表示跨午夜窗口。
       </p>
       <div className="flex items-center gap-2 text-sm">
         <Checkbox
@@ -344,6 +361,7 @@ export default function SchedulesPage() {
                         timezone_mode: item.timezone_mode,
                         schedule_type: item.schedule_type,
                         run_date: item.run_date,
+                        end_date: item.end_date,
                         weekdays: item.weekdays,
                         start_time: item.start_time.slice(0, 5),
                         end_time: item.end_time?.slice(0, 5),
