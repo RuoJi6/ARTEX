@@ -1,17 +1,53 @@
 name: release
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已存在的正式版本标签，例如 v0.3.16"
+        required: true
+        type: string
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write # 创建 Release 需要
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Validate release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "正式版本必须是 v主版本.次版本.修订号，例如 v0.3.16" >&2
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.version.outputs.tag }}
+      - name: Pin release commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   # ① 前端静态导出（一次），产物给交叉编译各平台复用
   frontend:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -28,7 +64,7 @@ jobs:
 
   # ② 五平台交叉编译（内嵌前端）+ 打 zip
   binaries:
-    needs: frontend
+    needs: [prepare, frontend]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -40,9 +76,11 @@ jobs:
           - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
           cache: true
       - uses: actions/download-artifact@v4
         with:
@@ -52,7 +90,7 @@ jobs:
         env:
           ARTEX_TARGET_OS: ${{ matrix.goos }}
           ARTEX_TARGET_ARCH: ${{ matrix.goarch }}
-          ARTEX_BUILD_VERSION: ${{ github.ref_name }}
+          ARTEX_BUILD_VERSION: ${{ needs.prepare.outputs.tag }}
           ARTEX_SKIP_FRONTEND: "1"
           ARTEX_SKIP_NPM_CI: "1"
           # UPX 自解压 ELF 在部分 Linux 内核、虚拟化和安全策略下会崩溃。
@@ -78,8 +116,14 @@ jobs:
 
   # ③ 汇总所有 zip → 创建 GitHub Release
   release:
-    needs: binaries
+    needs: [prepare, binaries]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -88,21 +132,48 @@ jobs:
           path: dist
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum *.zip > SHA256SUMS
+        run: |
+          version="${RELEASE_TAG#v}"
+          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64; do
+            test -s "artex-${version}-${target}.zip"
+          done
+          sha256sum *.zip > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Refuse to overwrite a published release
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft > /tmp/artex-release.json 2>/tmp/artex-release.err; then
+            test "$(jq -r .isDraft /tmp/artex-release.json)" = true || {
+              echo "该版本已发布，请使用新的版本标签" >&2
+              exit 1
+            }
+          elif ! grep -qi 'release not found\|HTTP 404' /tmp/artex-release.err; then
+            cat /tmp/artex-release.err >&2
+            exit 1
+          fi
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ needs.prepare.outputs.commit }}
+          draft: true
+          fail_on_unmatched_files: true
           files: |
             dist/*.zip
             dist/SHA256SUMS
           generate_release_notes: true
+      - name: Publish complete release
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest
 
   # ④ 多架构镜像 → 推 Docker Hub（复用 binaries 编好的 Linux 二进制，
   #    镜像里只装工具 + 放二进制；arm64 仅需模拟 apt 层，构建快很多）
   docker:
-    needs: binaries
+    # 页面更新只需要 Release；镜像发布按需启用，不依赖原作者的账号。
+    if: vars.ARTEX_DOCKER_IMAGE != ''
+    needs: [prepare, binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4 # 取 Dockerfile 与 skills/
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           name: bin-linux-amd64
@@ -120,9 +191,9 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: autumn27/artex
+          images: ${{ vars.ARTEX_DOCKER_IMAGE }}
           tags: |
-            type=ref,event=tag
+            type=raw,value=${{ needs.prepare.outputs.tag }}
             type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:

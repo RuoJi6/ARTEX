@@ -100,7 +100,7 @@ docker compose up -d          # 拉取 autumn27/artex 镜像 + postgres
 
 ### 方式三：下载预编译二进制（Releases）
 
-到 [Releases](https://github.com/Autumn-27/ARTEX/releases) 下载对应平台的 zip，解压后得到 `artex` + `start.sh`（Windows 为 `start.bat`）+ `skills/` + `config.example.json`：
+到本仓库的 [Releases](https://github.com/RuoJi6/ARTEX/releases) 下载对应平台的 zip，解压后得到 `artex` + `start.sh`（Windows 为 `start.bat`）+ `skills/` + `config.example.json`。Linux ARM64（包括 ARM64 Kali）选择 `linux-arm64`，x86_64 选择 `linux-amd64`：
 
 ```bash
 cp config.example.json config.json   # 填好 database 连接
@@ -148,6 +148,8 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 
 在 **系统配置** 页（侧边栏「系统配置」→ `/system/settings`）的**版本与更新**卡片里，可以直接检查并安装新版本，无需登录服务器。
 
+本仓库构建的程序固定从 `RuoJi6/ARTEX` 的最新正式 GitHub Release 检查更新，跳过草稿和预发布版本。旧版官方程序仍指向原作者仓库，因此首次切换必须手动安装本仓库构建的程序；以后发布更高的三段式版本即可通过页面升级。仅推送 main 或 Git 标签但未发布 Release，不会产生可在线安装的新版本。
+
 点「更新」后：下载当前平台的发布包 → 比对 Release 的 `SHA256SUMS` → 用 `-h` 冒烟测试新二进制 → 暂存为 `artex.new` → 程序退出，由 `start.sh` / `start.bat` 重新拉起并完成换装。页面会自动等到新版本上线后刷新。
 
 - **失败不会留下坏程序**：校验或冒烟不通过就丢弃暂存件、继续跑当前版本；换装后的新版若连续 3 次启动失败，会自动回滚到 `artex.old`（失败的那个留作 `artex.failed` 供排查）。
@@ -156,6 +158,35 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 - **开发构建不给更新**：版本号是 `dev` 或 `git describe` 带后缀时禁用，避免正式版覆盖掉本地调试的二进制。
 - **Docker 下只换程序、不换镜像**：镜像里的 playwright / nmap 等工具链不会跟着升级，且 `docker compose up -d` 重建容器后会退回镜像自带的版本。要连镜像一起升级仍请用 `docker compose pull artex && docker compose up -d artex`。
 - 访问 GitHub 需要代理时，在同一页面配置**全局代理**即可，更新链路会走它。更新只从 GitHub 域名下载并强制 HTTPS。
+
+### 维护者：通过 GitHub Actions 发布在线更新
+
+发布工作流为 `.github/workflows/release.yml`。推送正式标签会触发构建，也可在 Actions → release → Run workflow 中输入已存在的标签重新执行失败的发布。标签必须是 `v主版本.次版本.修订号`，例如下例的 `v0.3.16`；后续版本必须高于用户正在运行的版本。
+
+```bash
+git push origin main
+git tag v0.3.16
+git push origin v0.3.16
+```
+
+工作流固定标签对应的提交，用 Node.js 22 导出前端，按照 `go.mod` 指定的 Go 版本编译内嵌前端的五个平台程序，并生成 ZIP 与 `SHA256SUMS`。全部发布包准备好后先上传到草稿 Release，上传成功才公开为最新正式版，避免页面检查到尚未上传完整的版本。已公开的同版本不允许覆盖，应发布新标签。
+
+页面在线更新所需的发布只使用仓库自带 `GITHUB_TOKEN`，无需 Docker Hub 凭据。Docker 镜像任务默认跳过；如需单独发布自己的镜像，设置仓库 Actions 变量 `ARTEX_DOCKER_IMAGE`（自己的 Docker Hub 镜像名）及 Secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`。现有 Compose 文件仍指向原镜像，使用自有镜像时应自行修改镜像地址。
+
+首次迁移已有 Docker 部署时，将已校验的新 ARM64 ZIP 解压到宿主机，备份原程序，然后只替换已有容器中的 `/app/artex`。例如现有容器名为 `artex-artex-1`：
+
+```bash
+# 在下载目录运行；先按 SHA256SUMS 核对下载的 ZIP，再解压。
+sha256sum --ignore-missing --check SHA256SUMS
+unzip artex-0.3.16-linux-arm64.zip
+sudo docker stop artex-artex-1
+sudo docker cp artex-artex-1:/app/artex ./artex-before-migration
+sudo docker cp ./artex-0.3.16-linux-arm64/artex artex-artex-1:/app/artex
+sudo docker start artex-artex-1
+curl --fail http://127.0.0.1:8787/api/health
+```
+
+这会保留现有数据库、data 和 skills 挂载。登录系统配置页检查更新源与版本。容器内替换的程序仍属于容器可写层，删除或重建容器会丢失替换结果；需要重建时应使用包含本仓库程序的镜像。程序回滚不回退数据库迁移，升级前请备份数据库和 data。
 
 ### 方式二：一键更新脚本
 
@@ -182,7 +213,7 @@ docker image prune -f          # 清理旧镜像（可选）
 
 ### 方式四：预编译二进制（Releases）
 
-到 [Releases](https://github.com/Autumn-27/ARTEX/releases) 下载新版本 zip，停掉旧进程后覆盖 `artex` 与 `skills/`（保留你的 `config.json` 与 `data/`），重启即可：
+到 [Releases](https://github.com/RuoJi6/ARTEX/releases) 下载新版本 zip，停掉旧进程后覆盖 `artex` 与 `skills/`（保留你的 `config.json` 与 `data/`），重启即可：
 
 ```bash
 cp -r <解压目录>/skills ./ && cp <解压目录>/artex ./
