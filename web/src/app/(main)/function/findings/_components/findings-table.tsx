@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { CopyButton } from "@/components/copy-button";
+import { FindingCaseFolder } from "@/components/finding-case-list";
 import { Markdown } from "@/components/markdown";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -37,7 +38,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { statusMeta } from "@/lib/status";
-import type { ActiveFindingRetest, Finding, FindingStatus, Severity } from "@/lib/types";
+import type { ActiveFindingRetest, Finding, FindingCaseListRow, FindingStatus, Severity } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
@@ -90,6 +91,9 @@ const COLUMN_COUNT = 9;
 
 interface FindingsTableProps {
   items: Finding[];
+  caseRows?: FindingCaseListRow[];
+  matchedIds?: number[];
+  presentation?: "records" | "task" | "asset";
   selectedIds: Set<string>;
   onToggleSelected: (id: string, checked: boolean) => void;
   onToggleSelectedPage: (ids: string[], checked: boolean) => void;
@@ -114,6 +118,9 @@ interface FindingsTableProps {
 // (勾选 / 行内展开 / 行内改名与改状态 / 复测 / 深入 / 删除),差异只在外层容器与分页。
 export function FindingsTable({
   items,
+  caseRows,
+  matchedIds,
+  presentation = "records",
   selectedIds,
   onToggleSelected,
   onToggleSelectedPage,
@@ -140,6 +147,8 @@ export function FindingsTable({
     headerChecked = "indeterminate";
   }
 
+  const rows: FindingCaseListRow[] = caseRows ?? items.map((finding) => ({ finding, matched_ids: [] }));
+
   return (
     /* 固定列宽保证展开内容不撑开表格；窄屏只在表格内部横向滚动。 */
     <Table className="min-w-[60rem] table-fixed">
@@ -163,14 +172,56 @@ export function FindingsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {items.map((f) => {
+        {rows.map((row) => {
+          if (row.case)
+            return (
+              <TableRow key={`case:${row.case.id}`}>
+                <TableCell colSpan={COLUMN_COUNT} className="p-0 whitespace-normal">
+                  <FindingCaseFolder
+                    row={row}
+                    presentation={presentation}
+                    selectedIds={selectedIds}
+                    onSelect={onToggleSelected}
+                    className="rounded-none border-0"
+                    renderRecords={(members) => (
+                      <FindingsTable
+                        items={members}
+                        matchedIds={row.matched_ids}
+                        presentation={presentation}
+                        selectedIds={selectedIds}
+                        onToggleSelected={onToggleSelected}
+                        onToggleSelectedPage={onToggleSelectedPage}
+                        expandedKey={expandedKey}
+                        onToggleRow={onToggleRow}
+                        reports={reports}
+                        edit={edit}
+                        onEditChange={onEditChange}
+                        saving={saving}
+                        onSave={onSave}
+                        onStatusChange={onStatusChange}
+                        onRetest={onRetest}
+                        activeRetests={activeRetests}
+                        onDeepen={onDeepen}
+                        onDelete={onDelete}
+                        selectAllLabel="选择文件夹当前页记录"
+                      />
+                    )}
+                  />
+                </TableCell>
+              </TableRow>
+            );
+          const f = row.finding;
+          if (!f) return null;
           const rowKey = findingRowKey(f);
           const open = expandedKey === rowKey;
           const retest = f.finding_id ? activeRetests[f.finding_id] : undefined;
           return (
             <React.Fragment key={rowKey}>
               <TableRow
-                className="cursor-pointer"
+                className={cn(
+                  "cursor-pointer",
+                  matchedIds && !matchedIds.includes(Number(f.finding_id)) && "bg-muted/30",
+                )}
                 role="button"
                 tabIndex={0}
                 aria-expanded={open}
@@ -213,6 +264,11 @@ export function FindingsTable({
                       <span className="truncate font-medium">{f.name || f.vulnclass || "未分类"}</span>
                     )}
                     <span className="truncate text-xs text-muted-foreground">{f.summary}</span>
+                    {matchedIds && !matchedIds.includes(Number(f.finding_id)) ? (
+                      <Badge variant="outline" className="w-fit">
+                        未命中当前筛选
+                      </Badge>
+                    ) : null}
                     <Badge variant="outline">流量证据 {f.traffic_count ?? 0} 条</Badge>
                   </div>
                 </TableCell>
@@ -441,7 +497,7 @@ export function FindingsTable({
             </React.Fragment>
           );
         })}
-        {items.length === 0 && (
+        {(caseRows ? caseRows.length : items.length) === 0 && (
           <TableRow>
             <TableCell colSpan={COLUMN_COUNT} className="py-12 text-center text-sm text-muted-foreground">
               没有匹配的发现。

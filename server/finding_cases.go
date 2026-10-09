@@ -87,7 +87,7 @@ func (s *Server) listFindingCases(w http.ResponseWriter, r *http.Request) {
 			v["assets"] = append([]FindingAssetDTO{}, findingFromDB(&db.DBFinding{AssetIDs: c.AssetIDs}, assets).Assets...)
 		}
 		if row.FindingID > 0 {
-			f, err := s.m.pg.FindingCaseSummary(row.FindingID)
+			f, err := s.m.pg.FindingCaseSummary(row.FindingID, q.Get("original_rows") == "1")
 			if err != nil {
 				caseHTTPError(w, err)
 				return

@@ -559,9 +559,13 @@ func (d *DB) DistinctFindingStatsByTask() (map[string]*FindingDistinctStats, err
 	return out, rows.Err()
 }
 
-// Folder rows and candidate searches never fetch full report/PoC bodies.
-func (d *DB) FindingCaseSummary(id int64) (*DBFinding, error) {
+// Folder rows and candidate searches omit PoC bodies. The original table can
+// request evidence for ungrouped rows without fetching report bodies.
+func (d *DB) FindingCaseSummary(id int64, originalRow ...bool) (*DBFinding, error) {
 	cols := strings.Replace(findingSelectCols, "f.evidence,", "''::text,", 1)
+	if len(originalRow) > 0 && originalRow[0] {
+		cols = findingSelectCols
+	}
 	rows, err := d.Query(`SELECT `+cols+` FROM findings f LEFT JOIN tasks t ON t.id=f.task_id WHERE f.id=$1`, id)
 	if err != nil {
 		return nil, err

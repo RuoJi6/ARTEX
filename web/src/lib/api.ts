@@ -569,10 +569,11 @@ export const api = {
   findingAssetTree: (q: Omit<FindingQuery, "page" | "pageSize">) =>
     get<FindingAssetTree>(`/exploration/findings/asset-tree?${findingFilterParams(q).toString()}`),
 
-  findingCases: (q: FindingQuery) => {
+  findingCases: (q: FindingQuery, originalRows = false) => {
     const p = findingFilterParams(q);
     p.set("page", String(q.page));
     p.set("limit", String(q.pageSize));
+    if (originalRows) p.set("original_rows", "1");
     return get<FindingCasePage>(`/exploration/finding-cases?${p}`);
   },
   getFindingCase: (id: string, contextTask?: string) =>

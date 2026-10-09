@@ -352,3 +352,44 @@ func TestFindingCaseListIncludesContextAndFilteredCounts(t *testing.T) {
 		t.Fatalf("list payload %s", w.Body.String())
 	}
 }
+
+func TestOriginalFindingRowsKeepEvidenceAndOmitReportBody(t *testing.T) {
+	s, task, ids := testCaseServer(t)
+	if _, err := s.m.pg.Exec(`UPDATE findings SET report=$2 WHERE id=$1`, ids[0], "large original report"); err != nil {
+		t.Fatal(err)
+	}
+	for _, original := range []bool{false, true} {
+		suffix := ""
+		if original {
+			suffix = "&original_rows=1"
+		}
+		r := httptest.NewRequest("GET", fmt.Sprintf("/api/finding-cases?task_id=%d%s", task, suffix), nil)
+		w := httptest.NewRecorder()
+		s.listFindingCases(w, r)
+		if w.Code != 200 {
+			t.Fatalf("status %d %s", w.Code, w.Body)
+		}
+		var page struct {
+			Items []struct {
+				Finding FindingDTO `json:"finding"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) != 3 {
+			t.Fatalf("lost original rows %s", w.Body)
+		}
+		for _, row := range page.Items {
+			if row.Finding.Report != "" {
+				t.Fatal("list loaded report body")
+			}
+			if original && !strings.HasPrefix(row.Finding.Evidence, "proof ") {
+				t.Fatal("original table evidence missing")
+			}
+			if !original && row.Finding.Evidence != "" {
+				t.Fatal("compact list should omit evidence")
+			}
+		}
+	}
+}

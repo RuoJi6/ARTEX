@@ -72,7 +72,7 @@ function Row({
                 </Badge>
               )}
             </div>
-            <span className="truncate text-muted-foreground text-xs">{f.summary}</span>
+            <span className="truncate text-xs text-muted-foreground">{f.summary}</span>
           </div>
         </button>
         <Badge variant="outline">流量证据 {f.traffic_count ?? 0} 条</Badge>
@@ -87,7 +87,7 @@ function Row({
                 {a.label}
               </code>
             ))}
-            {f.assets.length > 2 && <span className="text-muted-foreground text-xs">+{f.assets.length - 2}</span>}
+            {f.assets.length > 2 && <span className="text-xs text-muted-foreground">+{f.assets.length - 2}</span>}
           </div>
         )}
         {f.finding_id && !f.inherited ? (
@@ -108,7 +108,7 @@ function Row({
         ) : (
           <StatusBadge domain="finding" value={f.status} dot />
         )}
-        <span className="hidden shrink-0 text-muted-foreground text-xs md:block">
+        <span className="hidden shrink-0 text-xs text-muted-foreground md:block">
           {new Date(f.ts).toLocaleString("zh-CN")}
         </span>
         {f.finding_id && (
@@ -118,7 +118,7 @@ function Row({
                 ? `/function/findings/detail?id=${f.finding_id}&context_task=${contextTaskId}`
                 : `/function/findings/detail?id=${f.finding_id}`
             }
-            className="inline-flex shrink-0 items-center gap-0.5 text-muted-foreground text-xs hover:text-primary"
+            className="text-muted-foreground hover:text-primary inline-flex shrink-0 items-center gap-0.5 text-xs"
             title="查看漏洞详情"
           >
             详情
@@ -128,8 +128,8 @@ function Row({
       </div>
       {open && (
         <div className="bg-muted/30 px-4 pb-4 pl-11">
-          <div className="mb-1 font-medium text-muted-foreground text-xs">证据 / PoC</div>
-          <pre className="overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 font-mono text-xs">
+          <div className="mb-1 text-xs font-medium text-muted-foreground">证据 / PoC</div>
+          <pre className="overflow-auto rounded-md border bg-background p-3 font-mono text-xs whitespace-pre-wrap">
             {f.evidence}
           </pre>
         </div>
@@ -190,11 +190,7 @@ export function FindingsTab({ taskId }: { taskId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <FindingCaseList
-        query={{ task: taskId, sort: "time" }}
-        presentation="task"
-        actions={{ onStatusChange: onStatus }}
-      />
+      <FindingCaseList query={{ task: taskId, sort: "time" }} />
       {[
         ...new Set(
           items
@@ -204,15 +200,15 @@ export function FindingsTab({ taskId }: { taskId: string }) {
         ),
       ].map((source) => (
         <div key={source}>
-          <p className="mb-2 text-muted-foreground text-sm">继承任务 #{source} · 只读</p>
-          <FindingCaseList query={{ task: source, sort: "time" }} contextTask={taskId} presentation="task" readOnly />
+          <p className="mb-2 text-sm text-muted-foreground">继承任务 #{source} · 只读</p>
+          <FindingCaseList query={{ task: source, sort: "time" }} contextTask={taskId} readOnly />
         </div>
       ))}
       <details>
-        <summary className="cursor-pointer text-muted-foreground text-sm">查看原始上报列表</summary>
+        <summary className="cursor-pointer text-sm text-muted-foreground">查看原始上报列表</summary>
         <Card className="overflow-hidden py-0">
           <CardContent className="px-0">
-            <div className="flex items-center border-b px-4 py-2 text-muted-foreground text-xs">
+            <div className="flex items-center border-b px-4 py-2 text-xs text-muted-foreground">
               <span className="min-w-0 flex-1">漏洞</span>
               <button
                 type="button"
@@ -237,7 +233,7 @@ export function FindingsTab({ taskId }: { taskId: string }) {
               <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
             ))}
             {items.length === 0 && (
-              <p className="px-4 py-8 text-center text-muted-foreground text-sm">本任务及直接关联任务暂无确认发现。</p>
+              <p className="px-4 py-8 text-center text-sm text-muted-foreground">本任务及直接关联任务暂无确认发现。</p>
             )}
           </CardContent>
         </Card>
