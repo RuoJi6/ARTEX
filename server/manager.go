@@ -1169,7 +1169,7 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 	        WHEN $2 IN ('done','failed','timeout') THEN COALESCE(completed_at, now())
 	        ELSE NULL
 	    END,
-	    paused=false,
+	    paused=false, schedule_paused=false,
 	    queued=$3,
 	    queued_at=CASE
 	        WHEN NOT $3 THEN NULL
@@ -1232,7 +1232,9 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 // the user pause. queue_mode is intentionally retained so resuming a never-run
 // bootstrap task still performs goal decomposition, but the next enqueue receives
 // a new queued_at timestamp and therefore moves to the FIFO tail.
-func (m *Manager) ApplyTaskPause(id string) error {
+func (m *Manager) ApplyTaskPause(id string) error { return m.ApplyTaskPauseOrigin(id, false) }
+
+func (m *Manager) ApplyTaskPauseOrigin(id string, scheduled bool) error {
 	m.taskStateMu.Lock()
 	defer m.taskStateMu.Unlock()
 	n, err := strconv.ParseInt(id, 10, 64)
@@ -1241,10 +1243,10 @@ func (m *Manager) ApplyTaskPause(id string) error {
 	}
 	var mode string
 	err = m.pg.QueryRow(`UPDATE tasks
-		SET paused=true, queued=false, queued_at=NULL
+		SET paused=true, queued=false, queued_at=NULL, schedule_paused=$2
 		WHERE id=$1 AND deleted_at IS NULL AND paused=false
 		  AND status NOT IN ('done','failed','timeout')
-		RETURNING COALESCE(queue_mode,'')`, n).Scan(&mode)
+		RETURNING COALESCE(queue_mode,'')`, n, scheduled).Scan(&mode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("task %s is unavailable for pause", id)
 	}

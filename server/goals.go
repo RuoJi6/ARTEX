@@ -107,7 +107,10 @@ func (s *Server) admitPausedTask(t *Task) (queued bool, err error) {
 	return s.admitTaskWhen(t, "resume", true)
 }
 
-func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued bool, err error) {
+func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (bool, error) {
+	return s.admitTaskWhenScheduled(t, mode, requirePaused, false)
+}
+func (s *Server) admitTaskWhenScheduled(t *Task, mode string, requirePaused, scheduled bool) (queued bool, err error) {
 	if t == nil {
 		return false, fmt.Errorf("task not found")
 	}
@@ -128,6 +131,15 @@ func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued
 	}
 	defer s.engine.decInflight(t.ID)
 	lifecycle := t.lifecycleSnapshot()
+	if scheduled {
+		var managed bool
+		if err := s.m.pg.QueryRow(`SELECT schedule_paused FROM tasks WHERE id=$1`, t.ID).Scan(&managed); err != nil {
+			return false, err
+		}
+		if !managed {
+			return false, fmt.Errorf("人工暂停优先，计划不能恢复")
+		}
+	}
 	if requirePaused {
 		if isTerminalStatus(lifecycle.Status) {
 			return false, fmt.Errorf("终态任务不能执行继续")

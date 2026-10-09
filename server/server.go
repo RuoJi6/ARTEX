@@ -39,9 +39,10 @@ var BuildVersion = "dev"
 // Server exposes the ARTEX backend over a JSON HTTP API for the shadcn/ui
 // frontend.
 type Server struct {
-	m      *Manager
-	engine *Engine
-	ctx    context.Context
+	scheduleMu sync.Mutex
+	m          *Manager
+	engine     *Engine
+	ctx        context.Context
 
 	skillDir  string // root directory for skill subdirectories
 	jwtKey    []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
@@ -234,8 +235,8 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			log.Printf("[retester] seed: %v", err)
 		}
 		go s.evidenceStore().RunGC(s.ctx)
-		s.seedPythonInterpreter()     // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
-		go newScheduler(s).Run(s.ctx) // P3 触发器调度(定时/finding/目标事件),仅自定义 agent
+		s.seedPythonInterpreter() // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
+		// Calendar scheduler starts after persisted tasks are restored.
 		// 漏洞 IM 推送投递引擎。与 Scheduler 并列但独立：推送的实时性要求(3s)
 		// 与触发器的业务节奏不同，且两者失败互不牵连——推送卡住不该影响 agent 触发。
 		go newNotifier(s).Run(s.ctx)
@@ -289,6 +290,7 @@ func (s *Server) restoreTaskRuntimes() {
 			s.engine.startDeadlineCoordinator(s.ctx, t)
 		}
 	}
+	go newScheduler(s).Run(s.ctx)
 	// Restore every task that had already been admitted before shutdown. Starting
 	// only the active UI task left other non-queued tasks counted as concurrency
 	// occupants without live loops, which could permanently block the persistent
@@ -686,6 +688,14 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/tasks", s.listTasks)
 	mux.HandleFunc("POST /api/tasks", s.createTask)
+	mux.HandleFunc("GET /api/schedules", s.listSchedules)
+	mux.HandleFunc("POST /api/schedules", s.createSchedule)
+	mux.HandleFunc("GET /api/schedules/{id}", s.getSchedule)
+	mux.HandleFunc("PATCH /api/schedules/{id}", s.updateSchedule)
+	mux.HandleFunc("DELETE /api/schedules/{id}", s.deleteSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/pause", s.pauseSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/resume", s.resumeSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/run-now", s.runScheduleNow)
 	mux.HandleFunc("GET /api/task-categories", s.pgListTaskCategories)
 	mux.HandleFunc("POST /api/task-categories", s.pgCreateTaskCategory)
 	mux.HandleFunc("PATCH /api/task-categories/{id}", s.pgRenameTaskCategory)
@@ -1469,18 +1479,19 @@ func truncateReply(s string) string {
 }
 
 type createTaskReq struct {
-	Name                 string   `json:"name,omitempty"` // 可选任务名称;省略/空=未命名
-	CategoryID           *int64   `json:"category_id,omitempty"`
-	Description          string   `json:"description"`
-	Goal                 string   `json:"goal"`
-	LLMProfileID         *int64   `json:"llm_profile_id,omitempty"`    // 指定运行本任务的 LLM 配置;省略/null=用激活配置
-	LLMProfileIDs        []int64  `json:"llm_profile_ids,omitempty"`   // 有序任务级配置链;第一项初始生效
-	SourceTaskIDs        []string `json:"source_task_ids,omitempty"`   // 仅直接、只读继承的来源任务
-	CompanyIDs           []int64  `json:"company_ids,omitempty"`       // 关联企业范围并快照关联当前企业资产;不复制资产或强制生成意图
-	TimeoutSeconds       int      `json:"timeout_seconds"`             // 任务级超时(秒);0/省略=不限时
-	PlanHeartbeatSeconds int      `json:"plan_heartbeat_seconds"`      // planner 心跳触发间隔(秒);0/省略=默认600(10min);下限=默认=600,低于自动抬到600
-	SeedFirstIntent      *bool    `json:"seed_first_intent,omitempty"` // 创建时直接下发一条种子意图(内容=描述+目标),让 worker 免等首轮 planner 直接开跑;省略/null=默认关闭,走标准先规划再执行。显式传 true 才开(CTF 常一 work 解决时可省掉开跑前的 planner 轮)。
-	CoverageEnabled      *bool    `json:"coverage_enabled,omitempty"`  // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
+	Schedule             *scheduleRequest `json:"schedule,omitempty"`
+	Name                 string           `json:"name,omitempty"` // 可选任务名称;省略/空=未命名
+	CategoryID           *int64           `json:"category_id,omitempty"`
+	Description          string           `json:"description"`
+	Goal                 string           `json:"goal"`
+	LLMProfileID         *int64           `json:"llm_profile_id,omitempty"`    // 指定运行本任务的 LLM 配置;省略/null=用激活配置
+	LLMProfileIDs        []int64          `json:"llm_profile_ids,omitempty"`   // 有序任务级配置链;第一项初始生效
+	SourceTaskIDs        []string         `json:"source_task_ids,omitempty"`   // 仅直接、只读继承的来源任务
+	CompanyIDs           []int64          `json:"company_ids,omitempty"`       // 关联企业范围并快照关联当前企业资产;不复制资产或强制生成意图
+	TimeoutSeconds       int              `json:"timeout_seconds"`             // 任务级超时(秒);0/省略=不限时
+	PlanHeartbeatSeconds int              `json:"plan_heartbeat_seconds"`      // planner 心跳触发间隔(秒);0/省略=默认600(10min);下限=默认=600,低于自动抬到600
+	SeedFirstIntent      *bool            `json:"seed_first_intent,omitempty"` // 创建时直接下发一条种子意图(内容=描述+目标),让 worker 免等首轮 planner 直接开跑;省略/null=默认关闭,走标准先规划再执行。显式传 true 才开(CTF 常一 work 解决时可省掉开跑前的 planner 轮)。
+	CoverageEnabled      *bool            `json:"coverage_enabled,omitempty"`  // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
 	// InterceptRules 任务级资产拦截/允许规则(创建时录入,存 task_intercept_rules,不进全局表)。
 	InterceptRules []taskInterceptRuleReq `json:"intercept_rules,omitempty"`
 }
@@ -1534,8 +1545,19 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "任务级拦截规则无效："+err.Error())
 		return
 	}
+	var schedule *db.TaskScheduleInput
+	if req.Schedule != nil {
+		input := s.scheduleInput(*req.Schedule, nil)
+		input.TaskIDs = nil
+		if err := db.ValidateTaskScheduleInput(input); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		schedule = &input
+	}
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
-		Name: strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
+		Schedule: schedule,
+		Name:     strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
 		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
 		CoverageEnabled: req.CoverageEnabled,
@@ -1556,7 +1578,11 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[task] 新建任务 #%s «%s» 目标: %s", t.ID, req.Description, req.Goal)
 	// 共享的建后流程(seed + 种子意图 + 后台目标分解 + engine.Run),与 spawn_task 复用同一段。
 	// launchTask 内部异步,不阻塞 UI —— 目标分解在后台可见地进行。
-	s.launchTask(t, req.Description+" "+req.Goal, req.SeedFirstIntent != nil && *req.SeedFirstIntent)
+	if schedule == nil || schedule.StartImmediately {
+		s.launchTask(t, req.Description+" "+req.Goal, req.SeedFirstIntent != nil && *req.SeedFirstIntent)
+	} else {
+		s.engine.Pause(t.ID, agent.AbortPausedBySchedule)
+	}
 	writeJSON(w, 201, taskDTO(t, s.resolvedTaskStatus(t)))
 }
 

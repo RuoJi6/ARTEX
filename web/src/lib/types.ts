@@ -715,6 +715,35 @@ export interface AgentTrigger {
   last_fire?: string;
 }
 
+export interface TaskSchedule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  timezone_mode: "beijing" | "system";
+  timezone?: string;
+  schedule_type: "once" | "weekly";
+  run_date?: string;
+  weekdays: number[];
+  start_time: string;
+  end_time?: string;
+  start_immediately: boolean;
+  status: "waiting" | "running" | "outside" | "completed" | "error" | "paused";
+  last_window_key?: string;
+  last_transition_at?: string;
+  last_error?: string;
+  next_start?: string;
+  next_end?: string;
+  task_ids: number[];
+  history?: Array<{
+    id: number;
+    task_id?: number;
+    action: string;
+    success: boolean;
+    message: string;
+    created_at: string;
+  }>;
+}
+
 // ---- Conversations (chat page) ----
 export interface ActiveFindingRetest {
   id: number;
