@@ -16,7 +16,7 @@ import (
 // skill loads. Returns a single plain segment + boundary 0 when there is no global
 // block to add.
 func deferredSystem(sysText string, def DeferredInfo) (system []string, boundary int) {
-	sysText += def.FindingGuidance
+	sysText += def.FindingGuidance + def.CaseGuidance
 	block := actool.RenderDeferredToolsBlock(def.GlobalNames)
 	if block == "" {
 		return []string{sysText}, 0

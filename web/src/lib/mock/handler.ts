@@ -1843,6 +1843,35 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     return { deleted: 1, assets_deleted: assetsDeleted };
   }
 
+  // Demo mode keeps raw observations as independent findings, without executing a model.
+  if (path === "/exploration/finding-case-suggestions" || (path === "/exploration/finding-case-review" && m === "GET"))
+    return [];
+  if (path === "/exploration/finding-case-review" && m === "POST")
+    throw new Error("演示模式不执行 Reporter 整理，请在已配置模型的实例中使用");
+  if (path === "/exploration/finding-cases" && m === "GET") {
+    const list = mockApplyAssetScope(mockFilterFindings(q), q.get("asset_scope"));
+    const ranks = { critical: 4, high: 3, medium: 2, low: 1 } as const;
+    list.sort(
+      (a, b) =>
+        (q.get("sort") === "severity" ? ranks[b.severity] - ranks[a.severity] : 0) || +new Date(b.ts) - +new Date(a.ts),
+    );
+    const page = Math.max(1, Number(q.get("page")) || 1);
+    const size = Math.min(100, Math.max(1, Number(q.get("limit")) || 20));
+    const scoped = mockFindings.filter((f) => !q.get("task_id") || f.task_id === q.get("task_id"));
+    const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const f of scoped) counts[f.severity]++;
+    return {
+      items: list.slice((page - 1) * size, page * size).map((f) => ({
+        finding: { ...f, report: undefined, finding_id: f.id, traffic_count: mockTrafficCount(f.id) },
+        matched_ids: [],
+      })),
+      total: list.length,
+      page,
+      page_size: size,
+      stats: { total: scoped.length, reports: scoped.length, unassessed: 0, ...counts },
+    };
+  }
+
   // ── exploration ──
   if (path === "/exploration/frontier") return D.frontier;
   if (path === "/exploration/findings/stats") {
