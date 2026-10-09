@@ -2,7 +2,18 @@
 
 import * as React from "react";
 
-import { CalendarClock, Loader2, Pause, Play, Plus, Search, Trash2, Zap } from "lucide-react";
+import {
+  CalendarClock,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Pause,
+  Play,
+  Plus,
+  Search,
+  Trash2,
+  Zap,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { DateSelect } from "@/components/date-select";
@@ -114,6 +125,83 @@ function scheduleErrorText(value?: string) {
     .replaceAll("weekdays", "星期")
     .replaceAll("timezone_mode", "时区")
     .replaceAll("schedule_type", "规则");
+}
+
+type ScheduleHistoryEntry = NonNullable<TaskSchedule["history"]>[number];
+
+function historyActionText(action: string) {
+  return (
+    (
+      {
+        running: "窗口开始",
+        outside: "窗口结束",
+        completed: "计划完成",
+        waiting: "等待窗口",
+        paused: "计划暂停",
+        resume: "恢复任务",
+        pause: "暂停任务",
+        error: "执行错误",
+      } as Record<string, string>
+    )[action] ?? "状态变化"
+  );
+}
+
+function timelinePosition(event: ScheduleHistoryEntry, index: number, events: ScheduleHistoryEntry[]) {
+  if (events.length <= 1) return 50;
+  const timestamps = events.map((item) => Date.parse(item.created_at)).filter(Number.isFinite);
+  const time = Date.parse(event.created_at);
+  const min = Math.min(...timestamps);
+  const max = Math.max(...timestamps);
+  if (!Number.isFinite(time) || !Number.isFinite(min) || max <= min) return (index / (events.length - 1)) * 100;
+  return ((time - min) / (max - min)) * 100;
+}
+
+function ScheduleTimeline({ schedule, loading }: { schedule?: TaskSchedule; loading: boolean }) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-4 text-muted-foreground text-sm">
+        <Loader2 className="size-4 animate-spin" />
+        加载运行时间线…
+      </div>
+    );
+  }
+  const events = [...(schedule?.history ?? [])].reverse();
+  if (!events.length) {
+    return <div className="py-4 text-muted-foreground text-sm">暂无运行记录，计划进入第一个窗口后会显示时间线。</div>;
+  }
+  return (
+    <div className="grid gap-3 rounded-lg border bg-muted/20 p-4">
+      <div className="font-medium text-sm">运行时间线</div>
+      <div className="relative h-20 overflow-x-auto">
+        <div className="absolute top-5 right-3 left-3 h-0.5 bg-border" />
+        {events.map((event, index) => (
+          <div
+            key={event.id}
+            className="absolute top-0 -translate-x-1/2"
+            style={{ left: `${timelinePosition(event, index, events)}%` }}
+            title={`${historyActionText(event.action)} · ${formatTime(event.created_at)}`}
+          >
+            <div className="mx-auto mt-2 size-3 rounded-full border-2 border-background bg-primary shadow-sm" />
+            <div className="mt-2 max-w-28 text-center text-muted-foreground text-xs">
+              {historyActionText(event.action)}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-2 border-t pt-3">
+        {events.slice(-20).map((event) => (
+          <div key={`${event.id}-detail`} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <span className="font-medium">{historyActionText(event.action)}</span>
+            <span className="text-muted-foreground">{formatTime(event.created_at)}</span>
+            {event.task_id ? <span className="text-muted-foreground">任务 #{event.task_id}</span> : null}
+            {event.message ? (
+              <span className={event.success ? "text-muted-foreground" : "text-destructive"}>{event.message}</span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function statusVariant(status: TaskSchedule["status"]): "default" | "destructive" | "secondary" {
@@ -314,6 +402,12 @@ export default function SchedulesPage() {
   const [loading, setLoading] = React.useState(true);
   const [editing, setEditing] = React.useState<{ id?: number; value: ScheduleInput } | null>(null);
   const [saving, setSaving] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState("10");
+  const [expandedId, setExpandedId] = React.useState<number | null>(null);
+  const [timelineById, setTimelineById] = React.useState<Record<number, TaskSchedule>>({});
+  const [timelineLoadingId, setTimelineLoadingId] = React.useState<number | null>(null);
   const load = React.useCallback(async () => {
     setLoading(true);
     try {
@@ -329,6 +423,47 @@ export default function SchedulesPage() {
   React.useEffect(() => {
     void load();
   }, [load]);
+  const filteredItems = React.useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return items;
+    return items.filter((item) =>
+      [item.name, String(item.id), periodLabel(item), windowLabel(item), ...item.task_ids.map(String)]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalized),
+    );
+  }, [items, query]);
+  const size = Number(pageSize);
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / size));
+  const visibleItems = filteredItems.slice((page - 1) * size, page * size);
+  React.useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+  const updateQuery = (value: string) => {
+    setQuery(value);
+    setPage(1);
+  };
+  const updatePageSize = (value: string) => {
+    setPageSize(value);
+    setPage(1);
+  };
+  const toggleTimeline = async (id: number) => {
+    if (expandedId === id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(id);
+    if (timelineById[id]) return;
+    setTimelineLoadingId(id);
+    try {
+      const detail = await api.schedule(id);
+      setTimelineById((current) => ({ ...current, [id]: detail }));
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setTimelineLoadingId(null);
+    }
+  };
   const save = async (value: ScheduleInput) => {
     if (
       !value.name.trim() ||
@@ -388,105 +523,168 @@ export default function SchedulesPage() {
     );
   } else {
     scheduleContent = (
-      <div className="overflow-hidden rounded-lg border bg-card">
-        {items.map((item) => (
-          <div
-            key={item.id}
-            className="grid gap-4 border-b p-4 last:border-b-0 lg:grid-cols-[minmax(190px,1.1fr)_minmax(280px,1.6fr)_minmax(260px,1.4fr)_auto]"
-          >
-            <div className="grid content-start gap-2">
-              <div className="flex items-start justify-between gap-3 lg:block">
-                <div>
-                  <div className="font-medium">{item.name}</div>
-                  <div className="text-muted-foreground text-xs">计划 #{item.id}</div>
-                </div>
-                <Badge className="lg:mt-2" variant={statusVariant(item.status)}>
-                  {statusText(item)}
-                </Badge>
-              </div>
-              <div className="text-muted-foreground text-xs">{timezoneLabel(item)}</div>
-            </div>
-            <div className="grid content-start gap-1.5 text-sm">
-              <div>
-                <span className="text-muted-foreground">运行周期：</span>
-                {periodLabel(item)}
-              </div>
-              <div>
-                <span className="text-muted-foreground">时间窗口：</span>
-                {windowLabel(item)}
-              </div>
-              <div>
-                <span className="text-muted-foreground">绑定任务：</span>
-                {item.task_ids.length
-                  ? `${item.task_ids.length} 个（${item.task_ids.map((id) => `#${id}`).join("、")}）`
-                  : "无"}
-              </div>
-            </div>
-            <div className="grid content-start gap-1.5 text-sm">
-              <div>
-                <span className="text-muted-foreground">下一次开始：</span>
-                {nextWindowLabel(item.next_start, item.timezone)}
-              </div>
-              <div>
-                <span className="text-muted-foreground">下一次结束：</span>
-                {nextWindowLabel(item.next_end, item.timezone)}
-              </div>
-              <div>
-                <span className="text-muted-foreground">运行次数：</span>
-                {item.run_count ?? 0} 次{item.last_run_at ? ` · 最近 ${formatTime(item.last_run_at)}` : ""}
-              </div>
-              <div className="text-muted-foreground text-xs">
-                最近变化：{formatTime(item.last_transition_at)}
-                {item.last_error ? ` · ${scheduleErrorText(item.last_error)}` : ""}
-              </div>
-            </div>
-            <div className="flex flex-wrap content-start gap-2 lg:justify-end">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  setEditing({
-                    id: item.id,
-                    value: {
-                      name: item.name,
-                      enabled: item.enabled,
-                      timezone_mode: item.timezone_mode,
-                      schedule_type: item.schedule_type,
-                      run_date: item.run_date,
-                      end_date: item.end_date,
-                      weekdays: item.weekdays,
-                      start_time: item.start_time.slice(0, 5),
-                      end_time: item.end_time?.slice(0, 5),
-                      start_immediately: item.start_immediately,
-                      task_ids: item.task_ids,
-                    },
-                  })
-                }
-              >
-                编辑
-              </Button>
-              {item.enabled ? (
-                <Button size="sm" variant="outline" onClick={() => void action(item.id, "pause")}>
-                  <Pause data-icon="inline-start" />
-                  暂停
-                </Button>
-              ) : (
-                <Button size="sm" variant="outline" onClick={() => void action(item.id, "resume")}>
-                  <Play data-icon="inline-start" />
-                  启用
-                </Button>
-              )}
-              <Button size="sm" variant="outline" onClick={() => void action(item.id, "run")}>
-                <Zap data-icon="inline-start" />
-                立即运行
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => void remove(item.id)}>
-                <Trash2 data-icon="inline-start" />
-                删除
-              </Button>
-            </div>
+      <div className="grid gap-3">
+        <div className="flex flex-col gap-3 rounded-lg border bg-card p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative min-w-0 flex-1 sm:max-w-md">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => updateQuery(event.target.value)}
+              placeholder="检索计划名称、计划 ID 或任务 ID"
+              className="h-9 pl-8"
+            />
           </div>
-        ))}
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">每页</span>
+            <Select value={pageSize} onValueChange={updatePageSize}>
+              <SelectTrigger className="h-9 w-24 bg-background">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10 条</SelectItem>
+                <SelectItem value="20">20 条</SelectItem>
+                <SelectItem value="50">50 条</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-muted-foreground">共 {filteredItems.length} 条</span>
+          </div>
+        </div>
+        {filteredItems.length === 0 ? (
+          <Card>
+            <CardContent className="py-10 text-center text-muted-foreground">没有匹配的计划任务。</CardContent>
+          </Card>
+        ) : (
+          <div className="overflow-hidden rounded-lg border bg-card">
+            {visibleItems.map((item) => (
+              <React.Fragment key={item.id}>
+                <div className="grid gap-4 border-b p-4 last:border-b-0 lg:grid-cols-[minmax(190px,1.1fr)_minmax(280px,1.6fr)_minmax(260px,1.4fr)_auto]">
+                  <div className="grid content-start gap-2">
+                    <div className="flex items-start justify-between gap-3 lg:block">
+                      <div>
+                        <div className="font-medium">{item.name}</div>
+                        <div className="text-muted-foreground text-xs">计划 #{item.id}</div>
+                      </div>
+                      <Badge className="lg:mt-2" variant={statusVariant(item.status)}>
+                        {statusText(item)}
+                      </Badge>
+                    </div>
+                    <div className="text-muted-foreground text-xs">{timezoneLabel(item)}</div>
+                  </div>
+                  <div className="grid content-start gap-1.5 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">运行周期：</span>
+                      {periodLabel(item)}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">时间窗口：</span>
+                      {windowLabel(item)}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">绑定任务：</span>
+                      {item.task_ids.length
+                        ? `${item.task_ids.length} 个（${item.task_ids.map((id) => `#${id}`).join("、")}）`
+                        : "无"}
+                    </div>
+                  </div>
+                  <div className="grid content-start gap-1.5 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">下一次开始：</span>
+                      {nextWindowLabel(item.next_start, item.timezone)}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">下一次结束：</span>
+                      {nextWindowLabel(item.next_end, item.timezone)}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">运行次数：</span>
+                      {item.run_count ?? 0} 次{item.last_run_at ? ` · 最近 ${formatTime(item.last_run_at)}` : ""}
+                    </div>
+                    <div className="text-muted-foreground text-xs">
+                      最近变化：{formatTime(item.last_transition_at)}
+                      {item.last_error ? ` · ${scheduleErrorText(item.last_error)}` : ""}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap content-start gap-2 lg:justify-end">
+                    <Button size="sm" variant="outline" onClick={() => void toggleTimeline(item.id)}>
+                      {expandedId === item.id ? (
+                        <ChevronDown data-icon="inline-start" />
+                      ) : (
+                        <ChevronRight data-icon="inline-start" />
+                      )}
+                      {expandedId === item.id ? "收起时间线" : "查看时间线"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setEditing({
+                          id: item.id,
+                          value: {
+                            name: item.name,
+                            enabled: item.enabled,
+                            timezone_mode: item.timezone_mode,
+                            schedule_type: item.schedule_type,
+                            run_date: item.run_date,
+                            end_date: item.end_date,
+                            weekdays: item.weekdays,
+                            start_time: item.start_time.slice(0, 5),
+                            end_time: item.end_time?.slice(0, 5),
+                            start_immediately: item.start_immediately,
+                            task_ids: item.task_ids,
+                          },
+                        })
+                      }
+                    >
+                      编辑
+                    </Button>
+                    {item.enabled ? (
+                      <Button size="sm" variant="outline" onClick={() => void action(item.id, "pause")}>
+                        <Pause data-icon="inline-start" />
+                        暂停
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" onClick={() => void action(item.id, "resume")}>
+                        <Play data-icon="inline-start" />
+                        启用
+                      </Button>
+                    )}
+                    <Button size="sm" variant="outline" onClick={() => void action(item.id, "run")}>
+                      <Zap data-icon="inline-start" />
+                      立即运行
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => void remove(item.id)}>
+                      <Trash2 data-icon="inline-start" />
+                      删除
+                    </Button>
+                  </div>
+                </div>
+                {expandedId === item.id ? (
+                  <div className="border-b bg-muted/10 px-4 py-3 last:border-b-0">
+                    <ScheduleTimeline schedule={timelineById[item.id]} loading={timelineLoadingId === item.id} />
+                  </div>
+                ) : null}
+              </React.Fragment>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <span className="text-muted-foreground">
+            第 {page} / {totalPages} 页
+          </span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((current) => current - 1)}>
+              上一页
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={page >= totalPages}
+              onClick={() => setPage((current) => current + 1)}
+            >
+              下一页
+            </Button>
+          </div>
+        </div>
       </div>
     );
   }
