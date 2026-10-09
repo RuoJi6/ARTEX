@@ -10,6 +10,10 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --color-severity-critical: var(--severity-critical);
+  --color-severity-high: var(--severity-high);
+  --color-severity-medium: var(--severity-medium);
+  --color-severity-low: var(--severity-low);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -55,6 +59,10 @@
 /* Default theme styles (used when no data-theme-preset is set or when 'default' is selected).
 These serve as the fallback; there is no separate default.css file. */
 :root {
+  --severity-critical: #e11d48;
+  --severity-high: #dc2626;
+  --severity-medium: #d97706;
+  --severity-low: #475569;
   --radius: 0.625rem;
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -94,6 +102,10 @@ These serve as the fallback; there is no separate default.css file. */
 }
 
 .dark {
+  --severity-critical: #fb7185;
+  --severity-high: #f87171;
+  --severity-medium: #fbbf24;
+  --severity-low: #94a3b8;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);

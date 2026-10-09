@@ -5,6 +5,7 @@ export type TaskStatus = "created" | "queued" | "running" | "paused" | "done" | 
 export type EngineMode = "exploring" | "paused" | "stalled" | "idle";
 
 export interface Task {
+  distinct_findings?: FindingDistinctStats;
   id: string;
   name?: string; // 可选任务名称;空/缺省=未命名,展示时回退到描述
   category_id?: number;
@@ -489,6 +490,7 @@ export interface FindingAsset {
 }
 
 export interface Finding {
+  case_id?: string;
   traffic_count?: number;
   evidence_version?: number;
   report_evidence_version?: number;
@@ -550,6 +552,7 @@ export interface FindingDeepenResponse {
 
 // FindingStats 是发现全表聚合(统计卡 + 漏洞类型下拉),服务端计算,不受分页影响。
 export interface FindingStats {
+  distinct?: FindingDistinctStats;
   total: number;
   pending: number;
   critical: number;
@@ -1609,4 +1612,71 @@ export interface InterceptExecution {
   session: string;
   seq: number;
   items: Activity[];
+}
+
+export interface FindingDistinctStats {
+  total: number;
+  reports: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unassessed: number;
+}
+export interface FindingCase {
+  id: string;
+  task_id: string | null;
+  title: string;
+  reason: string;
+  severity: Severity | "";
+  severity_reason: string;
+  report?: string;
+  version: number;
+  report_version: number;
+  active: boolean;
+  count: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  created_at: string;
+}
+export interface FindingCaseListRow {
+  case?: FindingCase | null;
+  finding?: Finding;
+  matched_ids: number[];
+}
+export interface FindingCasePage {
+  items: FindingCaseListRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  stats: FindingDistinctStats;
+}
+export interface FindingCaseEvent {
+  id: string;
+  action: string;
+  actor: string;
+  reason: string;
+  finding_ids: number[];
+  created_at: string;
+}
+export interface FindingCaseDetail {
+  case: FindingCase;
+  events: FindingCaseEvent[];
+}
+export interface FindingCaseSuggestion {
+  id: string;
+  task_id: string;
+  left_id: string;
+  right_id: string;
+  title: string;
+  reason: string;
+  state: string;
+}
+export interface FindingCaseReviewRun {
+  conversation_id: number;
+  task_id: string;
+  state: "queued" | "running" | "done" | "failed";
+  error: string;
 }

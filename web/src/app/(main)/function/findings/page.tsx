@@ -17,11 +17,13 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { FindingCaseList } from "@/components/finding-case-list";
 import { FindingRetestDialog } from "@/components/finding-retest-dialog";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -69,9 +71,9 @@ const FINDING_LIST_PREFERENCE_KEY = "artex_finding_list_preferences";
 
 // 列表视图:flat = 跨任务平铺大表(默认);grouped = 按任务分组折叠;
 // asset = 左侧资产树 + 右侧该子树下的发现。
-type FindingView = "flat" | "grouped" | "asset";
+type FindingView = "cases" | "flat" | "grouped" | "asset";
 
-const FINDING_VIEWS: FindingView[] = ["flat", "grouped", "asset"];
+const FINDING_VIEWS: FindingView[] = ["cases", "flat", "grouped", "asset"];
 
 // 资产树的一次性快照。与另外两个视图不同,资产视图不轮询:进入视图、改筛选、
 // 或本页改动了发现之后才重新查询。
@@ -129,7 +131,7 @@ const EMPTY_STATS: FindingStats = {
 };
 
 export default function FindingsPage() {
-  const [view, setView] = React.useState<FindingView>("flat");
+  const [view, setView] = React.useState<FindingView>("cases");
   const [severity, setSeverity] = React.useState<"all" | Severity>("all");
   const [status, setStatus] = React.useState<"all" | FindingStatus>("all");
   const [vulnclass, setVulnclass] = React.useState<string>("all");
@@ -252,6 +254,8 @@ export default function FindingsPage() {
   const [exportOpen, setExportOpen] = React.useState(false);
   const [exportScope, setExportScope] = React.useState<"filtered" | "all" | "selected">("filtered");
   const [exportFormat, setExportFormat] = React.useState<"md-single" | "md-zip" | "csv" | "json">("md-single");
+  const [includeOriginals, setIncludeOriginals] = React.useState(false);
+  const [reviewing, setReviewing] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
 
   const toggleSelected = React.useCallback((id: string, checked: boolean) => {
@@ -288,6 +292,7 @@ export default function FindingsPage() {
         scope: exportScope,
         filters: { severity, status, vulnclass, task, query, sort },
         ids: [...selectedIds],
+        includeOriginals,
       });
       setExportOpen(false);
       toast.success("已开始下载导出文件");
@@ -752,17 +757,18 @@ export default function FindingsPage() {
   }
 
   const statCards = [
-    { label: "发现总数", value: stats.total, icon: BugIcon },
-    { label: "待处理", value: stats.pending, tone: "text-amber-500", icon: ClockIcon },
-    { label: "严重", value: stats.critical, tone: "text-rose-600", icon: ShieldAlertIcon },
-    { label: "高危", value: stats.high, tone: "text-red-500", icon: TriangleAlertIcon },
-    { label: "中危", value: stats.medium, tone: "text-amber-500", icon: TriangleAlertIcon },
-    { label: "低危", value: stats.low, tone: "text-slate-500", icon: InfoIcon },
+    { label: "独立漏洞", value: stats.distinct?.total ?? stats.total, icon: BugIcon },
+    { label: "上报记录", value: stats.total, tone: "text-amber-500", icon: ClockIcon },
+    { label: "严重", value: stats.distinct?.critical ?? stats.critical, tone: "text-rose-600", icon: ShieldAlertIcon },
+    { label: "高危", value: stats.distinct?.high ?? stats.high, tone: "text-red-500", icon: TriangleAlertIcon },
+    { label: "中危", value: stats.distinct?.medium ?? stats.medium, tone: "text-amber-500", icon: TriangleAlertIcon },
+    { label: "低危", value: stats.distinct?.low ?? stats.low, tone: "text-slate-500", icon: InfoIcon },
   ];
 
   // 导出弹窗里「当前筛选」的条数:两个视图的筛选一致,只是统计口径来源不同。
   // 平铺与资产视图共用 flat 列表状态,分组视图的口径来自组接口的 finding_total。
-  const filteredTotal = view === "grouped" ? total : flat.total;
+  const [caseTotal, setCaseTotal] = React.useState(0);
+  const filteredTotal = view === "cases" ? caseTotal : view === "grouped" ? total : flat.total;
   const assetPath = React.useMemo(
     () => (view === "asset" ? assetPathOf(assetTree.nodes, assetScope) : []),
     [assetScope, assetTree.nodes, view],
@@ -823,7 +829,8 @@ export default function FindingsPage() {
         </div>
         <Tabs value={view} onValueChange={(v) => setView(v as FindingView)}>
           <TabsList>
-            <TabsTrigger value="flat">全部发现</TabsTrigger>
+            <TabsTrigger value="cases">按漏洞</TabsTrigger>
+            <TabsTrigger value="flat">原始上报</TabsTrigger>
             <TabsTrigger value="grouped">按任务分组</TabsTrigger>
             <TabsTrigger value="asset">按资产</TabsTrigger>
           </TabsList>
@@ -953,6 +960,24 @@ export default function FindingsPage() {
             {selectedIds.size > 0 && (
               <span className="text-xs text-muted-foreground tabular-nums">已选 {selectedIds.size} 条</span>
             )}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={reviewing || selectedIds.size === 0}
+              onClick={async () => {
+                setReviewing(true);
+                try {
+                  await api.reviewFindingCases([...selectedIds]);
+                  toast.success("已提交整理，按任务分别执行");
+                } catch (e) {
+                  toast.error((e as Error).message);
+                } finally {
+                  setReviewing(false);
+                }
+              }}
+            >
+              {reviewing ? <Spinner /> : null}整理所选（{selectedIds.size}）
+            </Button>
             <Button size="sm" variant="outline" onClick={openExport}>
               <DownloadIcon /> 导出
             </Button>
@@ -1015,6 +1040,14 @@ export default function FindingsPage() {
           </div>
         )}
 
+        {view === "cases" && (
+          <FindingCaseList
+            onTotal={setCaseTotal}
+            query={{ severity, status, vulnclass, task, query, sort }}
+            selectedIds={selectedIds}
+            onSelect={toggleSelected}
+          />
+        )}
         {view === "grouped" && (
           <div className="flex flex-col gap-3">
             {groups.map((group) => {
@@ -1231,6 +1264,16 @@ export default function FindingsPage() {
 
             <div className="flex flex-col gap-2">
               <span className="text-xs text-muted-foreground">导出格式</span>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="include-original-reports"
+                  checked={includeOriginals}
+                  onCheckedChange={(v) => setIncludeOriginals(v === true)}
+                />
+                <label htmlFor="include-original-reports" className="text-sm">
+                  包含原始子报告（默认每个文件夹一份统一报告）
+                </label>
+              </div>
               <RadioGroup value={exportFormat} onValueChange={(v) => setExportFormat(v as typeof exportFormat)}>
                 <label htmlFor="export-format-md-single" className="flex items-center gap-2 text-sm">
                   <RadioGroupItem id="export-format-md-single" value="md-single" /> Markdown 汇总报告（单个 .md 文件）

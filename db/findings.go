@@ -15,6 +15,9 @@ import (
 // DBFinding is a row in the standalone findings table. It persists across task
 // deletion unless the caller explicitly requests related finding cleanup.
 type DBFinding struct {
+	ExportCaseID    int64 // transient unified-export identity, never a finding handle
+	ExportMemberIDs []int64
+
 	TrafficCount          int
 	EvidenceVersion       int64
 	ReportEvidenceVersion int64
@@ -524,6 +527,8 @@ func (d *DB) ListFindingsForExport(f FindingFilter, ids []int64) ([]*DBFinding, 
 // and vuln-class filter — computed server-side so it stays exact regardless of
 // pagination.
 type FindingStats struct {
+	Distinct *FindingDistinctStats `json:"distinct,omitempty"`
+
 	Total       int                 `json:"total"`
 	Pending     int                 `json:"pending"`
 	Critical    int                 `json:"critical"`

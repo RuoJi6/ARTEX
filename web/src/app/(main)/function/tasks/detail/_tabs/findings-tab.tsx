@@ -7,6 +7,7 @@ import Link from "next/link";
 import { ArrowDownIcon, ArrowUpIcon, ArrowUpRightIcon, ChevronRightIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { FindingCaseList } from "@/components/finding-case-list";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -188,36 +189,55 @@ export function FindingsTab({ taskId }: { taskId: string }) {
     });
 
   return (
-    <Card className="overflow-hidden py-0">
-      <CardContent className="px-0">
-        <div className="flex items-center border-b px-4 py-2 text-xs text-muted-foreground">
-          <span className="min-w-0 flex-1">漏洞</span>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 outline-none focus-visible:underline"
-            aria-label={`发现时间当前${sortPreference.direction === "asc" ? "正序" : "倒序"}，点击切换排序方向`}
-            onClick={() =>
-              setSortPreference((current) => ({
-                field: "time",
-                direction: current.direction === "asc" ? "desc" : "asc",
-              }))
-            }
-          >
-            <span>发现时间</span>
-            {sortPreference.direction === "asc" ? (
-              <ArrowUpIcon className="size-3.5" />
-            ) : (
-              <ArrowDownIcon className="size-3.5" />
-            )}
-          </button>
+    <div className="flex flex-col gap-4">
+      <FindingCaseList query={{ task: taskId, sort: "time" }} />
+      {[
+        ...new Set(
+          items
+            .filter((f) => f.inherited)
+            .map((f) => f.source_task_id)
+            .filter((id): id is string => !!id),
+        ),
+      ].map((source) => (
+        <div key={source}>
+          <p className="mb-2 text-sm text-muted-foreground">继承任务 #{source} · 只读</p>
+          <FindingCaseList query={{ task: source, sort: "time" }} contextTask={taskId} readOnly />
         </div>
-        {items.map((f) => (
-          <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
-        ))}
-        {items.length === 0 && (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">本任务及直接关联任务暂无确认发现。</p>
-        )}
-      </CardContent>
-    </Card>
+      ))}
+      <details>
+        <summary className="cursor-pointer text-sm text-muted-foreground">查看原始上报列表</summary>
+        <Card className="overflow-hidden py-0">
+          <CardContent className="px-0">
+            <div className="flex items-center border-b px-4 py-2 text-xs text-muted-foreground">
+              <span className="min-w-0 flex-1">漏洞</span>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 outline-none focus-visible:underline"
+                aria-label={`发现时间当前${sortPreference.direction === "asc" ? "正序" : "倒序"}，点击切换排序方向`}
+                onClick={() =>
+                  setSortPreference((current) => ({
+                    field: "time",
+                    direction: current.direction === "asc" ? "desc" : "asc",
+                  }))
+                }
+              >
+                <span>发现时间</span>
+                {sortPreference.direction === "asc" ? (
+                  <ArrowUpIcon className="size-3.5" />
+                ) : (
+                  <ArrowDownIcon className="size-3.5" />
+                )}
+              </button>
+            </div>
+            {items.map((f) => (
+              <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
+            ))}
+            {items.length === 0 && (
+              <p className="px-4 py-8 text-center text-sm text-muted-foreground">本任务及直接关联任务暂无确认发现。</p>
+            )}
+          </CardContent>
+        </Card>
+      </details>
+    </div>
   );
 }

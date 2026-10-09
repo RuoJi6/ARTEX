@@ -27,6 +27,7 @@ func writeFindingsEvidenceZip(out io.Writer, findings []*db.DBFinding, stage str
 func writeFindingsZipEntries(zw *zip.Writer, findings []*db.DBFinding, stage string, now time.Time) error {
 	store := evidence.New(nil, nil, stage) // private export copy; not subject to GC
 	used := map[string]int{}
+	evidencePaths := map[string]bool{}
 	for _, f := range findings {
 		base := report.FindingFilename(f)
 		name := base
@@ -43,6 +44,10 @@ func writeFindingsZipEntries(zw *zip.Writer, findings []*db.DBFinding, stage str
 		}
 		for _, b := range f.TrafficBindings {
 			prefix := fmt.Sprintf("evidence/%d/%d/", f.ID, b.ID)
+			if evidencePaths[prefix] {
+				continue
+			}
+			evidencePaths[prefix] = true
 			w, err := zw.Create(prefix + "manifest.json")
 			if err != nil {
 				return err

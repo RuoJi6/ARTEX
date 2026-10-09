@@ -140,6 +140,15 @@ function FindingDetailInner() {
             </Link>
           </Button>
           <ShieldAlertIcon className="size-4 text-muted-foreground" />
+          {finding.case_id ? (
+            <Button asChild variant="outline" size="sm">
+              <Link
+                href={`/function/findings/case?id=${finding.case_id}${contextTaskId ? `&context_task=${contextTaskId}` : ""}`}
+              >
+                所属漏洞文件夹
+              </Link>
+            </Button>
+          ) : null}
           <h1 className="max-w-md truncate text-sm font-semibold" title={title}>
             {title}
           </h1>
@@ -172,7 +181,7 @@ function FindingDetailInner() {
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">{finding.summary || "（无摘要）"}</p>
                 </CardContent>
               </Card>
-              <FindingRetestPanel key={id} findingId={id} readOnly={finding.inherited} onCompleted={load} />
+              <FindingRetestPanel key={`retest:${id}`} findingId={id} readOnly={finding.inherited} onCompleted={load} />
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">证据 / PoC</CardTitle>
@@ -188,7 +197,7 @@ function FindingDetailInner() {
                 </CardContent>
               </Card>
               <FindingTrafficPanel
-                key={id}
+                key={`traffic:${id}`}
                 findingId={id}
                 contextTask={contextTaskId || undefined}
                 readOnly={finding.inherited}

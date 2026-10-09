@@ -1384,3 +1384,90 @@ CREATE INDEX IF NOT EXISTS idx_notification_deliveries_batch
     ON notification_deliveries(batch_id) WHERE batch_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_notification_deliveries_channel
     ON notification_deliveries(channel_id, id DESC);
+
+-- A case collects repeated observations of one defect without rewriting findings.
+CREATE TABLE IF NOT EXISTS finding_cases (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    origin_task_id BIGINT NOT NULL,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT '',
+    severity_reason TEXT NOT NULL DEFAULT '',
+    report TEXT NOT NULL DEFAULT '',
+    version BIGINT NOT NULL DEFAULT 1,
+    report_version BIGINT NOT NULL DEFAULT 0,
+    active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS finding_case_members (
+    finding_id BIGINT PRIMARY KEY REFERENCES findings(id) ON DELETE CASCADE,
+    case_id BIGINT NOT NULL REFERENCES finding_cases(id),
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_finding_case_members_case ON finding_case_members(case_id);
+CREATE TABLE IF NOT EXISTS finding_case_events (
+    id BIGSERIAL PRIMARY KEY,
+    case_id BIGINT NOT NULL REFERENCES finding_cases(id),
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    finding_ids JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS finding_case_suggestions (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    left_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    right_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(left_id,right_id),
+    CHECK(left_id < right_id)
+);
+-- Rejected/detached pairs are a durable human veto, also checked on group unions.
+CREATE TABLE IF NOT EXISTS finding_case_blocks (
+    left_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    right_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    PRIMARY KEY(left_id,right_id), CHECK(left_id < right_id)
+);
+CREATE OR REPLACE FUNCTION finding_case_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE cid BIGINT; remaining INTEGER;
+BEGIN
+    IF TG_TABLE_NAME = 'findings' THEN
+        IF OLD IS NOT DISTINCT FROM NEW THEN RETURN NEW; END IF;
+        SELECT case_id INTO cid FROM finding_case_members WHERE finding_id=NEW.id;
+    ELSE
+        cid := OLD.case_id;
+    END IF;
+    IF cid IS NOT NULL THEN
+        UPDATE finding_cases SET version=version+1 WHERE id=cid;
+        IF TG_OP='DELETE' THEN
+            SELECT count(*) INTO remaining FROM finding_case_members WHERE case_id=cid;
+            INSERT INTO finding_case_events(case_id,action,actor,reason,finding_ids)
+                VALUES(cid,'member_deleted','system','成员移出或删除',jsonb_build_array(OLD.finding_id));
+            IF remaining < 2 THEN
+                UPDATE finding_cases SET active=false WHERE id=cid;
+                DELETE FROM finding_case_members WHERE case_id=cid;
+            END IF;
+        END IF;
+    END IF;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS finding_case_content_changed ON findings;
+CREATE TRIGGER finding_case_content_changed AFTER UPDATE ON findings
+FOR EACH ROW EXECUTE FUNCTION finding_case_changed();
+DROP TRIGGER IF EXISTS finding_case_member_deleted ON finding_case_members;
+CREATE TRIGGER finding_case_member_deleted AFTER DELETE ON finding_case_members
+FOR EACH ROW EXECUTE FUNCTION finding_case_changed();
+CREATE TABLE IF NOT EXISTS finding_case_review_runs (
+    conversation_id BIGINT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    error TEXT NOT NULL DEFAULT ''
+);
+
+ALTER TABLE finding_case_review_runs ADD COLUMN IF NOT EXISTS finding_ids JSONB NOT NULL DEFAULT '[]';

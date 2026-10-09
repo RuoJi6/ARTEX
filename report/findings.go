@@ -55,6 +55,9 @@ func FindingsMarkdown(fs []*db.DBFinding, generatedAt time.Time) string {
 	} {
 		fmt.Fprintf(&b, "| %s | %d |\n", s.label, counts[s.key])
 	}
+	if counts["unassessed"] > 0 {
+		fmt.Fprintf(&b, "| 待评估 | %d |\n", counts["unassessed"])
+	}
 	b.WriteString("\n")
 
 	if len(items) == 0 {
@@ -127,6 +130,9 @@ func FindingFilename(f *db.DBFinding) string {
 	sev := nz(f.Severity, "info")
 	title := findingTitle(f)
 	name := fmt.Sprintf("%s_%s_#%d", sev, title, f.ID)
+	if f.ExportCaseID > 0 {
+		name = fmt.Sprintf("case_%d_%s_%s", f.ExportCaseID, sev, title)
+	}
 	name = unsafeFilenameChars.ReplaceAllString(name, "_")
 	name = strings.Trim(name, "._")
 	if name == "" {
@@ -151,8 +157,12 @@ func FindingsCSV(fs []*db.DBFinding) []byte {
 	w := csv.NewWriter(&buf)
 	_ = w.Write([]string{"ID", "名称", "类别", "严重等级", "状态", "所属任务", "发现时间", "概述", "流量证据数量", "流量证据ID"})
 	for _, f := range items {
+		id := fmt.Sprintf("%d", f.ID)
+		if f.ExportCaseID > 0 {
+			id = fmt.Sprintf("case:%d", f.ExportCaseID)
+		}
 		_ = w.Write([]string{
-			fmt.Sprintf("%d", f.ID),
+			id,
 			findingTitle(f),
 			f.VulnClass,
 			nz(f.Severity, "info"),
