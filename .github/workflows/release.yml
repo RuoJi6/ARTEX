@@ -144,13 +144,21 @@ jobs:
           done
           sha256sum *.zip > SHA256SUMS
           sha256sum --check SHA256SUMS
-      - name: Refuse to overwrite a published release
+      - name: Replace release only when the tag moved to a new commit
+        env:
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
         run: |
-          if gh release view "$RELEASE_TAG" --json isDraft > /tmp/artex-release.json 2>/tmp/artex-release.err; then
-            test "$(jq -r .isDraft /tmp/artex-release.json)" = true || {
-              echo "该版本已发布，请使用新的版本标签" >&2
-              exit 1
-            }
+          if gh release view "$RELEASE_TAG" --json isDraft,targetCommitish > /tmp/artex-release.json 2>/tmp/artex-release.err; then
+            draft=$(jq -r .isDraft /tmp/artex-release.json)
+            target=$(jq -r '.targetCommitish // empty' /tmp/artex-release.json)
+            if [[ "$draft" != "true" ]]; then
+              if [[ "$target" == "$RELEASE_COMMIT" ]]; then
+                echo "该版本已发布且已指向当前提交，拒绝重复发布" >&2
+                exit 1
+              fi
+              echo "标签已移动到新提交，删除旧 Release 后重新创建 $RELEASE_TAG"
+              gh release delete "$RELEASE_TAG" --yes
+            fi
           elif ! grep -qi 'release not found\|HTTP 404' /tmp/artex-release.err; then
             cat /tmp/artex-release.err >&2
             exit 1
