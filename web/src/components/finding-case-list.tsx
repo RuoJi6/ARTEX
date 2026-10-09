@@ -266,7 +266,6 @@ export function FindingCaseReviewPanel({ taskId, onChange }: { taskId?: string; 
   const [suggestions, setSuggestions] = React.useState<FindingCaseSuggestion[]>([]);
   const [runs, setRuns] = React.useState<FindingCaseReviewRun[]>([]);
   const [error, setError] = React.useState("");
-  const [historyOpen, setHistoryOpen] = React.useState(false);
   React.useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -304,9 +303,6 @@ export function FindingCaseReviewPanel({ taskId, onChange }: { taskId?: string; 
       toast.error((e as Error).message);
     }
   }
-  const latestByTask = new Map<string, FindingCaseReviewRun>();
-  for (const run of runs) if (!latestByTask.has(run.task_id)) latestByTask.set(run.task_id, run);
-  const latestFailures = [...latestByTask.values()].filter((run) => run.state === "failed");
   return (
     <div className="flex flex-col gap-2">
       {error ? (
@@ -328,30 +324,6 @@ export function FindingCaseReviewPanel({ taskId, onChange }: { taskId?: string; 
               <FindingReviewRunRow key={r.conversation_id} run={r} />
             ))}
         </div>
-      ) : null}
-      {latestFailures.map((r) => (
-        <Alert key={r.conversation_id} variant="destructive">
-          <AlertDescription>
-            <FindingReviewRunRow run={r} />
-          </AlertDescription>
-        </Alert>
-      ))}
-      {runs.some((r) => r.state === "done" || r.state === "failed") ? (
-        <Collapsible open={historyOpen} onOpenChange={setHistoryOpen}>
-          <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm">
-              {historyOpen ? "收起整理历史" : "查看整理历史"}（
-              {runs.filter((r) => r.state === "done" || r.state === "failed").length}）
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="flex flex-col gap-2 py-2">
-            {runs
-              .filter((r) => r.state === "done" || r.state === "failed")
-              .map((r) => (
-                <FindingReviewRunRow key={r.conversation_id} run={r} />
-              ))}
-          </CollapsibleContent>
-        </Collapsible>
       ) : null}
     </div>
   );
