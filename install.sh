@@ -33,6 +33,7 @@ ensure_docker(){
 # ── ① 全部 Docker ───────────────────────────────
 install_docker(){
   ensure_docker
+  umask 077
   if [ ! -f .env ]; then
     cp .env.example .env 2>/dev/null || true
     local pw key
@@ -46,7 +47,7 @@ install_docker(){
     info "沿用已存在的 .env"
   fi
   info "拉取镜像并启动…"
-  docker compose pull || true
+  docker compose pull
   docker compose up -d
   ok "启动完成 → http://localhost:8787"
   info "查看日志：docker compose logs -f artex"
