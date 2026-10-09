@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +23,10 @@ type basicAuthMemoryStore struct {
 func (m *basicAuthMemoryStore) GetSetting(string) (string, bool, error) {
 	return m.raw, m.raw != "", m.err
 }
-func (m *basicAuthMemoryStore) SetSetting(_, value string) error {
+func (m *basicAuthMemoryStore) SetSettingContext(ctx context.Context, _ string, value string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if m.err != nil {
 		return m.err
 	}
@@ -43,6 +48,173 @@ func saveBasicAuthForTest(s *Server, body string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	s.saveBasicAuthSettings(w, httptest.NewRequest("PUT", "/api/settings/basic-auth", strings.NewReader(body)))
 	return w
+}
+
+type blockedBasicAuthStore struct {
+	basicAuthSettingsStore
+	started  chan basicAuthConfig
+	release  chan struct{}
+	contexts chan context.Context
+}
+
+func (b *blockedBasicAuthStore) SetSettingContext(ctx context.Context, key, value string) error {
+	var cfg basicAuthConfig
+	if err := json.Unmarshal([]byte(value), &cfg); err != nil {
+		return err
+	}
+	b.started <- cfg
+	if b.contexts != nil {
+		b.contexts <- ctx
+	}
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return b.basicAuthSettingsStore.SetSettingContext(ctx, key, value)
+}
+
+func TestBasicAuthBlockedSaveDoesNotBlockRequests(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		name := "disabled"
+		if enabled {
+			name = "enabled"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, store := basicAuthTestServer(t)
+			body := `{"enabled":false,"username":"entry","password":"original-pass"}`
+			if enabled {
+				body = `{"enabled":true,"username":"entry","password":"original-pass"}`
+			}
+			initial := saveBasicAuthForTest(s, body)
+			if initial.Code != http.StatusOK {
+				t.Fatal(initial.Body.String())
+			}
+			before := s.basicAuth.snapshot()
+			blocked := &blockedBasicAuthStore{basicAuthSettingsStore: store, started: make(chan basicAuthConfig, 2), release: make(chan struct{})}
+			s.basicAuth.mu.Lock()
+			s.basicAuth.store = blocked
+			s.basicAuth.mu.Unlock()
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(blocked.release) }) }
+			t.Cleanup(release)
+			first := make(chan *httptest.ResponseRecorder, 1)
+			go func() { first <- saveBasicAuthForTest(s, `{"username":"new-entry"}`) }()
+			select {
+			case <-blocked.started:
+			case <-time.After(time.Second):
+				t.Fatal("save did not reach database")
+			}
+			// Exercise every kind of request sharing the gate while persistence waits.
+			reads := make(chan error, 1)
+			go func() {
+				if s.basicAuth.snapshot() != before {
+					reads <- errors.New("uncommitted settings became visible")
+					return
+				}
+				h := s.requireBasicAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+				for _, path := range []string{"/", "/_next/static/app.js", "/api/tasks", "/api/health"} {
+					r := httptest.NewRequest(http.MethodGet, path, nil)
+					if enabled && path != "/api/health" {
+						r.AddCookie(initial.Result().Cookies()[0])
+					}
+					w := httptest.NewRecorder()
+					h.ServeHTTP(w, r)
+					if w.Code != http.StatusNoContent {
+						reads <- errors.New("request rejected while old configuration is still active")
+						return
+					}
+				}
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+				if w.Code != http.StatusOK {
+					reads <- errors.New("health handler unavailable during save")
+					return
+				}
+				reads <- nil
+			}()
+			select {
+			case err := <-reads:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("database save blocked configuration reads and HTTP requests")
+			}
+			// A concurrent partial update must wait and preserve the first update.
+			second := make(chan *httptest.ResponseRecorder, 1)
+			go func() { second <- saveBasicAuthForTest(s, `{"enabled":true}`) }()
+			select {
+			case <-blocked.started:
+				t.Fatal("concurrent saves reached persistence together")
+			case <-time.After(50 * time.Millisecond):
+			}
+			release()
+			for _, done := range []chan *httptest.ResponseRecorder{first, second} {
+				select {
+				case response := <-done:
+					if response.Code != http.StatusOK {
+						t.Fatal(response.Body.String())
+					}
+				case <-time.After(time.Second):
+					t.Fatal("save did not finish after database release")
+				}
+			}
+			cfg := s.basicAuth.snapshot()
+			if cfg.Username != "new-entry" || !cfg.Enabled || cfg.PasswordHash != before.PasswordHash {
+				t.Fatal("concurrent partial save lost a committed update")
+			}
+		})
+	}
+}
+
+func TestBasicAuthBlockedSaveRespectsRequestCancellation(t *testing.T) {
+	s, store := basicAuthTestServer(t)
+	before := s.basicAuth.snapshot()
+	blocked := &blockedBasicAuthStore{basicAuthSettingsStore: store, started: make(chan basicAuthConfig, 1), release: make(chan struct{}), contexts: make(chan context.Context, 1)}
+	s.basicAuth.mu.Lock()
+	s.basicAuth.store = blocked
+	s.basicAuth.mu.Unlock()
+	t.Cleanup(func() { close(blocked.release) })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := httptest.NewRequest(http.MethodPut, "/api/settings/basic-auth", strings.NewReader(`{"username":"new-entry"}`)).WithContext(ctx)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		s.saveBasicAuthSettings(w, r)
+		done <- w
+	}()
+	select {
+	case <-blocked.started:
+	case <-time.After(time.Second):
+		t.Fatal("save did not reach database")
+	}
+	writeContext := <-blocked.contexts
+	deadline, bounded := writeContext.Deadline()
+	if !bounded || time.Until(deadline) > 10*time.Second {
+		t.Fatal("database write has no bounded deadline")
+	}
+	cancel()
+	select {
+	case w := <-done:
+		if w.Code != http.StatusServiceUnavailable || len(w.Result().Cookies()) != 0 {
+			t.Fatalf("canceled save must fail without issuing a cookie: %d %s", w.Code, w.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("database save ignored request cancellation")
+	}
+	if s.basicAuth.snapshot() != before || store.raw != "" {
+		t.Fatal("canceled save changed the committed settings")
+	}
+	// A canceled save must also release the save mutex for a later update.
+	s.basicAuth.mu.Lock()
+	s.basicAuth.store = store
+	s.basicAuth.mu.Unlock()
+	w := saveBasicAuthForTest(s, `{"username":"later-entry"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("later save failed: %s", w.Body.String())
+	}
 }
 
 func TestBasicAuthGate(t *testing.T) {

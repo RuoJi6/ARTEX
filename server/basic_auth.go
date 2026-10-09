@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 const basicAuthKey = "auth.http_basic"
 const basicAuthCookie = "artex_basic_auth"
 const basicAuthTTL = 12 * time.Hour
+const basicAuthSaveTimeout = 10 * time.Second
 
 type basicAuthConfig struct {
 	Enabled      bool   `json:"enabled"`
@@ -29,18 +31,21 @@ type basicAuthConfig struct {
 
 type basicAuthSettingsStore interface {
 	GetSetting(string) (string, bool, error)
-	SetSetting(string, string) error
+	SetSettingContext(context.Context, string, string) error
 }
 
 // Keep one atomic configuration in the DB and publish it only after a successful
 // save. Requests use the in-memory snapshot, avoiding a DB read for every asset.
 type basicAuthGate struct {
-	mu    sync.RWMutex
-	cfg   basicAuthConfig
-	store basicAuthSettingsStore
+	saveMu sync.Mutex // serializes persistence without blocking request snapshots
+	mu     sync.RWMutex
+	cfg    basicAuthConfig
+	store  basicAuthSettingsStore
 }
 
 func (g *basicAuthGate) load(store basicAuthSettingsStore) error {
+	g.saveMu.Lock()
+	defer g.saveMu.Unlock()
 	raw, ok, err := store.GetSetting(basicAuthKey)
 	if err != nil {
 		return err
@@ -169,13 +174,15 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g := &s.basicAuth
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.store == nil {
+	g.saveMu.Lock()
+	defer g.saveMu.Unlock()
+	g.mu.RLock()
+	cfg, store := g.cfg, g.store
+	g.mu.RUnlock()
+	if store == nil {
 		writeErr(w, 503, errDataSourceUnavailable)
 		return
 	}
-	cfg := g.cfg
 	if req.Enabled != nil {
 		cfg.Enabled = *req.Enabled
 	}
@@ -205,11 +212,18 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 	// Every save revokes previous gate cookies, including disable/re-enable.
 	cfg.Revision = uuid.NewString()
 	data, err := json.Marshal(cfg)
-	if err != nil || g.store.SetSetting(basicAuthKey, string(data)) != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), basicAuthSaveTimeout)
+	defer cancel()
+	if err != nil || store.SetSettingContext(ctx, basicAuthKey, string(data)) != nil {
 		writeErr(w, 503, "Basic Auth 配置保存失败，请重试")
 		return
 	}
+	// Hashing, persistence and response output never hold the request mutex.
+	// Publish only committed settings; requests keep using the previous snapshot
+	// until this short critical section completes.
+	g.mu.Lock()
 	g.cfg = cfg
+	g.mu.Unlock()
 	w.Header().Set("Cache-Control", "no-store")
 	// Keep the administrator who just saved the settings in their session.
 	if err := s.setBasicAuthCookie(w, r, cfg); err != nil {
