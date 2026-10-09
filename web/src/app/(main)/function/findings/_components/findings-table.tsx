@@ -523,7 +523,8 @@ function FindingFolderTableRows({
   const [open, setOpen] = React.useState(false);
   const group = row.case;
   if (!group) return null;
-  const taskLabel = row.task_name?.trim() ? row.task_name : row.task_description;
+  // Match the current table's ordinary rows, which display the task description.
+  const taskLabel = row.task_description;
   const assets = row.assets ?? [];
   const assetCount = row.asset_count ?? assets.length;
   return (
@@ -592,7 +593,7 @@ function FindingFolderTableRows({
               title={taskLabel}
               href={`/function/tasks/detail?id=${group.task_id}`}
             >
-              <span className="truncate">{taskLabel || `任务 #${group.task_id}`}</span>
+              <span className="truncate">{taskLabel}</span>
               <ArrowUpRightIcon className="size-3 shrink-0" />
             </Link>
           ) : (
