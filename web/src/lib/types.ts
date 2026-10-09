@@ -1642,11 +1642,17 @@ export interface FindingCase {
   created_at: string;
 }
 export interface FindingCaseListRow {
+  task_name?: string;
+  task_description?: string;
+  assets?: FindingAsset[];
+  asset_count?: number;
+  last_found_at?: string;
   case?: FindingCase | null;
   finding?: Finding;
   matched_ids: number[];
 }
 export interface FindingCasePage {
+  matching_reports?: number;
   items: FindingCaseListRow[];
   total: number;
   page: number;

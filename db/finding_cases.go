@@ -117,17 +117,17 @@ func (d *DB) ListFindingCases(filter FindingFilter, page, size int) ([]FindingCa
 		return nil, 0, err
 	}
 	where, args := filter.where()
-	base := `WITH matched AS (SELECT f.id,f.severity,f.created_at,COALESCE(m.case_id,0) cid FROM findings f LEFT JOIN tasks t ON t.id=f.task_id LEFT JOIN finding_case_members m ON m.finding_id=f.id` + where + `), entities AS (SELECT CASE WHEN cid>0 THEN 'c:'||cid ELSE 'f:'||id END key,MAX(cid) cid,MIN(id) fid,jsonb_agg(id ORDER BY id) matched_ids,MAX(created_at) created FROM matched GROUP BY key)`
+	base := `WITH matched AS (SELECT f.id,f.severity,f.created_at,COALESCE(m.case_id,0) cid FROM findings f LEFT JOIN tasks t ON t.id=f.task_id LEFT JOIN finding_case_members m ON m.finding_id=f.id` + where + `), entities AS (SELECT CASE WHEN cid>0 THEN 'c:'||cid ELSE 'f:'||id END key,MAX(cid) cid,MIN(id) fid,jsonb_agg(id ORDER BY id) matched_ids,MAX(created_at) created,MAX(CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) severity_rank FROM matched GROUP BY key)`
 	var total int
 	if err := d.QueryRow(base+` SELECT count(*) FROM entities`, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	order := `e.created DESC,e.fid DESC`
 	if filter.Sort == "severity" {
-		order = `CASE COALESCE(c.severity,f.severity) WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,` + order
+		order = `e.severity_rank DESC,` + order
 	}
 	args = append(args, size, (page-1)*size)
-	rows, err := d.Query(base+fmt.Sprintf(` SELECT e.cid,e.fid,e.matched_ids FROM entities e LEFT JOIN finding_cases c ON c.id=e.cid LEFT JOIN findings f ON f.id=e.fid ORDER BY %s LIMIT $%d OFFSET $%d`, order, len(args)-1, len(args)), args...)
+	rows, err := d.Query(base+fmt.Sprintf(` SELECT e.cid,e.fid,e.matched_ids FROM entities e ORDER BY %s LIMIT $%d OFFSET $%d`, order, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -572,4 +572,62 @@ func (d *DB) FindingCaseSummary(id int64) (*DBFinding, error) {
 		return nil, err
 	}
 	return fs[0], nil
+}
+
+// FindingCaseListContext contains bounded metadata for collapsed folder rows.
+// Reports and member evidence are still fetched only when opened.
+type FindingCaseListContext struct {
+	TaskName        string
+	TaskDescription string
+	AssetIDs        []int64
+	AssetCount      int
+	LastFoundAt     time.Time
+}
+
+func (d *DB) FindingCaseListContexts(ids []int64) (map[int64]FindingCaseListContext, error) {
+	result := map[int64]FindingCaseListContext{}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.Query(`SELECT c.id,COALESCE(t.name,''),COALESCE(t.description,''),
+    COALESCE((SELECT MAX(f.created_at) FROM finding_case_members m JOIN findings f ON f.id=m.finding_id WHERE m.case_id=c.id),c.created_at),
+    COALESCE((SELECT jsonb_agg(v.id ORDER BY v.id) FROM (
+        SELECT DISTINCT a.id FROM finding_case_members m JOIN findings f ON f.id=m.finding_id
+        CROSS JOIN LATERAL jsonb_array_elements_text(f.asset_ids) e(v) JOIN assets a ON a.id=e.v::bigint
+        WHERE m.case_id=c.id ORDER BY a.id LIMIT 4) v),'[]'::jsonb),
+    (SELECT COUNT(DISTINCT a.id) FROM finding_case_members m JOIN findings f ON f.id=m.finding_id
+        CROSS JOIN LATERAL jsonb_array_elements_text(f.asset_ids) e(v) JOIN assets a ON a.id=e.v::bigint WHERE m.case_id=c.id)
+    FROM finding_cases c LEFT JOIN tasks t ON t.id=c.task_id
+    WHERE c.id IN (SELECT jsonb_array_elements_text($1::jsonb)::bigint)`, string(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var c FindingCaseListContext
+		var assets []byte
+		if err := rows.Scan(&id, &c.TaskName, &c.TaskDescription, &c.LastFoundAt, &assets, &c.AssetCount); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(assets, &c.AssetIDs); err != nil {
+			return nil, err
+		}
+		result[id] = c
+	}
+	return result, rows.Err()
+}
+func (d *DB) MatchingFindingReportCount(filter FindingFilter) (int, error) {
+	filter, err := d.applyAssetScope(filter)
+	if err != nil {
+		return 0, err
+	}
+	where, args := filter.where()
+	var n int
+	err = d.QueryRow(`SELECT COUNT(*) FROM findings f LEFT JOIN tasks t ON t.id=f.task_id`+where, args...).Scan(&n)
+	return n, err
 }

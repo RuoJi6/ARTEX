@@ -4,26 +4,58 @@ import * as React from "react";
 
 import Link from "next/link";
 
-import { ChevronRightIcon, FolderIcon, FolderOpenIcon } from "lucide-react";
+import { ChevronRightIcon, FolderIcon, FolderOpenIcon, MoreHorizontalIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { api } from "@/lib/api";
+import { statusMeta } from "@/lib/status";
 import type {
+  ActiveFindingRetest,
   Finding,
+  FindingAsset,
   FindingCase,
   FindingCasePage,
   FindingCaseReviewRun,
   FindingCaseSuggestion,
   FindingQuery,
+  FindingStatus,
+  Severity,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -50,6 +82,205 @@ export function FindingSeverityCounts({
   );
 }
 
+export interface FindingRecordActions {
+  onUpdated?: () => void;
+  onStatusChange?: (finding: Finding, status: FindingStatus) => void;
+  onRetest?: (finding: Finding) => void;
+  onDeepen?: (finding: Finding) => void;
+  onDelete?: (finding: Finding) => void;
+  activeRetests?: Record<string, ActiveFindingRetest>;
+}
+export type FindingListPresentation = "compact" | "records" | "task" | "asset";
+
+function FindingContext({
+  taskId,
+  taskLabel,
+  assets = [],
+  assetCount = assets.length,
+  ts,
+  showTask = true,
+}: {
+  taskId?: string | null;
+  taskLabel?: string;
+  assets?: FindingAsset[];
+  assetCount?: number;
+  ts?: string;
+  showTask?: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs">
+      {showTask && taskId ? (
+        <Link
+          className="max-w-full truncate hover:text-primary hover:underline"
+          title={taskLabel}
+          href={`/function/tasks/detail?id=${taskId}`}
+        >
+          所属任务 #{taskId}
+          {taskLabel ? ` · ${taskLabel}` : ""}
+        </Link>
+      ) : null}
+      {showTask && !taskId ? <span>未关联任务 / 任务已删除</span> : null}
+      {assets.length ? (
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
+          资产：
+          {assets.slice(0, 4).map((a) => (
+            <code key={a.id} className="max-w-48 truncate rounded bg-muted px-1" title={`${a.type} · ${a.label}`}>
+              {a.label}
+            </code>
+          ))}
+          {assetCount > 4 ? <span>+{assetCount - 4}</span> : null}
+        </span>
+      ) : (
+        <span>未关联资产</span>
+      )}
+      {ts ? (
+        <time dateTime={ts} title={new Date(ts).toLocaleString("zh-CN")}>
+          最近上报{" "}
+          {new Date(ts).toLocaleString("zh-CN", {
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </time>
+      ) : null}
+    </div>
+  );
+}
+function FindingRecordMenu({ finding: f, actions }: { finding: Finding; actions: FindingRecordActions }) {
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [name, setName] = React.useState("");
+  const [vulnclass, setVulnclass] = React.useState("");
+  const [severity, setSeverity] = React.useState<Severity>(f.severity);
+  async function saveEdit() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await api.updateFinding(f.finding_id ?? f.id, { name: name.trim(), vulnclass: vulnclass.trim(), severity });
+      toast.success("已保存原始上报");
+      setEditing(false);
+      actions.onUpdated?.();
+    } catch (e) {
+      toast.error(`保存失败：${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const active = actions.activeRetests?.[f.finding_id ?? f.id];
+  return (
+    <>
+      {active ? (
+        <Button asChild variant="ghost" size="sm">
+          <Link href={`/chat?c=${active.conversation_id}`}>
+            <Spinner />
+            复测中
+          </Link>
+        </Button>
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={`上报 #${f.finding_id ?? f.id}的更多操作`}>
+            <MoreHorizontalIcon />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem asChild>
+            <Link href={`/function/findings/detail?id=${f.finding_id ?? f.id}`}>查看详情</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              setName(f.name ?? "");
+              setVulnclass(f.vulnclass);
+              setSeverity(f.severity);
+              setEditing(true);
+            }}
+          >
+            编辑原始上报
+          </DropdownMenuItem>
+          {actions.onRetest ? (
+            <DropdownMenuItem disabled={!!active} onSelect={() => actions.onRetest?.(f)}>
+              复测漏洞
+            </DropdownMenuItem>
+          ) : null}
+          {actions.onDeepen && f.task_id ? (
+            <DropdownMenuItem onSelect={() => actions.onDeepen?.(f)}>深入利用</DropdownMenuItem>
+          ) : null}
+          {actions.onDelete ? (
+            <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDelete(true)}>
+              删除原始上报
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog
+        open={editing}
+        onOpenChange={(open) => {
+          if (!saving) setEditing(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>编辑原始上报 #{f.finding_id ?? f.id}</DialogTitle>
+            <DialogDescription>修改这条记录的名称、类型和等级；所属文件夹的统一报告将标记待更新。</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <Label htmlFor={`finding-name-${f.finding_id ?? f.id}`}>漏洞名称</Label>
+            <Input
+              id={`finding-name-${f.finding_id ?? f.id}`}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={saving}
+            />
+            <Label htmlFor={`finding-type-${f.finding_id ?? f.id}`}>漏洞类型</Label>
+            <Input
+              id={`finding-type-${f.finding_id ?? f.id}`}
+              value={vulnclass}
+              onChange={(e) => setVulnclass(e.target.value)}
+              disabled={saving}
+            />
+            <Label>原始等级</Label>
+            <Select value={severity} onValueChange={(v) => setSeverity(v as Severity)} disabled={saving}>
+              <SelectTrigger aria-label="原始上报等级">
+                <StatusBadge domain="severity" value={severity} />
+              </SelectTrigger>
+              <SelectContent>
+                {(["critical", "high", "medium", "low"] as Severity[]).map((level) => (
+                  <SelectItem key={level} value={level}>
+                    {statusMeta("severity", level).label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(false)} disabled={saving}>
+              取消
+            </Button>
+            <Button onClick={saveEdit} disabled={saving}>
+              {saving ? <Spinner /> : null}保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除这条原始上报？</AlertDialogTitle>
+            <AlertDialogDescription>报告、证据绑定和文件夹成员关系会一同移除，此操作不可撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => actions.onDelete?.(f)}>删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
 export function FindingCaseMemberRow({
   finding: f,
   selected,
@@ -57,6 +288,8 @@ export function FindingCaseMemberRow({
   contextTask,
   matched = true,
   nested = false,
+  presentation = "records",
+  actions,
 }: {
   finding: Finding;
   selected?: boolean;
@@ -64,6 +297,8 @@ export function FindingCaseMemberRow({
   contextTask?: string;
   matched?: boolean;
   nested?: boolean;
+  presentation?: FindingListPresentation;
+  actions?: FindingRecordActions;
 }) {
   const id = f.finding_id ?? f.id;
   return (
@@ -88,10 +323,45 @@ export function FindingCaseMemberRow({
           #{id} {[f.name, f.vulnclass].find((v) => v?.trim()) ?? "未分类"}
         </Link>
         <span className="truncate text-muted-foreground text-xs">{f.summary}</span>
+        <FindingContext
+          taskId={f.task_id}
+          taskLabel={f.task_description}
+          assets={f.assets}
+          ts={presentation === "compact" ? undefined : f.ts}
+          showTask={presentation !== "task" || !!f.inherited}
+        />
       </div>
       {!matched ? <Badge variant="outline">未命中当前筛选</Badge> : null}
       {f.inherited ? <Badge variant="outline">继承 · 只读</Badge> : null}
-      <StatusBadge domain="finding" value={f.status} />
+      {actions?.onStatusChange && !f.inherited ? (
+        <Select value={f.status} onValueChange={(v) => actions.onStatusChange?.(f, v as FindingStatus)}>
+          <SelectTrigger size="sm" className="w-28" aria-label={`上报 #${id}的状态`}>
+            <StatusBadge domain="finding" value={f.status} />
+          </SelectTrigger>
+          <SelectContent>
+            {(
+              [
+                "pending",
+                "in_progress",
+                "confirmed",
+                "resolved",
+                "fixed",
+                "false_positive",
+                "ignored",
+                "duplicate",
+                "risk_accepted",
+              ] as FindingStatus[]
+            ).map((st) => (
+              <SelectItem key={st} value={st}>
+                {statusMeta("finding", st).label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        <StatusBadge domain="finding" value={f.status} />
+      )}
+      {actions && !f.inherited ? <FindingRecordMenu finding={f} actions={actions} /> : null}
       <Button asChild variant="ghost" size="sm">
         <Link href={`/function/findings/detail?id=${id}${contextTask ? `&context_task=${contextTask}` : ""}`}>
           查看报告
@@ -109,6 +379,8 @@ export function FindingCaseMembers({
   onSelect,
   contextTask,
   nested = false,
+  presentation = "records",
+  actions,
 }: {
   caseId: string;
   version?: number;
@@ -117,6 +389,8 @@ export function FindingCaseMembers({
   onSelect?: (id: string, checked: boolean) => void;
   contextTask?: string;
   nested?: boolean;
+  presentation?: FindingListPresentation;
+  actions?: FindingRecordActions;
 }) {
   const [page, setPage] = React.useState(1);
   const [data, setData] = React.useState<{ items: Finding[]; total: number } | null>(null);
@@ -162,6 +436,8 @@ export function FindingCaseMembers({
           key={f.finding_id}
           finding={f}
           nested={nested}
+          presentation={presentation}
+          actions={actions}
           selected={selectedIds?.has(f.finding_id ?? f.id)}
           onSelect={onSelect}
           contextTask={contextTask}
@@ -336,6 +612,11 @@ export function FindingCaseList({
   contextTask,
   readOnly = false,
   onTotal,
+  onReportTotal,
+  presentation = "compact",
+  showReview = true,
+  actions,
+  refreshVersion,
 }: {
   query: Omit<FindingQuery, "page" | "pageSize">;
   selectedIds?: Set<string>;
@@ -343,6 +624,11 @@ export function FindingCaseList({
   contextTask?: string;
   readOnly?: boolean;
   onTotal?: (total: number) => void;
+  onReportTotal?: (total: number) => void;
+  presentation?: FindingListPresentation;
+  showReview?: boolean;
+  actions?: FindingRecordActions;
+  refreshVersion?: number;
 }) {
   const [page, setPage] = React.useState(1);
   const [data, setData] = React.useState<FindingCasePage | null>(null);
@@ -353,6 +639,8 @@ export function FindingCaseList({
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset pagination when the filter fingerprint changes.
   React.useEffect(() => {
     setPage(1);
+    setOpen(new Set());
+    setData(null);
   }, [key]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: refresh is an explicit reload requested after grouping/retry.
   React.useEffect(() => {
@@ -376,10 +664,18 @@ export function FindingCaseList({
       active = false;
       clearTimeout(timer);
     };
-  }, [key, page, refresh]);
+  }, [key, page, refresh, refreshVersion]);
   React.useEffect(() => {
-    if (data) onTotal?.(data.total);
-  }, [data, onTotal]);
+    if (data) {
+      onTotal?.(data.total);
+      onReportTotal?.(data.matching_reports ?? data.stats.reports);
+    }
+  }, [data, onTotal, onReportTotal]);
+  React.useEffect(() => {
+    if (!data) return;
+    const lastPage = Math.max(1, Math.ceil(data.total / 20));
+    if (page > lastPage) setPage(lastPage);
+  }, [data, page]);
   const toggle = (id: string) =>
     setOpen((v) => {
       const next = new Set(v);
@@ -389,7 +685,7 @@ export function FindingCaseList({
     });
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      {!readOnly ? (
+      {!readOnly && showReview ? (
         <FindingCaseReviewPanel
           taskId={query.task === "all" ? undefined : query.task}
           onChange={() => setRefresh((v) => v + 1)}
@@ -412,8 +708,7 @@ export function FindingCaseList({
       ) : null}
       {data ? (
         <p className="text-muted-foreground text-xs">
-          {data.stats.total} 个独立漏洞 · {data.stats.reports} 条上报
-          {data.stats.unassessed > 0 ? ` · ${data.stats.unassessed} 个待评估` : ""}
+          {data.total} 个漏洞（归并后） · {data.matching_reports ?? data.stats.reports} 条命中上报
         </p>
       ) : null}
       {data?.items.map((row) => {
@@ -451,13 +746,19 @@ export function FindingCaseList({
                       漏洞文件夹 · {group.count} 条原始上报 ·{" "}
                       {group.report_version !== group.version ? "统一报告待更新" : "统一报告已生成"}
                     </CardDescription>
+                    <FindingContext
+                      taskId={group.task_id}
+                      taskLabel={row.task_name || row.task_description}
+                      assets={row.assets ?? []}
+                      assetCount={row.asset_count}
+                      ts={presentation === "compact" ? undefined : row.last_found_at}
+                      showTask={presentation !== "task"}
+                    />
                   </div>
-                  <FindingSeverityCounts counts={group} />
-                  <Badge variant="outline">
-                    {group.severity
-                      ? `统一评级：${{ critical: "严重", high: "高危", medium: "中危", low: "低危" }[group.severity]}`
-                      : "待评估"}
-                  </Badge>
+                  <div className="flex shrink-0 flex-col gap-1">
+                    <span className="text-muted-foreground text-xs">严 / 高 / 中 / 低</span>
+                    <FindingSeverityCounts counts={group} />
+                  </div>
                 </div>
               </CardHeader>
               {open.has(group.id) ? (
@@ -470,6 +771,8 @@ export function FindingCaseList({
                   <p className="mb-3 text-muted-foreground text-xs">原始子报告 · 各自等级和证据保留</p>
                   <FindingCaseMembers
                     nested
+                    presentation={presentation}
+                    actions={readOnly ? undefined : actions}
                     caseId={group.id}
                     version={group.version}
                     matchedIds={row.matched_ids}
@@ -488,6 +791,8 @@ export function FindingCaseList({
               <CardContent className="px-0">
                 <FindingCaseMemberRow
                   finding={row.finding}
+                  presentation={presentation}
+                  actions={readOnly ? undefined : actions}
                   selected={selectedIds?.has(row.finding.finding_id ?? row.finding.id)}
                   onSelect={readOnly ? undefined : onSelect}
                   contextTask={contextTask}

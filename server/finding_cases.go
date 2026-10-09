@@ -62,9 +62,30 @@ func (s *Server) listFindingCases(w http.ResponseWriter, r *http.Request) {
 		caseHTTPError(w, err)
 		return
 	}
+	caseIDs := []int64{}
+	for _, row := range rows {
+		if row.Case != nil {
+			caseIDs = append(caseIDs, row.Case.ID)
+		}
+	}
+	contexts, err := s.m.pg.FindingCaseListContexts(caseIDs)
+	if err != nil {
+		caseHTTPError(w, err)
+		return
+	}
+	assetIDs := []int64{}
+	for _, c := range contexts {
+		assetIDs = append(assetIDs, c.AssetIDs...)
+	}
+	assets := s.resolveAssetIDs(assetIDs)
 	items := []map[string]any{}
 	for _, row := range rows {
 		v := map[string]any{"case": row.Case, "matched_ids": row.MatchedIDs}
+		if row.Case != nil {
+			c := contexts[row.Case.ID]
+			v["task_name"], v["task_description"], v["last_found_at"], v["asset_count"] = c.TaskName, c.TaskDescription, c.LastFoundAt, c.AssetCount
+			v["assets"] = append([]FindingAssetDTO{}, findingFromDB(&db.DBFinding{AssetIDs: c.AssetIDs}, assets).Assets...)
+		}
 		if row.FindingID > 0 {
 			f, err := s.m.pg.FindingCaseSummary(row.FindingID)
 			if err != nil {
@@ -84,7 +105,12 @@ func (s *Server) listFindingCases(w http.ResponseWriter, r *http.Request) {
 		caseHTTPError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"items": items, "total": total, "page": page, "page_size": size, "stats": stats})
+	matchingReports, err := s.m.pg.MatchingFindingReportCount(findingFilterFromQuery(q))
+	if err != nil {
+		caseHTTPError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items, "total": total, "matching_reports": matchingReports, "page": page, "page_size": size, "stats": stats})
 }
 func (s *Server) findingCaseAccess(w http.ResponseWriter, r *http.Request, mutation bool) (*db.FindingCase, bool) {
 	id := int64(atoiDefault(r.PathValue("id"), 0))

@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -287,5 +289,69 @@ func TestFindingCaseCandidatesAreCompactAndRelated(t *testing.T) {
 	_, total, err = d.FindingCaseCandidates(ids[0], 1, 20)
 	if err != nil || total != 1 {
 		t.Fatalf("veto excluded %d %v", total, err)
+	}
+}
+
+func TestFindingCaseViewContextAndAssetFiltering(t *testing.T) {
+	d, task, ids := caseTestDB(t)
+	if _, err := d.Exec(`UPDATE tasks SET name='Order API' WHERE id=$1`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	assets := []int64{}
+	for i := 0; i < 6; i++ {
+		aid := seedTreeAsset(t, d, "service", map[string]any{"url": fmt.Sprintf("https://view-context-%d-%d.example", task.ID, i)})
+		assets = append(assets, aid)
+	}
+	t.Cleanup(func() {
+		for _, a := range assets {
+			_, _ = d.Exec(`DELETE FROM assets WHERE id=$1`, a)
+		}
+	})
+	for i, id := range ids[:3] {
+		raw, _ := json.Marshal(assets[i*2 : i*2+2])
+		if _, err := d.Exec(`UPDATE findings SET asset_ids=$2 WHERE id=$1`, id, string(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cid, err := d.MergeFindingCase(t.Context(), task.ID, ids[:3], "order access", "same permission check", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contexts, err := d.FindingCaseListContexts([]int64{cid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := contexts[cid]
+	if c.TaskName != "Order API" || c.TaskDescription != task.Description || c.AssetCount != 6 || !reflect.DeepEqual(c.AssetIDs, assets[:4]) || c.LastFoundAt.IsZero() {
+		t.Fatalf("context %+v", c)
+	}
+	filter := FindingFilter{TaskID: fmt.Sprint(task.ID), AssetScope: fmt.Sprintf("a:%d", assets[0])}
+	rows, total, err := d.ListFindingCases(filter, 1, 20)
+	if err != nil || total != 1 || len(rows) != 1 || rows[0].Case == nil || rows[0].Case.ID != cid || !reflect.DeepEqual(rows[0].MatchedIDs, ids[:1]) {
+		t.Fatalf("filtered rows %+v total %d err %v", rows, total, err)
+	}
+	members, n, err := d.FindingCaseMembers(cid, 1, 20)
+	if err != nil || n != 3 || len(members) != 3 {
+		t.Fatalf("all folder members %d %v", n, err)
+	}
+	matches, err := d.MatchingFindingReportCount(filter)
+	if err != nil || matches != 1 {
+		t.Fatalf("matching reports %d %v", matches, err)
+	}
+	rows, total, err = d.ListFindingCases(FindingFilter{TaskID: fmt.Sprint(task.ID), Severity: "medium"}, 1, 20)
+	if err != nil || total != 1 || len(rows) != 1 || rows[0].Case.Count != 3 || rows[0].Case.High != 1 || rows[0].Case.Medium != 1 || rows[0].Case.Low != 1 {
+		t.Fatalf("severity filter %+v %v", rows, err)
+	}
+	matches, err = d.MatchingFindingReportCount(FindingFilter{TaskID: fmt.Sprint(task.ID), Severity: "medium"})
+	if err != nil || matches != 1 {
+		t.Fatalf("severity reports %d %v", matches, err)
+	}
+	// Group has no unified severity yet; it must sort by its original high report.
+	if _, err := d.Exec(`UPDATE findings SET severity='low' WHERE id=$1`, ids[3]); err != nil {
+		t.Fatal(err)
+	}
+	rows, total, err = d.ListFindingCases(FindingFilter{TaskID: fmt.Sprint(task.ID), Sort: "severity"}, 1, 1)
+	if err != nil || total != 2 || len(rows) != 1 || rows[0].Case == nil || rows[0].Case.ID != cid {
+		t.Fatalf("original severity order %+v %v", rows, err)
 	}
 }
