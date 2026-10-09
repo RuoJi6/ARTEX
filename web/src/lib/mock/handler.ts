@@ -2220,6 +2220,8 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/traffic/exchange") return D.trafficDetail;
   if (path === "/settings" && m === "GET") return D.settings;
   if (path === "/settings" && m === "PUT") return { ...D.settings, ...b };
+  if (path === "/settings/basic-auth" && m === "GET") return { enabled: false, username: "", password_set: false };
+  if (path === "/settings/basic-auth" && m === "PUT") throw new Error("演示模式不支持修改 HTTP Basic Auth，请在实际部署中配置");
   if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };
   if (path === "/settings/python/detect") return { python_interpreter: "/usr/bin/python3" };
   if (path === "/chat")

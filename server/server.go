@@ -43,8 +43,9 @@ type Server struct {
 	engine *Engine
 	ctx    context.Context
 
-	skillDir string // root directory for skill subdirectories
-	jwtKey   []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
+	skillDir  string // root directory for skill subdirectories
+	jwtKey    []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
+	basicAuth basicAuthGate
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -152,6 +153,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
 	s.initSideQuestions()
+	if m.pg != nil {
+		if err := s.basicAuth.load(m.pg); err != nil {
+			log.Fatalf("[auth] load HTTP Basic Auth: %v", err)
+		}
+	}
 	// 熔断阈值/冷却是失败路径上的热参数，启动时把全局重试策略推给 Registry 一次；
 	// 之后每次保存策略再推一次（saveLLMRetryPolicy）。
 	s.applyRetryPolicy()
@@ -656,6 +662,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/init", s.authInit)
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)
 	mux.HandleFunc("POST /api/auth/change-password", s.authChangePassword)
+	mux.HandleFunc("GET /api/basic-auth/check", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/settings/basic-auth", s.getBasicAuthSettings)
+	mux.HandleFunc("PUT /api/settings/basic-auth", s.saveBasicAuthSettings)
 
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/stats", s.stats)
@@ -933,13 +945,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/intercept/judge/usage", s.interceptJudgeUsage) // 兜底审批累计 token 用量
 
 	// /api/* goes through CORS + JWT; everything else is served by the embedded
-	// frontend (public — auth is enforced client-side and on the API). With the
+	// frontend (no JWT required; the optional Basic Auth gate wraps both). With the
 	// no-embed build the webui handler just 404s (run `next dev` separately).
 	api := cors(s.requireAuth(mux))
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
-	return root
+	return s.requireBasicAuth(root)
 }
 
 // --- handlers ---
@@ -3880,8 +3892,22 @@ func (s *Server) gc(w http.ResponseWriter, r *http.Request) {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// Next dev and the Go SSE endpoint use different ports on the same
+		// loopback host. Allow the gate cookie only for that local pairing.
+		origin := r.Header.Get("Origin")
+		u, err := url.Parse(origin)
+		host, _, hostErr := net.SplitHostPort(r.Host)
+		if hostErr != nil {
+			host = r.Host
+		}
+		if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() == host &&
+			(host == "localhost" || host == "127.0.0.1" || host == "::1") {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+		w.Header().Add("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(204)
 			return

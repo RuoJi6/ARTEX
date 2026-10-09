@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { sseUrl } from "@/lib/api";
+import { openSSE } from "@/lib/api";
 import { MOCK } from "@/lib/mock/enabled";
 import type { LogLine } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -64,7 +64,7 @@ export default function LogsPage() {
       setLines(MOCK_LOGS);
       return;
     }
-    const es = new EventSource(sseUrl("/api/logs/stream?since=0"));
+    const es = openSSE("/api/logs/stream?since=0");
     es.onmessage = (e) => {
       if (pausedRef.current) return;
       try {

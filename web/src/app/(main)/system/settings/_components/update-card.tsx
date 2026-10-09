@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { api, sseUrl } from "@/lib/api";
+import { api, openSSE } from "@/lib/api";
 import type { UpdateCheck, UpdateProgress } from "@/lib/types";
 
 /** 等待新版本上线的最长时间。一次升级要经过三次进程启动（暂存 → 换装 → 新版），
@@ -100,7 +100,7 @@ export function UpdateCard() {
   // 订阅更新进度。SSE 不走 Next 的 /api 重写（那层会缓冲，事件推不出来）。
   const openStream = React.useCallback(
     (fromVersion: string) => {
-      const es = new EventSource(sseUrl("/api/update/stream"));
+      const es = openSSE("/api/update/stream");
       es.onmessage = (ev) => {
         let p: UpdateProgress;
         try {
