@@ -25,6 +25,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, type ScheduleInput } from "@/lib/api";
 import type { Task, TaskSchedule } from "@/lib/types";
 
@@ -91,6 +92,21 @@ function windowLabel(item: TaskSchedule) {
   }
   if (!item.end_time) return `${start} 起持续运行`;
   return `${start} 至 ${end}${end <= start ? "（次日）" : ""}`;
+}
+
+function startLabel(item: TaskSchedule) {
+  return item.schedule_type === "once"
+    ? `${formatDateValue(item.run_date)} ${formatClock(item.start_time)}`
+    : formatClock(item.start_time);
+}
+
+function endLabel(item: TaskSchedule) {
+  if (!item.end_time) return "持续运行";
+  const end = formatClock(item.end_time);
+  if (item.schedule_type === "once" && item.end_date)
+    return `${formatDateValue(item.end_date)} ${end === "未设置" ? "24:00" : end}`;
+  const start = formatClock(item.start_time);
+  return `${end}${end <= start ? "（次日）" : ""}`;
 }
 
 function timezoneLabel(item: TaskSchedule) {
@@ -554,117 +570,139 @@ export default function SchedulesPage() {
             <CardContent className="py-10 text-center text-muted-foreground">没有匹配的计划任务。</CardContent>
           </Card>
         ) : (
-          <div className="overflow-hidden rounded-lg border bg-card">
-            {visibleItems.map((item) => (
-              <React.Fragment key={item.id}>
-                <div className="grid gap-4 border-b p-4 last:border-b-0 lg:grid-cols-[minmax(190px,1.1fr)_minmax(280px,1.6fr)_minmax(260px,1.4fr)_auto]">
-                  <div className="grid content-start gap-2">
-                    <div className="flex items-start justify-between gap-3 lg:block">
-                      <div>
+          <div className="overflow-x-auto rounded-lg border bg-card">
+            <Table>
+              <TableHeader className="bg-muted/40">
+                <TableRow>
+                  <TableHead className="min-w-44">计划名称</TableHead>
+                  <TableHead className="min-w-48">运行周期</TableHead>
+                  <TableHead className="min-w-40">开始时间</TableHead>
+                  <TableHead className="min-w-40">结束时间</TableHead>
+                  <TableHead className="min-w-24 text-center">运行次数</TableHead>
+                  <TableHead className="min-w-36">绑定任务</TableHead>
+                  <TableHead className="min-w-32">状态</TableHead>
+                  <TableHead className="min-w-72 text-right">操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visibleItems.map((item) => (
+                  <React.Fragment key={item.id}>
+                    <TableRow>
+                      <TableCell>
                         <div className="font-medium">{item.name}</div>
                         <div className="text-muted-foreground text-xs">计划 #{item.id}</div>
-                      </div>
-                      <Badge className="lg:mt-2" variant={statusVariant(item.status)}>
-                        {statusText(item)}
-                      </Badge>
-                    </div>
-                    <div className="text-muted-foreground text-xs">{timezoneLabel(item)}</div>
-                  </div>
-                  <div className="grid content-start gap-1.5 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">运行周期：</span>
-                      {periodLabel(item)}
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">时间窗口：</span>
-                      {windowLabel(item)}
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">绑定任务：</span>
-                      {item.task_ids.length
-                        ? `${item.task_ids.length} 个（${item.task_ids.map((id) => `#${id}`).join("、")}）`
-                        : "无"}
-                    </div>
-                  </div>
-                  <div className="grid content-start gap-1.5 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">下一次开始：</span>
-                      {nextWindowLabel(item.next_start, item.timezone)}
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">下一次结束：</span>
-                      {nextWindowLabel(item.next_end, item.timezone)}
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">运行次数：</span>
-                      {item.run_count ?? 0} 次{item.last_run_at ? ` · 最近 ${formatTime(item.last_run_at)}` : ""}
-                    </div>
-                    <div className="text-muted-foreground text-xs">
-                      最近变化：{formatTime(item.last_transition_at)}
-                      {item.last_error ? ` · ${scheduleErrorText(item.last_error)}` : ""}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap content-start gap-2 lg:justify-end">
-                    <Button size="sm" variant="outline" onClick={() => void toggleTimeline(item.id)}>
-                      {expandedId === item.id ? (
-                        <ChevronDown data-icon="inline-start" />
-                      ) : (
-                        <ChevronRight data-icon="inline-start" />
-                      )}
-                      {expandedId === item.id ? "收起时间线" : "查看时间线"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        setEditing({
-                          id: item.id,
-                          value: {
-                            name: item.name,
-                            enabled: item.enabled,
-                            timezone_mode: item.timezone_mode,
-                            schedule_type: item.schedule_type,
-                            run_date: item.run_date,
-                            end_date: item.end_date,
-                            weekdays: item.weekdays,
-                            start_time: item.start_time.slice(0, 5),
-                            end_time: item.end_time?.slice(0, 5),
-                            start_immediately: item.start_immediately,
-                            task_ids: item.task_ids,
-                          },
-                        })
-                      }
-                    >
-                      编辑
-                    </Button>
-                    {item.enabled ? (
-                      <Button size="sm" variant="outline" onClick={() => void action(item.id, "pause")}>
-                        <Pause data-icon="inline-start" />
-                        暂停
-                      </Button>
-                    ) : (
-                      <Button size="sm" variant="outline" onClick={() => void action(item.id, "resume")}>
-                        <Play data-icon="inline-start" />
-                        启用
-                      </Button>
-                    )}
-                    <Button size="sm" variant="outline" onClick={() => void action(item.id, "run")}>
-                      <Zap data-icon="inline-start" />
-                      立即运行
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => void remove(item.id)}>
-                      <Trash2 data-icon="inline-start" />
-                      删除
-                    </Button>
-                  </div>
-                </div>
-                {expandedId === item.id ? (
-                  <div className="border-b bg-muted/10 px-4 py-3 last:border-b-0">
-                    <ScheduleTimeline schedule={timelineById[item.id]} loading={timelineLoadingId === item.id} />
-                  </div>
-                ) : null}
-              </React.Fragment>
-            ))}
+                      </TableCell>
+                      <TableCell className="text-sm">{periodLabel(item)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-sm">
+                        {startLabel(item)}
+                        {item.next_start ? (
+                          <div className="mt-1 text-muted-foreground text-xs">
+                            下次：{nextWindowLabel(item.next_start, item.timezone)}
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-sm">
+                        {endLabel(item)}
+                        {item.next_end ? (
+                          <div className="mt-1 text-muted-foreground text-xs">
+                            下次：{nextWindowLabel(item.next_end, item.timezone)}
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-center text-sm tabular-nums">
+                        {item.run_count ?? 0}
+                        {item.last_run_at ? (
+                          <div className="mt-1 text-muted-foreground text-xs">最近 {formatTime(item.last_run_at)}</div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell
+                        className="max-w-52 truncate text-sm"
+                        title={item.task_ids.map((id) => `#${id}`).join("、")}
+                      >
+                        {item.task_ids.length ? item.task_ids.map((id) => `#${id}`).join("、") : "无"}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={statusVariant(item.status)}>{statusText(item)}</Badge>
+                        <div className="mt-1 text-muted-foreground text-xs">{timezoneLabel(item)}</div>
+                        <div className="mt-1 text-muted-foreground text-xs">
+                          最近：{formatTime(item.last_transition_at)}
+                        </div>
+                        {item.last_error ? (
+                          <div
+                            className="mt-1 max-w-40 truncate text-destructive text-xs"
+                            title={scheduleErrorText(item.last_error)}
+                          >
+                            {scheduleErrorText(item.last_error)}
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button size="sm" variant="outline" onClick={() => void toggleTimeline(item.id)}>
+                            {expandedId === item.id ? (
+                              <ChevronDown data-icon="inline-start" />
+                            ) : (
+                              <ChevronRight data-icon="inline-start" />
+                            )}
+                            {expandedId === item.id ? "收起时间线" : "查看时间线"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              setEditing({
+                                id: item.id,
+                                value: {
+                                  name: item.name,
+                                  enabled: item.enabled,
+                                  timezone_mode: item.timezone_mode,
+                                  schedule_type: item.schedule_type,
+                                  run_date: item.run_date,
+                                  end_date: item.end_date,
+                                  weekdays: item.weekdays,
+                                  start_time: item.start_time.slice(0, 5),
+                                  end_time: item.end_time?.slice(0, 5),
+                                  start_immediately: item.start_immediately,
+                                  task_ids: item.task_ids,
+                                },
+                              })
+                            }
+                          >
+                            编辑
+                          </Button>
+                          {item.enabled ? (
+                            <Button size="sm" variant="outline" onClick={() => void action(item.id, "pause")}>
+                              <Pause data-icon="inline-start" />
+                              暂停
+                            </Button>
+                          ) : (
+                            <Button size="sm" variant="outline" onClick={() => void action(item.id, "resume")}>
+                              <Play data-icon="inline-start" />
+                              启用
+                            </Button>
+                          )}
+                          <Button size="sm" variant="outline" onClick={() => void action(item.id, "run")}>
+                            <Zap data-icon="inline-start" />
+                            立即运行
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => void remove(item.id)}>
+                            <Trash2 data-icon="inline-start" />
+                            删除
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                    {expandedId === item.id ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="bg-muted/10 p-3">
+                          <ScheduleTimeline schedule={timelineById[item.id]} loading={timelineLoadingId === item.id} />
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </React.Fragment>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         )}
         <div className="flex items-center justify-between gap-3 text-sm">
