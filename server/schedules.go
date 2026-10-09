@@ -42,11 +42,17 @@ func parseScheduleID(r *http.Request) (int64, error) {
 	return strconv.ParseInt(r.PathValue("id"), 10, 64)
 }
 
-func scheduleDTO(item *db.TaskSchedule) map[string]any {
+func (s *Server) scheduleDTO(item *db.TaskSchedule) map[string]any {
 	raw, _ := json.Marshal(item)
 	var dto map[string]any
 	_ = json.Unmarshal(raw, &dto)
 	window := evaluateScheduleWindow(item, time.Now())
+	if stats, err := s.m.pg.ScheduleRunStats(item.ID); err == nil {
+		dto["run_count"] = stats.RunCount
+		if stats.LastRunAt != nil {
+			dto["last_run_at"] = stats.LastRunAt
+		}
+	}
 	dto["timezone"] = scheduleLocation(item.TimezoneMode).String()
 	dto["server_time"] = time.Now()
 	if item.Enabled && item.Status != "completed" {
@@ -63,7 +69,7 @@ func (s *Server) listSchedules(w http.ResponseWriter, r *http.Request) {
 	}
 	dtos := []map[string]any{}
 	for _, item := range items {
-		dtos = append(dtos, scheduleDTO(item))
+		dtos = append(dtos, s.scheduleDTO(item))
 	}
 	writeJSON(w, 200, map[string]any{"schedules": dtos})
 }
@@ -71,7 +77,7 @@ func (s *Server) listSchedules(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
 	id, err := parseScheduleID(r)
 	if err != nil {
-		writeErr(w, 400, "bad schedule id")
+		writeErr(w, 400, "计划编号无效")
 		return
 	}
 	item, err := s.m.pg.GetTaskSchedule(id)
@@ -84,7 +90,7 @@ func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	dto := scheduleDTO(item)
+	dto := s.scheduleDTO(item)
 	dto["history"] = history
 	writeJSON(w, 200, dto)
 }
@@ -121,7 +127,7 @@ func (s *Server) createSchedule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) updateSchedule(w http.ResponseWriter, r *http.Request) {
 	id, err := parseScheduleID(r)
 	if err != nil {
-		writeErr(w, 400, "bad schedule id")
+		writeErr(w, 400, "计划编号无效")
 		return
 	}
 	old, err := s.m.pg.GetTaskSchedule(id)
@@ -145,7 +151,7 @@ func (s *Server) updateSchedule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteSchedule(w http.ResponseWriter, r *http.Request) {
 	id, err := parseScheduleID(r)
 	if err != nil {
-		writeErr(w, 400, "bad schedule id")
+		writeErr(w, 400, "计划编号无效")
 		return
 	}
 	if err := s.m.pg.DeleteTaskSchedule(id); err != nil {
@@ -158,7 +164,7 @@ func (s *Server) deleteSchedule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setScheduleEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
 	id, err := parseScheduleID(r)
 	if err != nil {
-		writeErr(w, 400, "bad schedule id")
+		writeErr(w, 400, "计划编号无效")
 		return
 	}
 	if err := s.m.pg.SetTaskScheduleEnabled(id, enabled); err != nil {
@@ -185,7 +191,7 @@ func (s *Server) resumeSchedule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runScheduleNow(w http.ResponseWriter, r *http.Request) {
 	id, err := parseScheduleID(r)
 	if err != nil {
-		writeErr(w, 400, "bad schedule id")
+		writeErr(w, 400, "计划编号无效")
 		return
 	}
 	item, err := s.m.pg.GetTaskSchedule(id)

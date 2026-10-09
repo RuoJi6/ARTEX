@@ -734,6 +734,8 @@ export interface TaskSchedule {
   last_error?: string;
   next_start?: string;
   next_end?: string;
+  run_count?: number;
+  last_run_at?: string;
   task_ids: number[];
   history?: Array<{
     id: number;

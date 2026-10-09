@@ -41,12 +41,79 @@ function statusText(s: TaskSchedule) {
         error: "错误",
         paused: "已暂停",
       } as Record<string, string>
-    )[s.status] ?? s.status
+    )[s.status] ?? "未知状态"
   );
 }
 
 function formatTime(value?: string) {
   return value ? new Date(value).toLocaleString("zh-CN") : "—";
+}
+
+function formatDateValue(value?: string) {
+  if (!value) return "未设置";
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${year}年${Number(month)}月${Number(day)}日` : value;
+}
+
+function formatClock(value?: string) {
+  return value ? value.slice(0, 5) : "未设置";
+}
+
+function periodLabel(item: TaskSchedule) {
+  if (item.schedule_type === "once") {
+    return item.end_date
+      ? `一次性 · ${formatDateValue(item.run_date)} 至 ${formatDateValue(item.end_date)}`
+      : `一次性 · ${formatDateValue(item.run_date)}`;
+  }
+  const selected = item.weekdays.map((day) => weekdays[day - 1]).filter(Boolean);
+  return `每周 · ${selected.length ? selected.join("、") : "未选择星期"}`;
+}
+
+function windowLabel(item: TaskSchedule) {
+  const start = formatClock(item.start_time);
+  const end = formatClock(item.end_time);
+  if (item.schedule_type === "once") {
+    const startText = `${formatDateValue(item.run_date)} ${start}`;
+    if (item.end_date) return `${startText} 至 ${formatDateValue(item.end_date)} ${item.end_time ? end : "24:00"}`;
+    if (!item.end_time) return `${startText} 起持续运行`;
+    return `${startText} 至 ${end}${end <= start ? "（次日）" : ""}`;
+  }
+  if (!item.end_time) return `${start} 起持续运行`;
+  return `${start} 至 ${end}${end <= start ? "（次日）" : ""}`;
+}
+
+function timezoneLabel(item: TaskSchedule) {
+  return item.timezone_mode === "beijing" ? "中国北京时间" : `系统时区${item.timezone ? `（${item.timezone}）` : ""}`;
+}
+
+function nextWindowLabel(value?: string, timezone?: string) {
+  if (!value) return "—";
+  try {
+    const timeZone = timezone && timezone !== "Local" ? timezone : undefined;
+    return new Intl.DateTimeFormat("zh-CN", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(value));
+  } catch {
+    return formatTime(value);
+  }
+}
+
+function scheduleErrorText(value?: string) {
+  if (!value) return "";
+  return value
+    .replaceAll("end_date", "截止日期")
+    .replaceAll("run_date", "开始日期")
+    .replaceAll("start_time", "开始时间")
+    .replaceAll("end_time", "结束时间")
+    .replaceAll("weekdays", "星期")
+    .replaceAll("timezone_mode", "时区")
+    .replaceAll("schedule_type", "规则");
 }
 
 function statusVariant(status: TaskSchedule["status"]): "default" | "destructive" | "secondary" {
@@ -321,80 +388,104 @@ export default function SchedulesPage() {
     );
   } else {
     scheduleContent = (
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="overflow-hidden rounded-lg border bg-card">
         {items.map((item) => (
-          <Card key={item.id}>
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
+          <div
+            key={item.id}
+            className="grid gap-4 border-b p-4 last:border-b-0 lg:grid-cols-[minmax(190px,1.1fr)_minmax(280px,1.6fr)_minmax(260px,1.4fr)_auto]"
+          >
+            <div className="grid content-start gap-2">
+              <div className="flex items-start justify-between gap-3 lg:block">
                 <div>
-                  <CardTitle className="text-base">{item.name}</CardTitle>
-                  <CardDescription>
-                    {item.schedule_type === "once"
-                      ? item.run_date
-                      : (item.weekdays ?? []).map((d) => weekdays[d - 1]).join("、")}
-                  </CardDescription>
+                  <div className="font-medium">{item.name}</div>
+                  <div className="text-muted-foreground text-xs">计划 #{item.id}</div>
                 </div>
-                <Badge variant={statusVariant(item.status)}>{statusText(item)}</Badge>
+                <Badge className="lg:mt-2" variant={statusVariant(item.status)}>
+                  {statusText(item)}
+                </Badge>
               </div>
-            </CardHeader>
-            <CardContent className="grid gap-3 text-sm">
-              <div className="text-muted-foreground">
-                {item.start_time.slice(0, 5)}
-                {item.end_time ? ` - ${item.end_time.slice(0, 5)}` : " 起持续运行"} ·{" "}
-                {item.timezone_mode === "beijing" ? "北京时间" : item.timezone}
+              <div className="text-muted-foreground text-xs">{timezoneLabel(item)}</div>
+            </div>
+            <div className="grid content-start gap-1.5 text-sm">
+              <div>
+                <span className="text-muted-foreground">运行周期：</span>
+                {periodLabel(item)}
               </div>
-              <div>绑定任务：{item.task_ids.length ? item.task_ids.map((id) => `#${id}`).join("、") : "无"}</div>
+              <div>
+                <span className="text-muted-foreground">时间窗口：</span>
+                {windowLabel(item)}
+              </div>
+              <div>
+                <span className="text-muted-foreground">绑定任务：</span>
+                {item.task_ids.length
+                  ? `${item.task_ids.length} 个（${item.task_ids.map((id) => `#${id}`).join("、")}）`
+                  : "无"}
+              </div>
+            </div>
+            <div className="grid content-start gap-1.5 text-sm">
+              <div>
+                <span className="text-muted-foreground">下一次开始：</span>
+                {nextWindowLabel(item.next_start, item.timezone)}
+              </div>
+              <div>
+                <span className="text-muted-foreground">下一次结束：</span>
+                {nextWindowLabel(item.next_end, item.timezone)}
+              </div>
+              <div>
+                <span className="text-muted-foreground">运行次数：</span>
+                {item.run_count ?? 0} 次{item.last_run_at ? ` · 最近 ${formatTime(item.last_run_at)}` : ""}
+              </div>
               <div className="text-muted-foreground text-xs">
                 最近变化：{formatTime(item.last_transition_at)}
-                {item.last_error ? ` · ${item.last_error}` : ""}
+                {item.last_error ? ` · ${scheduleErrorText(item.last_error)}` : ""}
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    setEditing({
-                      id: item.id,
-                      value: {
-                        name: item.name,
-                        enabled: item.enabled,
-                        timezone_mode: item.timezone_mode,
-                        schedule_type: item.schedule_type,
-                        run_date: item.run_date,
-                        end_date: item.end_date,
-                        weekdays: item.weekdays,
-                        start_time: item.start_time.slice(0, 5),
-                        end_time: item.end_time?.slice(0, 5),
-                        start_immediately: item.start_immediately,
-                        task_ids: item.task_ids,
-                      },
-                    })
-                  }
-                >
-                  编辑
+            </div>
+            <div className="flex flex-wrap content-start gap-2 lg:justify-end">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  setEditing({
+                    id: item.id,
+                    value: {
+                      name: item.name,
+                      enabled: item.enabled,
+                      timezone_mode: item.timezone_mode,
+                      schedule_type: item.schedule_type,
+                      run_date: item.run_date,
+                      end_date: item.end_date,
+                      weekdays: item.weekdays,
+                      start_time: item.start_time.slice(0, 5),
+                      end_time: item.end_time?.slice(0, 5),
+                      start_immediately: item.start_immediately,
+                      task_ids: item.task_ids,
+                    },
+                  })
+                }
+              >
+                编辑
+              </Button>
+              {item.enabled ? (
+                <Button size="sm" variant="outline" onClick={() => void action(item.id, "pause")}>
+                  <Pause data-icon="inline-start" />
+                  暂停
                 </Button>
-                {item.enabled ? (
-                  <Button size="sm" variant="outline" onClick={() => void action(item.id, "pause")}>
-                    <Pause data-icon="inline-start" />
-                    暂停
-                  </Button>
-                ) : (
-                  <Button size="sm" variant="outline" onClick={() => void action(item.id, "resume")}>
-                    <Play data-icon="inline-start" />
-                    启用
-                  </Button>
-                )}
-                <Button size="sm" variant="outline" onClick={() => void action(item.id, "run")}>
-                  <Zap data-icon="inline-start" />
-                  立即运行
+              ) : (
+                <Button size="sm" variant="outline" onClick={() => void action(item.id, "resume")}>
+                  <Play data-icon="inline-start" />
+                  启用
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => void remove(item.id)}>
-                  <Trash2 data-icon="inline-start" />
-                  删除
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+              )}
+              <Button size="sm" variant="outline" onClick={() => void action(item.id, "run")}>
+                <Zap data-icon="inline-start" />
+                立即运行
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => void remove(item.id)}>
+                <Trash2 data-icon="inline-start" />
+                删除
+              </Button>
+            </div>
+          </div>
         ))}
       </div>
     );

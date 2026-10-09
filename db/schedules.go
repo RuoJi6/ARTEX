@@ -85,35 +85,35 @@ func normalizeScheduleInput(in TaskScheduleInput) (TaskScheduleInput, error) {
 		in.TimezoneMode = "beijing"
 	}
 	if in.TimezoneMode != "beijing" && in.TimezoneMode != "system" {
-		return in, fmt.Errorf("timezone_mode 必须为 beijing 或 system")
+		return in, fmt.Errorf("时区必须选择北京时间或系统当前时区")
 	}
 	if in.ScheduleType != "once" && in.ScheduleType != "weekly" {
-		return in, fmt.Errorf("schedule_type 必须为 once 或 weekly")
+		return in, fmt.Errorf("规则必须选择一次性或按周")
 	}
 	if _, err := time.Parse("15:04", in.StartTime); err != nil {
-		return in, fmt.Errorf("start_time 必须为 HH:MM")
+		return in, fmt.Errorf("开始时间格式不正确，请使用 HH:MM")
 	}
 	if in.EndTime != "" && in.EndTime != "24:00" {
 		if _, err := time.Parse("15:04", in.EndTime); err != nil {
-			return in, fmt.Errorf("end_time 必须为 HH:MM")
+			return in, fmt.Errorf("结束时间格式不正确，请使用 HH:MM")
 		}
 	}
 	if in.ScheduleType == "once" {
 		if _, err := time.Parse("2006-01-02", in.RunDate); err != nil {
-			return in, fmt.Errorf("run_date 必须为 YYYY-MM-DD")
+			return in, fmt.Errorf("开始日期格式不正确")
 		}
 		if in.EndDate != "" {
 			startDate, _ := time.Parse("2006-01-02", in.RunDate)
 			endDate, err := time.Parse("2006-01-02", in.EndDate)
 			if err != nil {
-				return in, fmt.Errorf("end_date 必须为 YYYY-MM-DD")
+				return in, fmt.Errorf("截止日期格式不正确")
 			}
 			if endDate.Before(startDate) {
-				return in, fmt.Errorf("end_date 不能早于 run_date")
+				return in, fmt.Errorf("截止日期不能早于开始日期")
 			}
 			if endDate.Equal(startDate) && in.EndTime != "" && in.EndTime != "24:00" {
 				if in.EndTime <= in.StartTime {
-					return in, fmt.Errorf("同一天的 end_time 必须晚于 start_time")
+					return in, fmt.Errorf("同一天的结束时间必须晚于开始时间")
 				}
 			}
 		}
@@ -122,12 +122,12 @@ func normalizeScheduleInput(in TaskScheduleInput) (TaskScheduleInput, error) {
 		seen := map[int]bool{}
 		for _, day := range in.Weekdays {
 			if day < 1 || day > 7 || seen[day] {
-				return in, fmt.Errorf("weekdays 必须是 1-7 且不能重复")
+				return in, fmt.Errorf("星期选择必须为周一至周日且不能重复")
 			}
 			seen[day] = true
 		}
 		if len(in.Weekdays) == 0 {
-			return in, fmt.Errorf("weekly 计划至少选择一天")
+			return in, fmt.Errorf("按周计划至少选择一天")
 		}
 		sort.Ints(in.Weekdays)
 		in.RunDate = ""
@@ -136,7 +136,7 @@ func normalizeScheduleInput(in TaskScheduleInput) (TaskScheduleInput, error) {
 	seenTasks := map[int64]bool{}
 	for _, id := range in.TaskIDs {
 		if id <= 0 || seenTasks[id] {
-			return in, fmt.Errorf("任务编号无效或重复")
+			return in, fmt.Errorf("绑定任务编号无效或重复")
 		}
 		seenTasks[id] = true
 	}
@@ -309,6 +309,26 @@ func (d *DB) scheduleTaskIDs(id int64) ([]int64, error) {
 func (d *DB) TouchTaskSchedule(id int64, status, windowKey, lastError string) error {
 	_, err := d.Exec(`UPDATE task_schedules SET status=$2,last_window_key=$3,last_transition_at=now(),last_error=$4 WHERE id=$1`, id, status, windowKey, lastError)
 	return err
+}
+
+// ScheduleRunStats summarizes completed schedule window entries for list views.
+// The scheduler records one "running" history entry whenever a new window opens.
+type ScheduleRunStats struct {
+	RunCount  int        `json:"run_count"`
+	LastRunAt *time.Time `json:"last_run_at,omitempty"`
+}
+
+func (d *DB) ScheduleRunStats(id int64) (ScheduleRunStats, error) {
+	var stats ScheduleRunStats
+	var lastRunAt sql.NullTime
+	err := d.QueryRow(`
+		SELECT COUNT(*) FILTER (WHERE task_id IS NULL AND action='running'),
+		       MAX(created_at) FILTER (WHERE task_id IS NULL AND action='running')
+		FROM task_schedule_history WHERE schedule_id=$1`, id).Scan(&stats.RunCount, &lastRunAt)
+	if lastRunAt.Valid {
+		stats.LastRunAt = &lastRunAt.Time
+	}
+	return stats, err
 }
 
 // TaskScheduleTasks returns all schedule IDs that reference a task.
