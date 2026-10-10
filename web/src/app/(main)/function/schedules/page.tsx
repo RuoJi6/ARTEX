@@ -444,6 +444,7 @@ export default function SchedulesPage() {
   const [query, setQuery] = React.useState("");
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState("10");
+  const [selectedIds, setSelectedIds] = React.useState<number[]>([]);
   const [expandedId, setExpandedId] = React.useState<number | null>(null);
   const [timelineById, setTimelineById] = React.useState<Record<number, TaskSchedule>>({});
   const [timelineLoadingId, setTimelineLoadingId] = React.useState<number | null>(null);
@@ -475,6 +476,13 @@ export default function SchedulesPage() {
   const size = Number(pageSize);
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / size));
   const visibleItems = filteredItems.slice((page - 1) * size, page * size);
+  const visibleIds = visibleItems.map((item) => item.id);
+  const selectedVisibleCount = visibleIds.filter((id) => selectedIds.includes(id)).length;
+  const allVisibleSelected = visibleItems.length > 0 && selectedVisibleCount === visibleItems.length;
+  const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
+  let headerSelectionState: boolean | "indeterminate" = false;
+  if (allVisibleSelected) headerSelectionState = true;
+  else if (someVisibleSelected) headerSelectionState = "indeterminate";
   React.useEffect(() => {
     setPage((current) => Math.min(current, totalPages));
   }, [totalPages]);
@@ -485,6 +493,18 @@ export default function SchedulesPage() {
   const updatePageSize = (value: string) => {
     setPageSize(value);
     setPage(1);
+  };
+  const toggleSelected = (id: number, checked: boolean) => {
+    setSelectedIds((current) => {
+      if (!checked) return current.filter((selected) => selected !== id);
+      return current.includes(id) ? current : [...current, id];
+    });
+  };
+  const toggleAllVisible = (checked: boolean) => {
+    setSelectedIds((current) => {
+      if (checked) return Array.from(new Set([...current, ...visibleIds]));
+      return current.filter((id) => !visibleIds.includes(id));
+    });
   };
   const toggleTimeline = async (id: number) => {
     if (expandedId === id) {
@@ -553,6 +573,38 @@ export default function SchedulesPage() {
       toast.error((e as Error).message);
     }
   };
+  const bulkRun = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    let started = 0;
+    const errors: string[] = [];
+    const results = await Promise.allSettled(ids.map((id) => api.runScheduleNow(id)));
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        errors.push(`计划 #${ids[index]}：${(result.reason as Error).message}`);
+        return;
+      }
+      started += result.value.started;
+      if (result.value.errors?.length) errors.push(`计划 #${ids[index]}：${result.value.errors.join("；")}`);
+    });
+    if (errors.length) {
+      toast.warning(`已启动 ${started} 个任务，但有 ${errors.length} 项未完成：${errors.join("；")}`);
+    } else {
+      toast.success(`已立即运行 ${started} 个任务`);
+    }
+    setSelectedIds([]);
+    await load();
+  };
+  const bulkRemove = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length || !window.confirm(`确定删除选中的 ${ids.length} 个计划吗？`)) return;
+    const results = await Promise.allSettled(ids.map((id) => api.deleteSchedule(id)));
+    const failed = results.filter((result) => result.status === "rejected").length;
+    if (failed) toast.warning(`已删除 ${ids.length - failed} 个计划，${failed} 个计划删除失败`);
+    else toast.success(`已删除 ${ids.length} 个计划`);
+    setSelectedIds([]);
+    await load();
+  };
   let scheduleContent: React.ReactNode;
   if (loading) {
     scheduleContent = (
@@ -597,6 +649,24 @@ export default function SchedulesPage() {
             <span className="text-muted-foreground">共 {filteredItems.length} 条</span>
           </div>
         </div>
+        {selectedIds.length ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+            <span className="text-sm">已选 {selectedIds.length} 个计划</span>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => void bulkRun()}>
+                <Zap data-icon="inline-start" />
+                立即运行
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => void bulkRemove()}>
+                <Trash2 data-icon="inline-start" />
+                删除
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedIds([])}>
+                清空选择
+              </Button>
+            </div>
+          </div>
+        ) : null}
         {filteredItems.length === 0 ? (
           <Card>
             <CardContent className="py-10 text-center text-muted-foreground">没有匹配的计划任务。</CardContent>
@@ -606,6 +676,13 @@ export default function SchedulesPage() {
             <Table>
               <TableHeader className="bg-muted/40">
                 <TableRow>
+                  <TableHead className="w-12">
+                    <Checkbox
+                      aria-label="选择当前页计划"
+                      checked={headerSelectionState}
+                      onCheckedChange={(checked) => toggleAllVisible(checked === true)}
+                    />
+                  </TableHead>
                   <TableHead className="min-w-44">计划名称</TableHead>
                   <TableHead className="w-28">时间线</TableHead>
                   <TableHead className="min-w-48">运行周期</TableHead>
@@ -621,6 +698,13 @@ export default function SchedulesPage() {
                 {visibleItems.map((item) => (
                   <React.Fragment key={item.id}>
                     <TableRow>
+                      <TableCell className="w-12">
+                        <Checkbox
+                          aria-label={`选择计划 ${item.name}`}
+                          checked={selectedIds.includes(item.id)}
+                          onCheckedChange={(checked) => toggleSelected(item.id, checked === true)}
+                        />
+                      </TableCell>
                       <TableCell>
                         <div className="font-medium">{item.name}</div>
                         <div className="text-muted-foreground text-xs">计划 #{item.id}</div>
@@ -731,7 +815,7 @@ export default function SchedulesPage() {
                     </TableRow>
                     {expandedId === item.id ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="bg-muted/10 p-3">
+                        <TableCell colSpan={10} className="bg-muted/10 p-3">
                           <ScheduleTimeline schedule={timelineById[item.id]} loading={timelineLoadingId === item.id} />
                         </TableCell>
                       </TableRow>
