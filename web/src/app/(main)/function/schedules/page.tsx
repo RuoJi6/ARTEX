@@ -575,6 +575,7 @@ export default function SchedulesPage() {
               <TableHeader className="bg-muted/40">
                 <TableRow>
                   <TableHead className="min-w-44">计划名称</TableHead>
+                  <TableHead className="w-28">时间线</TableHead>
                   <TableHead className="min-w-48">运行周期</TableHead>
                   <TableHead className="min-w-40">开始时间</TableHead>
                   <TableHead className="min-w-40">结束时间</TableHead>
@@ -591,6 +592,16 @@ export default function SchedulesPage() {
                       <TableCell>
                         <div className="font-medium">{item.name}</div>
                         <div className="text-muted-foreground text-xs">计划 #{item.id}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Button size="sm" variant="outline" onClick={() => void toggleTimeline(item.id)}>
+                          {expandedId === item.id ? (
+                            <ChevronDown data-icon="inline-start" />
+                          ) : (
+                            <ChevronRight data-icon="inline-start" />
+                          )}
+                          {expandedId === item.id ? "收起" : "查看"}
+                        </Button>
                       </TableCell>
                       <TableCell className="text-sm">{periodLabel(item)}</TableCell>
                       <TableCell className="whitespace-nowrap text-sm">
@@ -638,14 +649,6 @@ export default function SchedulesPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap justify-end gap-2">
-                          <Button size="sm" variant="outline" onClick={() => void toggleTimeline(item.id)}>
-                            {expandedId === item.id ? (
-                              <ChevronDown data-icon="inline-start" />
-                            ) : (
-                              <ChevronRight data-icon="inline-start" />
-                            )}
-                            {expandedId === item.id ? "收起时间线" : "查看时间线"}
-                          </Button>
                           <Button
                             size="sm"
                             variant="outline"
@@ -694,7 +697,7 @@ export default function SchedulesPage() {
                     </TableRow>
                     {expandedId === item.id ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="bg-muted/10 p-3">
+                        <TableCell colSpan={9} className="bg-muted/10 p-3">
                           <ScheduleTimeline schedule={timelineById[item.id]} loading={timelineLoadingId === item.id} />
                         </TableCell>
                       </TableRow>
