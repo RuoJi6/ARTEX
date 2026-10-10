@@ -199,23 +199,55 @@ func (s *Server) runScheduleNow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "计划不存在")
 		return
 	}
-	s.runScheduleTasks(item)
-	writeJSON(w, 200, map[string]any{"ok": true})
+	if err := s.m.pg.MarkTaskScheduleManual(id); err != nil {
+		writeErr(w, 500, "无法启动计划任务")
+		return
+	}
+	_ = s.m.pg.RecordScheduleHistory(id, 0, "running", true, "手动立即运行")
+	started, errors := s.runScheduleTasks(item)
+	writeJSON(w, 200, map[string]any{"ok": true, "started": started, "errors": errors})
 }
 
-func (s *Server) runScheduleTasks(item *db.TaskSchedule) {
+func (s *Server) runScheduleTasks(item *db.TaskSchedule) (int, []string) {
+	started := 0
+	errors := []string{}
 	for _, taskID := range item.TaskIDs {
 		t, ok := s.m.Task(strconv.FormatInt(taskID, 10))
 		if !ok {
+			errors = append(errors, fmt.Sprintf("任务 #%d 未找到", taskID))
 			continue
 		}
 		state := t.lifecycleSnapshot()
-		if db.IsTerminal(state.Status) || !state.Paused {
+		if db.IsTerminal(state.Status) {
+			errors = append(errors, fmt.Sprintf("任务 #%d 已结束，无法立即运行", taskID))
 			continue
 		}
-		_, _ = s.applyTaskControlWithCause(t, "resume", agent.AbortPausedByOrchestrator)
+		if !state.Paused {
+			started++
+			continue
+		}
+		managed, err := s.m.pg.SchedulePausedTasks(taskID)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("任务 #%d 状态读取失败", taskID))
+			_ = s.m.pg.RecordScheduleHistory(item.ID, taskID, "resume", false, "状态读取失败")
+			continue
+		}
+		if !managed {
+			errors = append(errors, fmt.Sprintf("任务 #%d 由人工暂停，计划不能强制恢复", taskID))
+			_ = s.m.pg.RecordScheduleHistory(item.ID, taskID, "resume", false, "人工暂停优先")
+			continue
+		}
+		_, err = s.applyTaskControlWithCause(t, "resume", agent.AbortPausedByOrchestrator)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("任务 #%d：%s", taskID, err.Error()))
+			_ = s.m.pg.RecordScheduleHistory(item.ID, taskID, "resume", false, err.Error())
+			continue
+		}
+		started++
 		_ = s.m.pg.SetSchedulePaused(item.ID, taskID, false)
+		_ = s.m.pg.RecordScheduleHistory(item.ID, taskID, "resume", true, "立即运行")
 	}
+	return started, errors
 }
 
 // scheduleRequestFromTask is used by the task creation handler without making

@@ -220,10 +220,20 @@ function ScheduleTimeline({ schedule, loading }: { schedule?: TaskSchedule; load
   );
 }
 
-function statusVariant(status: TaskSchedule["status"]): "default" | "destructive" | "secondary" {
-  if (status === "running") return "default";
-  if (status === "error") return "destructive";
-  return "secondary";
+function statusClass(status: TaskSchedule["status"]) {
+  return (
+    {
+      waiting: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300",
+      running:
+        "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300",
+      outside:
+        "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300",
+      completed: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300",
+      error: "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300",
+      paused:
+        "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300",
+    } as Record<TaskSchedule["status"], string>
+  )[status];
 }
 
 function ScheduleForm({
@@ -515,7 +525,14 @@ export default function SchedulesPage() {
     try {
       if (type === "pause") await api.pauseSchedule(id);
       else if (type === "resume") await api.resumeSchedule(id);
-      else await api.runScheduleNow(id);
+      else {
+        const result = await api.runScheduleNow(id);
+        if (result.errors?.length) {
+          toast.warning(`已启动 ${result.started} 个任务，但有 ${result.errors.length} 个任务未启动`);
+        } else {
+          toast.success(`已立即运行 ${result.started} 个任务`);
+        }
+      }
       await load();
     } catch (e) {
       toast.error((e as Error).message);
@@ -633,7 +650,9 @@ export default function SchedulesPage() {
                         {item.task_ids.length ? item.task_ids.map((id) => `#${id}`).join("、") : "无"}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={statusVariant(item.status)}>{statusText(item)}</Badge>
+                        <Badge variant="outline" className={statusClass(item.status)}>
+                          {statusText(item)}
+                        </Badge>
                         <div className="mt-1 text-muted-foreground text-xs">{timezoneLabel(item)}</div>
                         <div className="mt-1 text-muted-foreground text-xs">
                           最近：{formatTime(item.last_transition_at)}

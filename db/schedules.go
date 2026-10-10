@@ -311,6 +311,11 @@ func (d *DB) TouchTaskSchedule(id int64, status, windowKey, lastError string) er
 	return err
 }
 
+func (d *DB) MarkTaskScheduleManual(id int64) error {
+	_, err := d.Exec(`UPDATE task_schedules SET status='running',last_window_key='manual',last_transition_at=now(),last_error='' WHERE id=$1`, id)
+	return err
+}
+
 // ScheduleRunStats summarizes completed schedule window entries for list views.
 // The scheduler records one "running" history entry whenever a new window opens.
 type ScheduleRunStats struct {

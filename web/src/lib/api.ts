@@ -328,7 +328,8 @@ export const api = {
   deleteSchedule: (id: number) => del<{ ok: boolean }>(`/schedules/${id}`),
   pauseSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/pause`, {}),
   resumeSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/resume`, {}),
-  runScheduleNow: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/run-now`, {}),
+  runScheduleNow: (id: number) =>
+    post<{ ok: boolean; started: number; errors?: string[] }>(`/schedules/${id}/run-now`, {}),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),
