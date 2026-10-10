@@ -359,9 +359,12 @@ func (d *DB) SetSchedulePaused(scheduleID, taskID int64, paused bool) error {
 	return err
 }
 
-func (d *DB) SchedulePausedTasks(taskID int64) (bool, error) {
+// TaskPausedBySchedule reads the authoritative task-level pause origin. The
+// scheduler writes this flag when it pauses a task, so callers must use it to
+// distinguish a scheduled pause from a manual pause.
+func (d *DB) TaskPausedBySchedule(taskID int64) (bool, error) {
 	var paused bool
-	err := d.QueryRow(`SELECT EXISTS(SELECT 1 FROM task_schedule_tasks WHERE task_id=$1 AND paused_by_schedule)`, taskID).Scan(&paused)
+	err := d.QueryRow(`SELECT schedule_paused FROM tasks WHERE id=$1 AND deleted_at IS NULL`, taskID).Scan(&paused)
 	return paused, err
 }
 

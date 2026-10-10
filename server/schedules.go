@@ -234,7 +234,7 @@ func (s *Server) startScheduleTasks(item *db.TaskSchedule, forceManualPause bool
 			started++
 			continue
 		}
-		managed, err := s.m.pg.SchedulePausedTasks(taskID)
+		managed, err := s.m.pg.TaskPausedBySchedule(taskID)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("任务 #%d 状态读取失败", taskID))
 			_ = s.m.pg.RecordScheduleHistory(item.ID, taskID, "resume", false, "状态读取失败")

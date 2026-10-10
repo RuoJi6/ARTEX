@@ -101,10 +101,11 @@ function startLabel(item: TaskSchedule) {
 }
 
 function endLabel(item: TaskSchedule) {
+  if (item.schedule_type === "once" && item.end_date) {
+    return `${formatDateValue(item.end_date)} ${item.end_time ? formatClock(item.end_time) : "24:00"}`;
+  }
   if (!item.end_time) return "持续运行";
   const end = formatClock(item.end_time);
-  if (item.schedule_type === "once" && item.end_date)
-    return `${formatDateValue(item.end_date)} ${end === "未设置" ? "24:00" : end}`;
   const start = formatClock(item.start_time);
   return `${end}${end <= start ? "（次日）" : ""}`;
 }
@@ -506,13 +507,7 @@ export default function SchedulesPage() {
       return current.filter((id) => !visibleIds.includes(id));
     });
   };
-  const toggleTimeline = async (id: number) => {
-    if (expandedId === id) {
-      setExpandedId(null);
-      return;
-    }
-    setExpandedId(id);
-    if (timelineById[id]) return;
+  const refreshTimeline = async (id: number) => {
     setTimelineLoadingId(id);
     try {
       const detail = await api.schedule(id);
@@ -522,6 +517,24 @@ export default function SchedulesPage() {
     } finally {
       setTimelineLoadingId(null);
     }
+  };
+  const invalidateTimeline = async (id: number) => {
+    setTimelineById((current) => {
+      if (!current[id]) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    if (expandedId === id) await refreshTimeline(id);
+  };
+  const toggleTimeline = async (id: number) => {
+    if (expandedId === id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(id);
+    if (timelineById[id]) return;
+    await refreshTimeline(id);
   };
   const save = async (value: ScheduleInput) => {
     if (
@@ -549,6 +562,12 @@ export default function SchedulesPage() {
     if (!window.confirm("确定删除这个计划吗？")) return;
     try {
       await api.deleteSchedule(id);
+      setTimelineById((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      if (expandedId === id) setExpandedId(null);
       await load();
     } catch (e) {
       toast.error((e as Error).message);
@@ -568,6 +587,7 @@ export default function SchedulesPage() {
           toast.success(`已立即运行 ${result.started} 个任务`);
         }
       }
+      await invalidateTimeline(id);
       await load();
     } catch (e) {
       toast.error((e as Error).message);
@@ -593,6 +613,7 @@ export default function SchedulesPage() {
       toast.success(`已立即运行 ${started} 个任务`);
     }
     setSelectedIds([]);
+    await Promise.all(ids.map((id) => invalidateTimeline(id)));
     await load();
   };
   const bulkRemove = async () => {
@@ -602,6 +623,14 @@ export default function SchedulesPage() {
     const failed = results.filter((result) => result.status === "rejected").length;
     if (failed) toast.warning(`已删除 ${ids.length - failed} 个计划，${failed} 个计划删除失败`);
     else toast.success(`已删除 ${ids.length} 个计划`);
+    setTimelineById((current) => {
+      const next = { ...current };
+      ids.forEach((id) => {
+        delete next[id];
+      });
+      return next;
+    });
+    if (expandedId && ids.includes(expandedId)) setExpandedId(null);
     setSelectedIds([]);
     await load();
   };
