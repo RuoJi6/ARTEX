@@ -162,14 +162,23 @@ function historyActionText(action: string) {
   );
 }
 
-function timelinePosition(event: ScheduleHistoryEntry, index: number, events: ScheduleHistoryEntry[]) {
-  if (events.length <= 1) return 50;
-  const timestamps = events.map((item) => Date.parse(item.created_at)).filter(Number.isFinite);
-  const time = Date.parse(event.created_at);
-  const min = Math.min(...timestamps);
-  const max = Math.max(...timestamps);
-  if (!Number.isFinite(time) || !Number.isFinite(min) || max <= min) return (index / (events.length - 1)) * 100;
-  return ((time - min) / (max - min)) * 100;
+function historyEventClass(event: ScheduleHistoryEntry) {
+  if (!event.success)
+    return "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300";
+  if (event.action === "running" || event.action === "resume") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300";
+  }
+  if (event.action === "outside" || event.action === "pause" || event.action === "paused") {
+    return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300";
+  }
+  return "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300";
+}
+
+function historyDotClass(event: ScheduleHistoryEntry) {
+  if (!event.success) return "bg-red-500";
+  if (event.action === "running" || event.action === "resume") return "bg-emerald-500";
+  if (event.action === "outside" || event.action === "pause" || event.action === "paused") return "bg-amber-500";
+  return "bg-slate-400";
 }
 
 function ScheduleTimeline({ schedule, loading }: { schedule?: TaskSchedule; loading: boolean }) {
@@ -181,38 +190,42 @@ function ScheduleTimeline({ schedule, loading }: { schedule?: TaskSchedule; load
       </div>
     );
   }
-  const events = [...(schedule?.history ?? [])].reverse();
+  // The API returns newest first. Keep that order so the latest transition is
+  // visible immediately when a row is expanded.
+  const events = schedule?.history ?? [];
   if (!events.length) {
     return <div className="py-4 text-muted-foreground text-sm">暂无运行记录，计划进入第一个窗口后会显示时间线。</div>;
   }
   return (
     <div className="grid gap-3 rounded-lg border bg-muted/20 p-4">
-      <div className="font-medium text-sm">运行时间线</div>
-      <div className="relative h-20 overflow-x-auto">
-        <div className="absolute top-5 right-3 left-3 h-0.5 bg-border" />
-        {events.map((event, index) => (
-          <div
-            key={event.id}
-            className="absolute top-0 -translate-x-1/2"
-            style={{ left: `${timelinePosition(event, index, events)}%` }}
-            title={`${historyActionText(event.action)} · ${formatTime(event.created_at)}`}
-          >
-            <div className="mx-auto mt-2 size-3 rounded-full border-2 border-background bg-primary shadow-sm" />
-            <div className="mt-2 max-w-28 text-center text-muted-foreground text-xs">
-              {historyActionText(event.action)}
-            </div>
-          </div>
-        ))}
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-medium text-sm">运行时间线</div>
+        <span className="text-muted-foreground text-xs">最近 {Math.min(events.length, 20)} 条记录</span>
       </div>
-      <div className="grid gap-2 border-t pt-3">
-        {events.slice(-20).map((event) => (
-          <div key={`${event.id}-detail`} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            <span className="font-medium">{historyActionText(event.action)}</span>
-            <span className="text-muted-foreground">{formatTime(event.created_at)}</span>
-            {event.task_id ? <span className="text-muted-foreground">任务 #{event.task_id}</span> : null}
-            {event.message ? (
-              <span className={event.success ? "text-muted-foreground" : "text-destructive"}>{event.message}</span>
+      <div className="grid gap-0">
+        {events.slice(0, 20).map((event, index) => (
+          <div key={event.id} className="relative flex gap-3 pb-3 last:pb-0">
+            {index < Math.min(events.length, 20) - 1 ? (
+              <span className="absolute top-4 bottom-0 left-[5px] w-px bg-border" aria-hidden="true" />
             ) : null}
+            <span
+              className={`relative mt-1.5 size-3 shrink-0 rounded-full border-2 border-background shadow-sm ${historyDotClass(event)}`}
+              title={historyActionText(event.action)}
+            />
+            <div className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant="outline" className={historyEventClass(event)}>
+                  {historyActionText(event.action)}
+                </Badge>
+                <span className="text-muted-foreground">{formatTime(event.created_at)}</span>
+                <span className="text-muted-foreground">{event.task_id ? `任务 #${event.task_id}` : "计划任务"}</span>
+              </div>
+              {event.message ? (
+                <div className={`mt-1 text-xs ${event.success ? "text-muted-foreground" : "text-destructive"}`}>
+                  {event.message}
+                </div>
+              ) : null}
+            </div>
           </div>
         ))}
       </div>
