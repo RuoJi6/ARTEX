@@ -723,6 +723,7 @@ export interface TaskSchedule {
   timezone?: string;
   schedule_type: "once" | "weekly";
   run_date?: string;
+  end_date?: string;
   weekdays: number[];
   start_time: string;
   end_time?: string;
@@ -733,6 +734,8 @@ export interface TaskSchedule {
   last_error?: string;
   next_start?: string;
   next_end?: string;
+  run_count?: number;
+  last_run_at?: string;
   task_ids: number[];
   history?: Array<{
     id: number;

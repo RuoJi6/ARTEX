@@ -252,6 +252,7 @@ export type ScheduleInput = {
   timezone_mode?: "beijing" | "system";
   schedule_type: "once" | "weekly";
   run_date?: string;
+  end_date?: string;
   weekdays?: number[];
   start_time: string;
   end_time?: string;
@@ -266,6 +267,7 @@ function schedulePayload(input: ScheduleInput) {
     timezone_mode: input.timezone_mode ?? "beijing",
     schedule_type: input.schedule_type,
     run_date: input.run_date ?? "",
+    end_date: input.end_date ?? "",
     weekdays: input.weekdays ?? [],
     start_time: input.start_time,
     end_time: input.end_time ?? "",
@@ -326,7 +328,8 @@ export const api = {
   deleteSchedule: (id: number) => del<{ ok: boolean }>(`/schedules/${id}`),
   pauseSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/pause`, {}),
   resumeSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/resume`, {}),
-  runScheduleNow: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/run-now`, {}),
+  runScheduleNow: (id: number) =>
+    post<{ ok: boolean; started: number; errors?: string[] }>(`/schedules/${id}/run-now`, {}),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),

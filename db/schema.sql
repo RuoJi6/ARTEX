@@ -1039,6 +1039,7 @@ CREATE TABLE IF NOT EXISTS task_schedules (
     schedule_type      TEXT NOT NULL DEFAULT 'weekly'
                        CHECK (schedule_type IN ('once','weekly')),
     run_date           DATE,
+    end_date           DATE,
     weekdays           TEXT NOT NULL DEFAULT '',
     start_time         TIME NOT NULL,
     end_time           TIME,
@@ -1055,6 +1056,7 @@ CREATE TABLE IF NOT EXISTS task_schedules (
     CHECK ((schedule_type = 'once') OR weekdays <> '')
 );
 CREATE INDEX IF NOT EXISTS idx_task_schedules_enabled ON task_schedules(enabled, id);
+ALTER TABLE task_schedules ADD COLUMN IF NOT EXISTS end_date DATE;
 DROP TRIGGER IF EXISTS trg_task_schedules_upd ON task_schedules;
 CREATE TRIGGER trg_task_schedules_upd BEFORE UPDATE ON task_schedules
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();

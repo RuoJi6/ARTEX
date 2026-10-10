@@ -45,10 +45,12 @@ import {
 import { toast } from "sonner";
 
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
+import { DateSelect } from "@/components/date-select";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { TaskTemplateControls } from "@/components/task-template-controls";
+import { TimeSelect } from "@/components/time-select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -117,7 +119,6 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { TimeSelect } from "@/components/time-select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, type ScheduleInput } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
@@ -3101,6 +3102,7 @@ function CreateTaskSheet({
   const [schedule, setSchedule] = React.useState<ScheduleInput>({
     name: "新建任务计划",
     schedule_type: "weekly",
+    end_date: "",
     weekdays: [6, 7],
     start_time: "18:00",
     end_time: "",
@@ -3197,6 +3199,7 @@ function CreateTaskSheet({
       setSchedule({
         name: "新建任务计划",
         schedule_type: "weekly",
+        end_date: "",
         weekdays: [6, 7],
         start_time: "18:00",
         end_time: "",
@@ -3321,14 +3324,26 @@ function CreateTaskSheet({
                     </Field>
                   </div>
                   {schedule.schedule_type === "once" ? (
-                    <Field>
-                      <FieldLabel>执行日期</FieldLabel>
-                      <Input
-                        type="date"
-                        value={schedule.run_date ?? ""}
-                        onChange={(e) => setSchedule({ ...schedule, run_date: e.target.value })}
-                      />
-                    </Field>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field>
+                        <FieldLabel>开始日期</FieldLabel>
+                        <DateSelect
+                          value={schedule.run_date ?? ""}
+                          onValueChange={(value) => setSchedule({ ...schedule, run_date: value })}
+                          aria-label="开始日期"
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel>截止日期（可选）</FieldLabel>
+                        <DateSelect
+                          value={schedule.end_date ?? ""}
+                          onValueChange={(value) => setSchedule({ ...schedule, end_date: value })}
+                          optional
+                          placeholder="不设置截止日期"
+                          aria-label="截止日期，可选"
+                        />
+                      </Field>
+                    </div>
                   ) : (
                     <Field>
                       <FieldLabel>星期（1=周一，7=周日）</FieldLabel>
