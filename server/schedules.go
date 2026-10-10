@@ -204,11 +204,19 @@ func (s *Server) runScheduleNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.m.pg.RecordScheduleHistory(id, 0, "running", true, "手动立即运行")
-	started, errors := s.runScheduleTasks(item)
+	started, errors := s.runScheduleTasksNow(item)
 	writeJSON(w, 200, map[string]any{"ok": true, "started": started, "errors": errors})
 }
 
 func (s *Server) runScheduleTasks(item *db.TaskSchedule) (int, []string) {
+	return s.startScheduleTasks(item, false)
+}
+
+func (s *Server) runScheduleTasksNow(item *db.TaskSchedule) (int, []string) {
+	return s.startScheduleTasks(item, true)
+}
+
+func (s *Server) startScheduleTasks(item *db.TaskSchedule, forceManualPause bool) (int, []string) {
 	started := 0
 	errors := []string{}
 	for _, taskID := range item.TaskIDs {
@@ -232,7 +240,7 @@ func (s *Server) runScheduleTasks(item *db.TaskSchedule) (int, []string) {
 			_ = s.m.pg.RecordScheduleHistory(item.ID, taskID, "resume", false, "状态读取失败")
 			continue
 		}
-		if !managed {
+		if !managed && !forceManualPause {
 			errors = append(errors, fmt.Sprintf("任务 #%d 由人工暂停，计划不能强制恢复", taskID))
 			_ = s.m.pg.RecordScheduleHistory(item.ID, taskID, "resume", false, "人工暂停优先")
 			continue
@@ -245,7 +253,11 @@ func (s *Server) runScheduleTasks(item *db.TaskSchedule) (int, []string) {
 		}
 		started++
 		_ = s.m.pg.SetSchedulePaused(item.ID, taskID, false)
-		_ = s.m.pg.RecordScheduleHistory(item.ID, taskID, "resume", true, "立即运行")
+		message := "立即运行"
+		if !managed && forceManualPause {
+			message = "立即运行（显式恢复人工暂停）"
+		}
+		_ = s.m.pg.RecordScheduleHistory(item.ID, taskID, "resume", true, message)
 	}
 	return started, errors
 }

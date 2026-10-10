@@ -528,7 +528,9 @@ export default function SchedulesPage() {
       else {
         const result = await api.runScheduleNow(id);
         if (result.errors?.length) {
-          toast.warning(`已启动 ${result.started} 个任务，但有 ${result.errors.length} 个任务未启动`);
+          toast.warning(
+            `已启动 ${result.started} 个任务，但有 ${result.errors.length} 个任务未启动：${result.errors.join("；")}`,
+          );
         } else {
           toast.success(`已立即运行 ${result.started} 个任务`);
         }
