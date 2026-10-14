@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/Autumn-27/norma/permission"
@@ -68,7 +69,7 @@ func Tools(reg *Registry) []actool.CoreTool {
 			case err != nil:
 				// 降级语义：知识库不可用 ≠ 库中无答案，明确告知并引导继续探测，避免 agent 把
 				// "检索失败"误读成"知识库里没有"而放弃这条线索。
-				return actool.Errorf("知识库暂不可用（%v）。跳过外部知识，继续基于实际探测推进。", err), nil
+				return actool.Errorf(fmt.Sprintf("知识库暂不可用（%v）。跳过外部知识，继续基于实际探测推进。", err)), nil
 			}
 			for i := range hits {
 				if r := []rune(hits[i].Content); len(r) > maxContentRunes {
