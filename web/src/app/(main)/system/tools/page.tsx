@@ -4,6 +4,16 @@ import * as React from "react";
 import { toast } from "sonner";
 import { PlayIcon, PlusIcon, RotateCcwIcon, SaveIcon, SearchIcon, Trash2Icon } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -560,6 +570,7 @@ function CustomToolDialog({
   const [paramsText, setParamsText] = React.useState("");
   const [testing, setTesting] = React.useState(false);
   const [testResult, setTestResult] = React.useState<{ output: string; is_error: boolean } | null>(null);
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
 
   // (re)load form state when opening.
   React.useEffect(() => {
@@ -644,6 +655,7 @@ function CustomToolDialog({
     try {
       await api.deleteCustomTool(tool.key);
       toast.success("已删除");
+      setConfirmDelete(false);
       onSaved();
     } catch (e) {
       toast.error("删除失败：" + (e as Error).message);
@@ -672,11 +684,12 @@ function CustomToolDialog({
   }
 
   return (
-    <Sheet open={!!edit} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent
-        side="right"
-        className="flex flex-col gap-0 p-0 data-[side=right]:w-[45vw] data-[side=right]:sm:max-w-[45vw] data-[side=right]:min-w-[480px]"
-      >
+    <>
+      <Sheet open={!!edit} onOpenChange={(o) => !o && onClose()}>
+        <SheetContent
+          side="right"
+          className="flex flex-col gap-0 p-0 data-[side=right]:w-[45vw] data-[side=right]:sm:max-w-[45vw] data-[side=right]:min-w-[480px]"
+        >
         <SheetHeader className="px-4">
           <SheetTitle>{isNew ? "新建自定义工具" : `编辑 ${tool?.key}`}</SheetTitle>
           <SheetDescription>shell=bash 环境声明(只需名称+描述，告知模型可用 bash 调用)；command/script/http 需写执行规格。</SheetDescription>
@@ -832,12 +845,26 @@ function CustomToolDialog({
             <SaveIcon /> {isNew ? "创建" : "保存"}
           </Button>
           {!isNew && (
-            <Button size="sm" variant="outline" className="text-destructive" onClick={del}>
+            <Button size="sm" variant="outline" className="text-destructive" onClick={() => setConfirmDelete(true)}>
               <Trash2Icon /> 删除
             </Button>
           )}
         </div>
       </SheetContent>
-    </Sheet>
+      </Sheet>
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除自定义工具「{tool?.key}」？</AlertDialogTitle>
+            <AlertDialogDescription>删除后绑定了该工具的 Agent 将不再注入它。此操作不可撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void del()}>删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
