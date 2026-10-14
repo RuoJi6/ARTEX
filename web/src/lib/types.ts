@@ -1225,6 +1225,7 @@ export interface MCPTool {
 export interface KBSource {
   name: string;
   type: string; // 后端类型，当前仅 "dify"
+  enabled?: boolean; // 是否启用（读时恒有；缺省=启用）
   api_key?: string; // 写时填；读时恒为空
   api_key_set?: boolean; // 读时告知是否已设置密钥
   fields?: Record<string, unknown>; // 后端专属字段（dify: base_url/dataset_id/timeout/min_score）
