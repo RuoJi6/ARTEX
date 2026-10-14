@@ -12,11 +12,13 @@ import (
 // 密钥字段：读取时恒为空、只回显 api_key_set；写入时留空 = 不改动旧 key（与 basic-auth
 // 密码"留空表示不修改"同规则）。
 
-// kbSourceDTO 是知识源的读写视图。Fields 承载除 name/type/api_key 外的所有后端字段，
-// 用 map 而非强类型是为了让后续新增后端(不用改 DTO)。
+// kbSourceDTO 是知识源的读写视图。Fields 承载除 name/type/api_key/enabled 外的所有后端
+// 字段，用 map 而非强类型是为了让后续新增后端(不用改 DTO)。enabled 用指针：nil = 未指定
+// （读时恒非 nil，写时若省略则保留原值），避免旧配置/旧客户端缺失该字段时被误判为禁用。
 type kbSourceDTO struct {
 	Name      string         `json:"name"`
 	Type      string         `json:"type"`
+	Enabled   *bool          `json:"enabled,omitempty"` // 读时恒为 true/false；写时 nil = 不修改
 	APIKey    string         `json:"api_key,omitempty"` // 写时填；读时恒为空
 	APIKeySet bool           `json:"api_key_set"`       // 读时告知是否已设置
 	Fields    map[string]any `json:"fields"`            // 后端其余字段
@@ -42,16 +44,20 @@ func kbSourcePublicDTO(src map[string]any) kbSourceDTO {
 	name, _ := src["name"].(string)
 	typ, _ := src["type"].(string)
 	apiKey, _ := src["api_key"].(string)
+	enabled := true // 默认启用；兼容旧配置里缺失 enabled 字段
+	if v, ok := src["enabled"].(bool); ok {
+		enabled = v
+	}
 	fields := make(map[string]any, len(src))
 	for k, v := range src {
 		switch k {
-		case "name", "type", "api_key":
+		case "name", "type", "api_key", "enabled":
 			continue
 		default:
 			fields[k] = v
 		}
 	}
-	return kbSourceDTO{Name: name, Type: typ, APIKeySet: apiKey != "", Fields: fields}
+	return kbSourceDTO{Name: name, Type: typ, Enabled: &enabled, APIKeySet: apiKey != "", Fields: fields}
 }
 
 func (s *Server) getKBSettings(w http.ResponseWriter, r *http.Request) {
@@ -103,12 +109,15 @@ func (s *Server) saveKBSettings(w http.ResponseWriter, r *http.Request) {
 		if apiKey == "" {
 			apiKey = oldKey[src.Name] // 未重填 → 复用旧 key
 		}
-		m := make(map[string]any, len(src.Fields)+3)
+		m := make(map[string]any, len(src.Fields)+4)
 		for k, v := range src.Fields {
 			m[k] = v
 		}
 		m["name"] = src.Name
 		m["type"] = src.Type
+		if src.Enabled != nil {
+			m["enabled"] = *src.Enabled
+		}
 		if apiKey != "" {
 			m["api_key"] = apiKey
 		}
