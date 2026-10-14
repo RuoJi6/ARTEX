@@ -2262,6 +2262,9 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   }
   if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };
   if (path === "/settings/python/detect") return { python_interpreter: "/usr/bin/python3" };
+  if (path === "/notify/meta" && m === "GET") return D.notifyMeta;
+  if (path === "/notify/channels" && m === "GET") return { channels: [...D.notifyChannels] };
+  if (path === "/notify/deliveries") return { deliveries: [], total: 0, page: 1, page_size: 50 };
   if (path === "/chat")
     return { reply: "（demo）我已把该建议注入为一条高优意图，work agent 会尽快执行。", mode: "hint" };
   if (path === "/gc") return { removed: 0 };
