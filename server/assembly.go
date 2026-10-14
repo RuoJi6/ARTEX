@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/kb"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/skill"
 	actool "github.com/Autumn-27/norma/tool"
@@ -229,6 +230,16 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	for _, t := range traffic.SeedToolMetas() {
 		schema, _ := json.Marshal(t.InputSchema())
 		if err := pg.SeedTool(t.Name(), t.Description(), schema, trafficAgents); err != nil {
+			log.Printf("[tools] seed %s 失败: %v", t.Name(), err)
+		}
+	}
+	// Seed the knowledge-base host tool (knowledge_search). 默认绑 worker + planner：
+	// worker 执行时查具体技术点、planner 规划时查方向。运行时是否可见仍取决于 knowledge
+	// tools 是否注入（KnowledgeTools 只在配置了知识源时返回）。
+	kbAgents, _ := json.Marshal([]string{"worker", "planner"})
+	for _, t := range kb.SeedToolMetas() {
+		schema, _ := json.Marshal(t.InputSchema())
+		if err := pg.SeedTool(t.Name(), t.Description(), schema, kbAgents); err != nil {
 			log.Printf("[tools] seed %s 失败: %v", t.Name(), err)
 		}
 	}

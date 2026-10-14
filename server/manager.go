@@ -19,6 +19,7 @@ import (
 	"github.com/Autumn-27/artex/enrich"
 	"github.com/Autumn-27/artex/guard"
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/kb"
 	"github.com/Autumn-27/artex/traffic"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -222,6 +223,10 @@ type Manager struct {
 	traffic     *traffic.Traffic       // process-wide recording proxy (may be nil)
 	enrich      *enrich.Engine         // engine-side asset auto-completion (DNS/HTTP)
 	interceptor *intercept.Interceptor // user-configured tool-call interception rules
+	// kb 聚合外部知识源（Dify 等），为 agent 提供 knowledge_search。reloadKB 在 API
+	// goroutine 上替换，KnowledgeTools 在 agent 装配 goroutine 上读取，故用 kbMu 保护。
+	kbMu sync.RWMutex
+	kb   *kb.Registry
 
 	companyMu sync.Mutex // serializes task/company-scope commits with live handle registration
 	// taskStateMu preserves commit order between PostgreSQL lifecycle writes and
@@ -275,6 +280,9 @@ const (
 	// agent(planner/worker/主 agent/对话)由 noa 接管上下文压缩,取代内置 compaction。
 	// 每 run 读一次,切换只影响之后启动的 run。
 	settingNoaCompaction = "noa_compaction"
+	// settingKBSources 是外部知识库配置(JSON 数组)。每个元素含 name/type 及后端专属字段
+	// (dify: base_url/api_key/dataset_id/timeout/min_score)。空或未设 = 知识库未启用。
+	settingKBSources = "kb.sources"
 	// defaultWebSearchBackend is used when web search is on but no backend was picked.
 	defaultWebSearchBackend = "ddgs"
 	// deepSeekWebSearchBackend borrows the active LLM profile instead of its own
@@ -374,6 +382,9 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 		log.Printf("[llmusage] create table: %v", err)
 	}
 	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
+	if err := m.reloadKB(); err != nil {
+		log.Printf("[kb] 初始化失败: %v", err)
+	}
 	if proxyAddr != "" {
 		tr, err := traffic.Open(filepath.Join(dir, "traffic"), proxyAddr)
 		if err != nil {
@@ -727,10 +738,81 @@ func encodeJSON(v any) json.RawMessage {
 // traffic tools, gated by the global capture switch: empty when capture is off, so
 // no agent gets traffic_search/traffic_get regardless of binding.
 func (m *Manager) HostTools() []actool.CoreTool {
-	if m.traffic == nil || !m.TrafficEnabled() {
+	var out []actool.CoreTool
+	if m.traffic != nil && m.TrafficEnabled() {
+		out = append(out, m.traffic.Tools()...)
+	}
+	out = append(out, m.KnowledgeTools()...)
+	return out
+}
+
+// reloadKB 从 settings(kb.sources) 重建知识源 Registry，原子替换到 m.kb。任何源解析/
+// 构建失败只跳过该源并记日志，不使整个知识库或启动失败——知识库是可选能力。
+func (m *Manager) reloadKB() error {
+	reg := kb.NewRegistry()
+	raw, ok, err := m.pg.GetSetting(settingKBSources)
+	if err != nil {
+		return fmt.Errorf("读取知识库配置: %w", err)
+	}
+	if ok && strings.TrimSpace(raw) != "" {
+		var srcs []map[string]any
+		if err := json.Unmarshal([]byte(raw), &srcs); err != nil {
+			return fmt.Errorf("知识库配置解析失败: %w", err)
+		}
+		for _, s := range srcs {
+			name, _ := s["name"].(string)
+			typ, _ := s["type"].(string)
+			name = strings.TrimSpace(name)
+			typ = strings.TrimSpace(typ)
+			if name == "" || typ == "" {
+				log.Printf("[kb] 跳过缺少 name/type 的知识源")
+				continue
+			}
+			enabled := true // 默认启用；兼容旧配置里缺失 enabled 字段
+			if v, ok := s["enabled"].(bool); ok {
+				enabled = v
+			}
+			if !enabled {
+				log.Printf("[kb] 源 %s 已禁用，跳过", name)
+				continue
+			}
+			searcher, err := kb.Build(typ, s)
+			if err != nil {
+				log.Printf("[kb] 源 %s 构建失败: %v", name, err)
+				continue
+			}
+			reg.Add(name, searcher)
+		}
+	}
+	m.kbMu.Lock()
+	m.kb = reg
+	m.kbMu.Unlock()
+	if len(reg.Sources()) > 0 {
+		log.Printf("[kb] 已启用知识源: %s", strings.Join(reg.Sources(), ", "))
+	}
+	return nil
+}
+
+// KB 返回当前知识源 Registry（可能为空 Registry，永不 nil），供配置页展示启用的源。
+func (m *Manager) KB() *kb.Registry {
+	m.kbMu.RLock()
+	defer m.kbMu.RUnlock()
+	if m.kb == nil {
+		return kb.NewRegistry()
+	}
+	return m.kb
+}
+
+// KnowledgeTools 返回 knowledge_search 工具；未配置任何源时为空（ToolResolve 按绑定
+// 过滤后自然不上线）。
+func (m *Manager) KnowledgeTools() []actool.CoreTool {
+	m.kbMu.RLock()
+	reg := m.kb
+	m.kbMu.RUnlock()
+	if reg == nil || len(reg.Sources()) == 0 {
 		return nil
 	}
-	return m.traffic.Tools()
+	return kb.Tools(reg)
 }
 
 func (m *Manager) Assets() *pgdb.AssetStore  { return m.assets }
