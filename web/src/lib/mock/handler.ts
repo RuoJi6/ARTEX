@@ -21,6 +21,7 @@ import type {
   FindingTraffic,
   FindingTrafficBinding,
   IntentAsset,
+  KBSource,
   ScopeRow,
   Task,
   TaskArchive,
@@ -50,6 +51,7 @@ const mockTaskCategories = structuredClone(D.taskCategories);
 const mockConversations = structuredClone(D.conversations);
 const mockRetests: FindingRetest[] = [];
 const mockRetestMessages: Record<number, Activity[]> = {};
+const mockKBSources = structuredClone(D.kbSources);
 
 // ── 关联流量证据(finding traffic) ─────────────────────────────────────────────
 // 后端把请求/响应快照独立存到 evidence 表,前端详情页用 FindingTrafficPanel 展示。
@@ -2252,8 +2254,12 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/settings/basic-auth" && m === "GET") return { enabled: false, username: "", password_set: false };
   if (path === "/settings/basic-auth" && m === "PUT")
     throw new Error("演示模式不支持修改 HTTP Basic Auth，请在实际部署中配置");
-  if (path === "/settings/kb" && m === "GET") return { sources: D.kbSources };
-  if (path === "/settings/kb" && m === "PUT") return { ok: true, sources: (b.sources as unknown[]) ?? [] };
+  if (path === "/settings/kb" && m === "GET") return { sources: mockKBSources };
+  if (path === "/settings/kb" && m === "PUT") {
+    const next = (b.sources as KBSource[]) ?? [];
+    mockKBSources.splice(0, mockKBSources.length, ...next);
+    return { ok: true, sources: mockKBSources };
+  }
   if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };
   if (path === "/settings/python/detect") return { python_interpreter: "/usr/bin/python3" };
   if (path === "/chat")
