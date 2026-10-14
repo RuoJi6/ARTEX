@@ -675,6 +675,8 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/settings/basic-auth", s.getBasicAuthSettings)
 	mux.HandleFunc("PUT /api/settings/basic-auth", s.saveBasicAuthSettings)
+	mux.HandleFunc("GET /api/settings/kb", s.getKBSettings)
+	mux.HandleFunc("PUT /api/settings/kb", s.saveKBSettings)
 
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/stats", s.stats)
