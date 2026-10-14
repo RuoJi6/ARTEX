@@ -768,6 +768,14 @@ func (m *Manager) reloadKB() error {
 				log.Printf("[kb] 跳过缺少 name/type 的知识源")
 				continue
 			}
+			enabled := true // 默认启用；兼容旧配置里缺失 enabled 字段
+			if v, ok := s["enabled"].(bool); ok {
+				enabled = v
+			}
+			if !enabled {
+				log.Printf("[kb] 源 %s 已禁用，跳过", name)
+				continue
+			}
 			searcher, err := kb.Build(typ, s)
 			if err != nil {
 				log.Printf("[kb] 源 %s 构建失败: %v", name, err)
