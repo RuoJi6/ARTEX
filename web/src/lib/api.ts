@@ -58,6 +58,7 @@ import type {
   InterceptRule,
   JudgeConfig,
   JudgeUsage,
+  KBSource,
   LLMPoolStatus,
   LLMProfile,
   LLMRecordDetail,
@@ -915,6 +916,9 @@ export const api = {
   setBasicAuthSettings: (settings: { enabled: boolean; username: string; password: string }) =>
     put<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth", settings),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
+  // 知识库 (RAG)：多源列表。GET 返回的 api_key 恒为空（用 api_key_set 判断是否已设）。
+  kbSources: () => get<{ sources: KBSource[] }>("/settings/kb").then((r) => arr(r.sources)),
+  saveKBSources: (sources: KBSource[]) => put<{ ok: boolean; sources: KBSource[] }>("/settings/kb", { sources }),
   // Run a real "test" search with the given (or saved) config to verify it works.
   testWebSearch: (patch: {
     web_search_backend?: string;
