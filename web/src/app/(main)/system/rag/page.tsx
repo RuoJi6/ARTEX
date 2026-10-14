@@ -69,7 +69,7 @@ export default function RAGPage() {
     api
       .kbSources()
       .then((ss) => setSources(ss))
-      .catch(() => {})
+      .catch(() => undefined)
       .finally(() => setLoaded(true));
   }, []);
   React.useEffect(() => {
@@ -270,12 +270,15 @@ export default function RAGPage() {
                 <Badge variant="outline" className="uppercase">
                   {s.type}
                 </Badge>
-                <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                <div className="ml-auto flex items-center gap-2">
                   <Button
                     size="icon"
                     variant="outline"
                     aria-label="删除"
-                    onClick={() => removeSource(s)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void removeSource(s);
+                    }}
                   >
                     <Trash2Icon className="text-destructive" />
                   </Button>

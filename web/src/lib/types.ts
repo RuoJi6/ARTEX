@@ -1227,7 +1227,7 @@ export interface KBSource {
   type: string; // 后端类型，当前仅 "dify"
   api_key?: string; // 写时填；读时恒为空
   api_key_set?: boolean; // 读时告知是否已设置密钥
-  fields: Record<string, unknown>; // 后端专属字段（dify: base_url/dataset_id/timeout/min_score）
+  fields?: Record<string, unknown>; // 后端专属字段（dify: base_url/dataset_id/timeout/min_score）
 }
 
 // ---- Skills ----
