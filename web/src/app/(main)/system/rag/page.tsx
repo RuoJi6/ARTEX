@@ -6,6 +6,16 @@ import { DatabaseIcon, PlusIcon, Trash2Icon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,6 +75,7 @@ export default function RAGPage() {
   const [editing, setEditing] = React.useState<KBSource | null>(null); // null = add
   const [form, setForm] = React.useState<KBFormState>(emptyForm);
   const [saving, setSaving] = React.useState(false);
+  const [deleteTarget, setDeleteTarget] = React.useState<KBSource | null>(null); // null = 未弹删除确认
 
   const load = React.useCallback(() => {
     api
@@ -148,6 +159,7 @@ export default function RAGPage() {
       const next = sources.filter((x) => x.name !== s.name);
       await api.saveKBSources(next);
       toast.success(`已删除：${s.name}`);
+      setDeleteTarget(null);
       setOpen(false);
       load();
     } catch (e) {
@@ -298,7 +310,7 @@ export default function RAGPage() {
                     aria-label="删除"
                     onClick={(e) => {
                       e.stopPropagation();
-                      void removeSource(s);
+                      setDeleteTarget(s);
                     }}
                   >
                     <Trash2Icon className="text-destructive" />
@@ -339,6 +351,21 @@ export default function RAGPage() {
           </div>
         </SheetContent>
       </Sheet>
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除知识源「{deleteTarget?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>
+              删除后该源不再参与 knowledge_search 检索。此操作不可撤销，但 API Key 等配置不会保留，需重新添加。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteTarget && void removeSource(deleteTarget)}>删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
