@@ -14,6 +14,16 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -457,6 +467,7 @@ export default function InterceptPage() {
   const [loading, setLoading] = React.useState(true);
   const [open, setOpen]       = React.useState(false);
   const [editing, setEditing] = React.useState<InterceptRule | null>(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<InterceptRule | null>(null); // null = 未弹删除确认
   const [form, setForm]       = React.useState<RuleForm>(defaultForm());
   const [saving, setSaving]   = React.useState(false);
   const [regexErr, setRegexErr] = React.useState("");
@@ -558,6 +569,7 @@ export default function InterceptPage() {
     try {
       await api.deleteInterceptRule(id);
       toast.success("规则已删除");
+      setDeleteTarget(null);
       load();
     } catch (e) {
       toast.error((e as Error).message);
@@ -751,7 +763,7 @@ export default function InterceptPage() {
                         <Button
                           size="icon" variant="ghost"
                           className="h-7 w-7 text-destructive hover:text-destructive"
-                          onClick={() => handleDelete(rule.id)}
+                          onClick={() => setDeleteTarget(rule)}
                         >
                           <Trash2Icon className="h-3.5 w-3.5" />
                         </Button>
@@ -993,6 +1005,19 @@ export default function InterceptPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除拦截规则「{deleteTarget?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>删除后该规则不再拦截 Agent 工具调用。此操作不可撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteTarget && void handleDelete(deleteTarget.id)}>删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
