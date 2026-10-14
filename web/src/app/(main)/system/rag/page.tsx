@@ -40,6 +40,7 @@ type KBFormState = {
   base_url: string;
   dataset_id: string;
   api_key: string;
+  api_version: string;
   timeout: string;
   min_score: string;
 };
@@ -50,6 +51,7 @@ const emptyForm: KBFormState = {
   base_url: "",
   dataset_id: "",
   api_key: "",
+  api_version: "datasets",
   timeout: "",
   min_score: "",
 };
@@ -62,6 +64,7 @@ function sourceToForm(s: KBSource): KBFormState {
     base_url: String(f.base_url ?? ""),
     dataset_id: String(f.dataset_id ?? ""),
     api_key: "",
+    api_version: String(f.api_version ?? "datasets"),
     timeout: String(f.timeout ?? ""),
     min_score: f.min_score != null ? String(f.min_score) : "",
   };
@@ -122,6 +125,7 @@ export default function RAGPage() {
       base_url: form.base_url.trim(),
       dataset_id: form.dataset_id.trim(),
     };
+    if (form.api_version) fields.api_version = form.api_version;
     if (form.timeout.trim()) fields.timeout = form.timeout.trim();
     const score = Number(form.min_score);
     if (form.min_score.trim() && !Number.isNaN(score)) fields.min_score = score;
@@ -226,6 +230,18 @@ export default function RAGPage() {
             value={form.dataset_id}
             onChange={(e) => setF({ dataset_id: e.target.value })}
           />
+        </div>
+        <div className="grid gap-2">
+          <Label>API 版本</Label>
+          <Select value={form.api_version} onValueChange={(v) => setF({ api_version: v })}>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="datasets">datasets（老版 Dataset API）</SelectItem>
+              <SelectItem value="knowledge">knowledge（新版 Knowledge API）</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div className="grid gap-2">
           <Label htmlFor="kb-api-key">API Key</Label>
