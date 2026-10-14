@@ -15,6 +15,16 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -793,6 +803,7 @@ export default function LLMPage() {
   // 「编辑 X」闪成「新建」。editing = null 表示新建。
   const [editOpen, setEditOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<LLMProfile | null>(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<LLMProfile | null>(null); // null = 未弹删除确认
   const openEditor = React.useCallback((p: LLMProfile | null) => {
     setEditing(p);
     setEditOpen(true);
@@ -844,6 +855,7 @@ export default function LLMPage() {
     try {
       await api.deleteLLMProfile(p.id);
       toast.success(`已删除：${p.name}`);
+      setDeleteTarget(null);
       await load();
     } catch (e) {
       toast.error(`删除失败：${(e as Error).message}`);
@@ -960,7 +972,7 @@ export default function LLMPage() {
                         aria-label="删除配置"
                         onClick={(e) => {
                           e.stopPropagation();
-                          void remove(p);
+                          setDeleteTarget(p);
                         }}
                       >
                         <Trash2Icon className="text-destructive" />
@@ -985,6 +997,19 @@ export default function LLMPage() {
 
       <ProfileSheet profile={editing} open={editOpen} onOpenChange={setEditOpen} onSaved={() => void load()} />
       <PoolSheet open={poolOpen} onOpenChange={setPoolOpen} pool={pool} onReload={loadPool} />
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除 LLM 配置「{deleteTarget?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>删除后使用该配置的 Agent/任务将回落到其它可用配置。此操作不可撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteTarget && void remove(deleteTarget)}>删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
