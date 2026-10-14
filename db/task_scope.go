@@ -299,6 +299,20 @@ func (s *AssetStore) CoverageEnabled(taskID int64) bool {
 	return enabled
 }
 
+// KBEnabled reports whether a task has the external knowledge base (RAG) turned on
+// (tasks.kb_enabled). Missing row / error → true (fail open to the default), so
+// unknown/legacy tasks keep the historical behavior. taskID<=0 → true.
+func (s *AssetStore) KBEnabled(taskID int64) bool {
+	if taskID <= 0 {
+		return true
+	}
+	var enabled bool
+	if err := s.db.QueryRow(`SELECT COALESCE(kb_enabled,true) FROM tasks WHERE id=$1`, taskID).Scan(&enabled); err != nil {
+		return true
+	}
+	return enabled
+}
+
 // task_scope→assets match predicate, reused by the count / by-type / untested queries. $1=taskID.
 const covTargetCTE = `
 target AS (
