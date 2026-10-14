@@ -23,9 +23,14 @@ LDFLAGS := -s -w -buildid= -X main.version=$(VERSION)
 WEB_OUT   := web/out
 EMBED_DIR := server/webui/dist
 
+# Docker 镜像构建。IMAGE 是镜像名/tag；TARGETARCH 是目标架构（Dockerfile 里
+# COPY dist/${TARGETARCH}/artex，BuildKit 会按宿主机架构自动选 amd64/arm64）。
+IMAGE      ?= artex:local
+TARGETARCH ?= amd64
+
 .DEFAULT_GOAL := help
 
-.PHONY: help build build-web build-backend dev test install update release reset-password clean
+.PHONY: help build build-web build-backend docker dev test install update release reset-password clean
 
 # 构建内嵌前端的单二进制（当前平台）
 build: build-web
@@ -42,6 +47,15 @@ build-web:
 # 只编译后端（不内嵌前端，dev 模式用）
 build-backend:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/artex
+
+# 构建 Docker 镜像（本地单架构，默认 amd64）。等价 CI docker job 的本地简化版：
+# 前端静态 → 编译 linux 二进制到 dist/<arch>/artex → docker build 拷进镜像。
+# arm64 机器用：make docker TARGETARCH=arm64
+docker: build-web
+	mkdir -p dist/$(TARGETARCH)
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(TARGETARCH) $(GO) build -tags embedui -trimpath \
+	  -ldflags "$(LDFLAGS)" -o dist/$(TARGETARCH)/artex ./cmd/artex
+	docker build -t $(IMAGE) .
 
 # 开发模式（后端 + 代理 + 前端 dev，见 dev.sh）
 dev:
@@ -77,6 +91,7 @@ help:
 	@echo "  make build            构建内嵌前端单二进制（当前平台）"
 	@echo "  make build-web        只导出前端静态产物到 server/webui/dist"
 	@echo "  make build-backend    只编译后端（不内嵌前端，dev 用）"
+	@echo "  make docker           构建 Docker 镜像（默认 amd64，IMAGE/TARGETARCH 可覆盖）"
 	@echo "  make dev              开发模式（dev.sh）"
 	@echo "  make test             运行全部测试"
 	@echo "  make install          首次安装（install.sh）"
