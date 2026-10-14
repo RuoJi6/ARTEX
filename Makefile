@@ -23,10 +23,10 @@ LDFLAGS := -s -w -buildid= -X main.version=$(VERSION)
 WEB_OUT   := web/out
 EMBED_DIR := server/webui/dist
 
-# Docker 镜像构建。IMAGE 是镜像名/tag；TARGETARCH 是目标架构（Dockerfile 里
-# COPY dist/${TARGETARCH}/artex，BuildKit 会按宿主机架构自动选 amd64/arm64）。
+# Docker 镜像构建。IMAGE 是镜像名/tag；TARGETARCH 自动探测宿主机架构（x86_64→amd64、
+# aarch64→arm64），与 Dockerfile 的 COPY dist/${TARGETARCH}/artex 及 BuildKit 原生构建对齐。
 IMAGE      ?= artex:local
-TARGETARCH ?= amd64
+TARGETARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 
 .DEFAULT_GOAL := help
 
@@ -91,7 +91,7 @@ help:
 	@echo "  make build            构建内嵌前端单二进制（当前平台）"
 	@echo "  make build-web        只导出前端静态产物到 server/webui/dist"
 	@echo "  make build-backend    只编译后端（不内嵌前端，dev 用）"
-	@echo "  make docker           构建 Docker 镜像（默认 amd64，IMAGE/TARGETARCH 可覆盖）"
+	@echo "  make docker           构建 Docker 镜像（自动探测架构，IMAGE/TARGETARCH 可覆盖）"
 	@echo "  make dev              开发模式（dev.sh）"
 	@echo "  make test             运行全部测试"
 	@echo "  make install          首次安装（install.sh）"
