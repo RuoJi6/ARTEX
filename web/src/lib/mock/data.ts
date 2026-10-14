@@ -20,6 +20,7 @@ import type {
   InterceptAudit,
   InterceptPending,
   InterceptRule,
+  KBSource,
   LLMPoolStatus,
   LLMProfile,
   LLMTask,
@@ -3210,6 +3211,22 @@ export const mcpToolsById: Record<number, MCPTool[]> = {
     { name: "browser_snapshot", description: "抓取可访问性快照" },
   ],
 };
+
+// ── 知识库 (RAG) ─────────────────────────────────────────────────────────────
+export const kbSources: KBSource[] = [
+  {
+    name: "cve",
+    type: "dify",
+    api_key_set: true,
+    fields: { base_url: "http://dify:8080", dataset_id: "cve-knowledge", timeout: "5s", min_score: 0.65 },
+  },
+  {
+    name: "internal",
+    type: "dify",
+    api_key_set: false,
+    fields: { base_url: "http://dify:8080", dataset_id: "internal-docs" },
+  },
+];
 
 // ── Skills ───────────────────────────────────────────────────────────────────
 export const skills: SkillItem[] = [
