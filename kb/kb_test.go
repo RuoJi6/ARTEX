@@ -2,6 +2,7 @@ package kb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -116,6 +117,51 @@ func TestDifySearch(t *testing.T) {
 func TestDifyMissingConfig(t *testing.T) {
 	if _, err := Build("dify", map[string]any{"base_url": "http://x"}); err == nil {
 		t.Fatal("want error for missing api_key/dataset_id")
+	}
+}
+
+func TestDifyKnowledgeAPI(t *testing.T) {
+	t.Setenv(allowLocalEnv, "1")
+	const respJSON = `{"query":{"content":"jwt"},"records":[
+		{"segment":{"id":"s1","content":"jwt bypass","document":{"name":"doc1"}},"score":0.9}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/knowledge/retrieve" {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		ids, ok := body["dataset_ids"].([]any)
+		if !ok || len(ids) != 1 || ids[0] != "ds1" {
+			t.Errorf("dataset_ids = %#v, want [ds1]", body["dataset_ids"])
+		}
+		_, _ = w.Write([]byte(respJSON))
+	}))
+	defer srv.Close()
+
+	s, err := Build("dify", map[string]any{
+		"base_url": srv.URL, "api_key": "secret", "dataset_id": "ds1", "api_version": "knowledge",
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	hits, err := s.Search(context.Background(), "jwt", 5)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Content != "jwt bypass" {
+		t.Fatalf("unexpected hits: %+v", hits)
+	}
+}
+
+func TestDifyBadAPIVersion(t *testing.T) {
+	if _, err := Build("dify", map[string]any{
+		"base_url": "http://x", "api_key": "k", "dataset_id": "d", "api_version": "nope",
+	}); err == nil {
+		t.Fatal("want error for unsupported api_version")
 	}
 }
 
