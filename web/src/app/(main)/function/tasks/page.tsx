@@ -3098,7 +3098,7 @@ function CreateTaskSheet({
   const [heartbeatMin, setHeartbeatMin] = React.useState("10"); // planner 心跳(分钟);默认10,下限10(与后端一致)
   const [seedFirstIntent, setSeedFirstIntent] = React.useState(false); // 创建时下发种子意图,worker 免等首轮 planner 直接开跑;默认关闭,走标准先规划再执行
   const [coverageEnabled, setCoverageEnabled] = React.useState(true); // 资产覆盖度功能;默认开。关闭=不计算/展示覆盖度、不累积范围、隐藏范围类工具(company 关联不受影响)
-  const [kbEnabled, setKbEnabled] = React.useState(true); // 外部知识库(RAG);默认开。关闭=本任务不注入 knowledge_search 工具与检索引导提示词
+  const [kbEnabled, setKbEnabled] = React.useState(false); // 外部知识库(RAG);默认关。开启=本任务注入 knowledge_search 工具与检索引导提示词
   const [interceptRules, setInterceptRules] = React.useState<AssetInterceptRuleInput[]>([]); // 任务级资产拦截规则(仅本任务生效,不进全局表)
   const [scheduleEnabled, setScheduleEnabled] = React.useState(false);
   const [schedule, setSchedule] = React.useState<ScheduleInput>({
@@ -3197,7 +3197,7 @@ function CreateTaskSheet({
       setHeartbeatMin("10");
       setSeedFirstIntent(false);
       setCoverageEnabled(true);
-      setKbEnabled(true);
+      setKbEnabled(false);
       setInterceptRules([]);
       setScheduleEnabled(false);
       setSchedule({
@@ -3562,8 +3562,8 @@ function CreateTaskSheet({
                     外部知识库（RAG）
                   </label>
                   <p className="text-muted-foreground text-xs">
-                    默认开启：给本任务的 worker/planner 注入 knowledge_search 工具与检索引导，遇到具体技术点可查外部知识库。
-                    关闭后本任务不注入知识库相关工具与提示词（全局配置的知识源仍在，只是本任务不用）。
+                    默认关闭：开启后才给本任务的 worker/planner 注入 knowledge_search 工具与检索引导，遇到具体技术点可查外部知识库。
+                    关闭时本任务不注入知识库相关工具与提示词（全局配置的知识源仍在，只是本任务不用）。
                   </p>
                 </div>
               </CollapsibleContent>

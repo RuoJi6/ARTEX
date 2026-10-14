@@ -524,7 +524,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     timeout_seconds INTEGER NOT NULL DEFAULT 0,
     plan_heartbeat_seconds INTEGER NOT NULL DEFAULT 300,
     coverage_enabled BOOLEAN NOT NULL DEFAULT true,
-    kb_enabled      BOOLEAN NOT NULL DEFAULT true,
+    kb_enabled      BOOLEAN NOT NULL DEFAULT false,
     pinned_at      TIMESTAMPTZ,
     first_run_at   TIMESTAMPTZ,
     deadline_at    TIMESTAMPTZ,
@@ -547,10 +547,10 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS queued BOOLEAN NOT NULL DEFAULT false
 -- 给 agent 开放 add_task_scope/list_untested_assets;false=全部关闭(见 task_scope.go)。
 -- 存量任务默认 true 保持原行为;company 关联(task_scope kind=company)不受此开关影响。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS coverage_enabled BOOLEAN NOT NULL DEFAULT true;
--- 外部知识库(RAG)任务级开关;补旧库。true(默认)=给本任务的 worker/planner 注入
--- knowledge_search 工具与检索引导提示词;false=关闭(见 db/task_scope.go KBEnabled)。
--- 存量任务默认 true 保持原行为。
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS kb_enabled BOOLEAN NOT NULL DEFAULT true;
+-- 外部知识库(RAG)任务级开关;补旧库。false(默认)=不注入;true=给本任务的 worker/planner
+-- 注入 knowledge_search 工具与检索引导提示词(见 db/task_scope.go KBEnabled)。
+-- 存量任务默认 false 保持关;需在创建任务时显式勾选开启。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS kb_enabled BOOLEAN NOT NULL DEFAULT false;
 -- queued_at makes admission FIFO reflect the actual enqueue order rather than the
 -- task creation order. queue_mode distinguishes first bootstrap from resuming an
 -- exploration that already owns goals/history.

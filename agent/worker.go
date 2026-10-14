@@ -364,7 +364,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	tsx.SetTaskID(taskID)
 	coverageEnabled := as == nil || as.CoverageEnabled(taskID)
 	tsx.SetCoverageEnabled(coverageEnabled)
-	kbEnabled := as == nil || as.KBEnabled(taskID)
+	kbEnabled := as != nil && as.KBEnabled(taskID) // 默认关;仅任务显式开启才注入
 	if as != nil {
 		tsx.SetAssetStore(as, as.Companies())
 	}
