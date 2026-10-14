@@ -7,6 +7,16 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,6 +53,7 @@ export default function NotifyPage() {
 
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<NotificationChannel | null>(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<NotificationChannel | null>(null); // null = 未弹删除确认
   const [form, setForm] = React.useState<ChannelForm>(emptyForm("dingtalk"));
   const [saving, setSaving] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
@@ -214,6 +225,7 @@ export default function NotifyPage() {
     try {
       await api.notifyDeleteChannel(ch.id);
       toast.success(`已删除：${ch.name}`);
+      setDeleteTarget(null);
       setOpen(false);
       load();
     } catch (e) {
@@ -383,9 +395,7 @@ export default function NotifyPage() {
                         aria-label="删除"
                         onClick={(e) => {
                           e.stopPropagation();
-                          // void 显式丢弃 Promise：removeChannel 自己 catch 并 toast，
-                          // 这里不需要 await（onClick 不是 async）。
-                          void removeChannel(ch);
+                          setDeleteTarget(ch);
                         }}
                       >
                         <Trash2Icon className="text-destructive" />
@@ -600,6 +610,19 @@ export default function NotifyPage() {
           </div>
         </SheetContent>
       </Sheet>
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除通知渠道「{deleteTarget?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>删除后该渠道不再推送通知。此操作不可撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteTarget && void removeChannel(deleteTarget)}>删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
