@@ -17,6 +17,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import type { KBSource } from "@/lib/types";
 
@@ -116,6 +117,7 @@ export default function RAGPage() {
     return {
       name,
       type: form.type,
+      enabled: editing ? editing.enabled !== false : true,
       api_key: form.api_key.trim() || undefined,
       fields,
     };
@@ -150,6 +152,17 @@ export default function RAGPage() {
       load();
     } catch (e) {
       toast.error("删除失败：" + (e as Error).message);
+    }
+  }
+
+  async function toggleEnabled(s: KBSource) {
+    const next = sources.map((x) => (x.name === s.name ? { ...x, enabled: !(x.enabled !== false) } : x));
+    try {
+      await api.saveKBSources(next);
+      toast.success(`${s.name} 已${s.enabled !== false ? "禁用" : "启用"}`);
+      load();
+    } catch (e) {
+      toast.error("操作失败：" + (e as Error).message);
     }
   }
 
@@ -271,6 +284,12 @@ export default function RAGPage() {
                   {s.type}
                 </Badge>
                 <div className="ml-auto flex items-center gap-2">
+                  <Switch
+                    checked={s.enabled !== false}
+                    onClick={(e) => e.stopPropagation()}
+                    onCheckedChange={() => void toggleEnabled(s)}
+                    aria-label="启用"
+                  />
                   <Button
                     size="icon"
                     variant="outline"
