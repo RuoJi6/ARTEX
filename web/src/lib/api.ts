@@ -307,6 +307,7 @@ export const api = {
     seedFirstIntent?: boolean;
     planHeartbeatSeconds?: number;
     coverageEnabled?: boolean;
+    kbEnabled?: boolean;
     interceptRules?: AssetInterceptRuleInput[];
     schedule?: ScheduleInput;
   }) =>
@@ -322,6 +323,7 @@ export const api = {
       seed_first_intent: input.seedFirstIntent ?? false,
       plan_heartbeat_seconds: input.planHeartbeatSeconds ?? 0, // 0 = 后端归一到默认 600(10min)
       coverage_enabled: input.coverageEnabled ?? true, // 默认开;false=关闭资产覆盖度功能
+      kb_enabled: input.kbEnabled ?? true, // 默认开;false=关闭外部知识库(RAG)注入
       intercept_rules: input.interceptRules ?? [], // 任务级资产拦截规则
       schedule: input.schedule ? schedulePayload(input.schedule) : undefined,
     }),
