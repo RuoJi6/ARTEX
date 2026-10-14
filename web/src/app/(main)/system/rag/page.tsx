@@ -156,12 +156,14 @@ export default function RAGPage() {
   }
 
   async function toggleEnabled(s: KBSource) {
-    const next = sources.map((x) => (x.name === s.name ? { ...x, enabled: !(x.enabled !== false) } : x));
+    const enabled = s.enabled === false; // 目标状态：当前默认启用(undefined)→关闭；false→开启
+    const next = sources.map((x) => (x.name === s.name ? { ...x, enabled } : x));
+    setSources(next); // 乐观更新：开关立即翻转，不等网络返回
     try {
       await api.saveKBSources(next);
-      toast.success(`${s.name} 已${s.enabled !== false ? "禁用" : "启用"}`);
-      load();
+      toast.success(`${s.name} 已${enabled ? "启用" : "禁用"}`);
     } catch (e) {
+      setSources(sources); // 失败回滚
       toast.error("操作失败：" + (e as Error).message);
     }
   }
