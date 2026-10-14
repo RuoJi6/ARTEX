@@ -2254,7 +2254,7 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/settings/basic-auth" && m === "GET") return { enabled: false, username: "", password_set: false };
   if (path === "/settings/basic-auth" && m === "PUT")
     throw new Error("演示模式不支持修改 HTTP Basic Auth，请在实际部署中配置");
-  if (path === "/settings/kb" && m === "GET") return { sources: mockKBSources };
+  if (path === "/settings/kb" && m === "GET") return { sources: [...mockKBSources] };
   if (path === "/settings/kb" && m === "PUT") {
     const next = (b.sources as KBSource[]) ?? [];
     mockKBSources.splice(0, mockKBSources.length, ...next);
