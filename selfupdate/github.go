@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,20 +48,50 @@ type Asset struct {
 	Size int64  `json:"size"`
 }
 
-// NewClient 构造一个只认 GitHub 域名的 HTTP 客户端。proxy 为空则直连。
-//
-// 刻意不复用默认 Transport：升级链路必须强制走 TLS 且校验证书，不能被别处
-// 设置的 InsecureSkipVerify 之类影响到。
-func NewClient(proxy string) *http.Client {
+// ParseProxy validates an optional update proxy without including credentials in errors.
+func ParseProxy(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("代理地址格式无效")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, fmt.Errorf("代理协议须为 http、https、socks5 或 socks5h")
+	}
+	if u.Hostname() == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("代理地址须包含主机，且不能包含路径、查询或片段")
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return nil, fmt.Errorf("代理端口须在 1–65535 之间")
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return nil, fmt.Errorf("代理端口不能为空")
+	}
+	return u, nil
+}
+
+// NewClient validates the proxy before opening any connection. Empty means direct,
+// regardless of HTTP_PROXY / HTTPS_PROXY in the process environment.
+func NewClient(proxy string) (*http.Client, error) {
+	pu, err := ParseProxy(proxy)
+	if err != nil {
+		return nil, err
+	}
 	tr := &http.Transport{
 		ForceAttemptHTTP2:   true,
 		TLSHandshakeTimeout: 15 * time.Second,
 	}
-	if p := strings.TrimSpace(proxy); p != "" {
-		if pu, err := url.Parse(p); err == nil {
-			tr.Proxy = http.ProxyURL(pu)
-		}
+	if pu != nil {
+		tr.Proxy = http.ProxyURL(pu)
 	}
+
 	return &http.Client{
 		Transport: tr,
 		Timeout:   30 * time.Minute, // 下载整包，不能按请求级超时卡死
@@ -70,7 +101,7 @@ func NewClient(proxy string) *http.Client {
 			}
 			return checkURL(req.URL)
 		},
-	}
+	}, nil
 }
 
 // checkURL 强制 https + 域名白名单。
@@ -98,7 +129,7 @@ func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("访问 GitHub 失败（可在系统设置里配置全局代理）: %w", err)
+		return nil, fmt.Errorf("访问 GitHub 失败（可在版本与更新中配置更新代理）: %w", err)
 	}
 	defer resp.Body.Close()
 

@@ -106,6 +106,7 @@ import type {
   TrafficHost,
   TrafficResp,
   UpdateCheck,
+  UpdateSettings,
   UsageStats,
   WorkspaceFile,
   WorkspaceListing,
@@ -1410,6 +1411,8 @@ export const api = {
   // 后端对 GitHub 的查询结果有 30 分钟缓存（未认证的 GitHub API 是 60 次/小时/IP，
   // 顶栏每次整页加载都会查一次，不缓存会很快耗光配额）。force=true 强制回源，
   // 留给用户显式点「检查更新」时用。
+  getUpdateSettings: () => get<UpdateSettings>("/update/settings"),
+  saveUpdateSettings: (settings: UpdateSettings) => put<UpdateSettings>("/update/settings", settings),
   checkUpdate: (force = false) => get<UpdateCheck>(`/update/check${force ? "?force=1" : ""}`),
   // 202 即返回，实际下载在后台跑，进度走 /api/update/stream。
   applyUpdate: () => post<{ ok: boolean; target: string }>(`/update/apply`),

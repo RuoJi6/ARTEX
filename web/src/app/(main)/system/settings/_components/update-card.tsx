@@ -15,9 +15,11 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { api, openSSE } from "@/lib/api";
-import type { UpdateCheck, UpdateProgress } from "@/lib/types";
+import type { UpdateCheck, UpdateProgress, UpdateSettings } from "@/lib/types";
 
 /** 等待新版本上线的最长时间。一次升级要经过三次进程启动（暂存 → 换装 → 新版），
  *  每次都是秒级，三分钟足够覆盖慢磁盘和 Docker 容器重建。 */
@@ -45,6 +47,32 @@ export function UpdateCard() {
   const [restarting, setRestarting] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
 
+  const [network, setNetwork] = React.useState<UpdateSettings | null>(null);
+  const [savedNetwork, setSavedNetwork] = React.useState<UpdateSettings | null>(null);
+  const [savingNetwork, setSavingNetwork] = React.useState(false);
+  const [networkError, setNetworkError] = React.useState("");
+  const streamRef = React.useRef<ReturnType<typeof openSSE> | null>(null);
+  const networkDirty = network?.proxy !== savedNetwork?.proxy;
+
+  React.useEffect(() => {
+    let active = true;
+    api
+      .getUpdateSettings()
+      .then((settings) => {
+        if (!active) return;
+        setNetwork(settings);
+        setSavedNetwork(settings);
+      })
+      .catch((e) => {
+        if (active) setNetworkError("读取更新网络设置失败：" + (e as Error).message);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  React.useEffect(() => () => streamRef.current?.close(), []);
+
   // quiet 同时决定要不要绕过后端缓存：进页面时的自动检查用缓存（顶栏刚查过），
   // 用户手动点「检查更新」则强制回源，否则刚发布的版本要等缓存过期才看得到。
   const check = React.useCallback((quiet = false) => {
@@ -68,6 +96,25 @@ export function UpdateCard() {
   React.useEffect(() => {
     check(true);
   }, [check]);
+
+  const saveNetwork = async () => {
+    if (!network) return;
+    setSavingNetwork(true);
+    setNetworkError("");
+    try {
+      const settings = await api.saveUpdateSettings({
+        proxy: network.proxy,
+      });
+      setNetwork(settings);
+      setSavedNetwork(settings);
+      toast.success("更新网络设置已保存");
+      check();
+    } catch (e) {
+      setNetworkError((e as Error).message);
+    } finally {
+      setSavingNetwork(false);
+    }
+  };
 
   // 轮询 /api/health 直到版本号变化。
   //
@@ -94,12 +141,14 @@ export function UpdateCard() {
       }
     }
     setRestarting(false);
+    setBusy(false);
     toast.error("等待服务重启超时。请检查后端日志，或确认 artex 是通过 start.sh / start.bat 启动的。");
   }, []);
 
   // 订阅更新进度。SSE 不走 Next 的 /api 重写（那层会缓冲，事件推不出来）。
   const openStream = React.useCallback(
     (fromVersion: string) => {
+      streamRef.current?.close();
       const es = openSSE("/api/update/stream");
       es.onmessage = (ev) => {
         let p: UpdateProgress;
@@ -120,10 +169,11 @@ export function UpdateCard() {
           void waitForNewVersion(fromVersion);
         }
       };
+      streamRef.current = es;
       es.onerror = () => {
         // 进程退出时 SSE 必然断开。如果已经进入等待重启，这属于正常现象，
         // 交给 /api/health 轮询继续判定即可。
-        es.close();
+        // EventSource 自动重连，恢复服务端保存的当前进度。
       };
       return es;
     },
@@ -145,13 +195,16 @@ export function UpdateCard() {
 
     setBusy(true);
     setProgress({ phase: "downloading", percent: 0, message: "准备中…" });
-    const es = openStream(from);
-    api.applyUpdate().catch((e) => {
-      es.close();
-      setBusy(false);
-      setProgress(null);
-      toast.error("启动更新失败：" + (e as Error).message);
-    });
+    api
+      .applyUpdate()
+      .then(() => {
+        openStream(from);
+      })
+      .catch((e) => {
+        setBusy(false);
+        setProgress(null);
+        toast.error("启动更新失败：" + (e as Error).message);
+      });
   };
 
   const doRollback = () => {
@@ -193,7 +246,47 @@ export function UpdateCard() {
         </CardTitle>
         <CardDescription>从 GitHub 检查并安装新版本。更新会重启程序，正在运行的任务会被中断。</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="flex flex-col gap-4">
+        <FieldGroup>
+          <Field data-invalid={!!networkError} data-disabled={busy || restarting || savingNetwork || !network}>
+            <FieldLabel htmlFor="update-proxy" className="text-sm font-normal text-muted-foreground">
+              更新代理（可选）
+            </FieldLabel>
+            <div className="flex items-center gap-2">
+              <Input
+                id="update-proxy"
+                autoComplete="off"
+                placeholder="http://host:port 或 socks5://host:port（留空=直连）"
+                value={network?.proxy ?? ""}
+                disabled={busy || restarting || savingNetwork || !network}
+                aria-invalid={!!networkError}
+                onChange={(e) =>
+                  network &&
+                  setNetwork({
+                    proxy: e.target.value,
+                  })
+                }
+              />
+              <Button
+                type="button"
+                onClick={() => void saveNetwork()}
+                disabled={!network || savingNetwork || checking || busy || restarting}
+              >
+                {savingNetwork ? "保存中…" : "保存"}
+              </Button>
+            </div>
+            <FieldDescription className="text-xs">
+              独立出口代理，仅用于检查版本和下载更新，支持 HTTP / HTTPS / SOCKS5。留空保存后直连；不影响任务、网络搜索或
+              LLM 的代理。
+            </FieldDescription>
+            {networkDirty && <p className="text-xs text-muted-foreground">修改尚未保存，保存后将自动检查更新。</p>}
+            {networkError && (
+              <p role="alert" className="text-xs text-destructive">
+                {networkError}
+              </p>
+            )}
+          </Field>
+        </FieldGroup>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">当前版本</span>
           <Badge variant="secondary" className="font-mono">
@@ -238,7 +331,7 @@ export function UpdateCard() {
           <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
             无法连接 GitHub：{info.error}
-            {"　"}可在上方配置全局代理后重试。
+            {"　"}可配置更新代理或切换为直连后重试。
           </p>
         )}
 
@@ -274,6 +367,12 @@ export function UpdateCard() {
           </p>
         )}
 
+        {progress?.phase === "failed" && (
+          <p role="alert" className="text-xs text-destructive">
+            更新失败：{progress.error || progress.message}
+          </p>
+        )}
+
         {showProgress && (
           <div className="space-y-1.5">
             <Progress value={pct} className={downloading ? undefined : "animate-pulse"} />
@@ -284,14 +383,29 @@ export function UpdateCard() {
         )}
 
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={() => check(false)} disabled={checking || busy || restarting}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => check(false)}
+            disabled={checking || busy || restarting || networkDirty || savingNetwork || !network}
+          >
             <RefreshCwIcon className={checking ? "size-4 animate-spin" : "size-4"} />
             检查更新
           </Button>
           <Button
             size="sm"
             onClick={doUpdate}
-            disabled={busy || restarting || !info?.has_update || info?.asset_available === false}
+            disabled={
+              checking ||
+              networkDirty ||
+              savingNetwork ||
+              !network ||
+              busy ||
+              restarting ||
+              !!info?.error ||
+              !info?.has_update ||
+              info?.asset_available === false
+            }
           >
             <DownloadIcon className="size-4" />
             {info?.has_update ? `更新到 ${info.latest}` : "立即更新"}

@@ -26,7 +26,7 @@ func TestReleaseCacheServesFromCache(t *testing.T) {
 	})
 
 	for range 5 {
-		rel, err := c.get(t.Context(), nil, false)
+		rel, err := c.get(t.Context(), nil, false, "")
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}
@@ -46,11 +46,11 @@ func TestReleaseCacheForceBypasses(t *testing.T) {
 		return &selfupdate.Release{TagName: "v0.3.8"}, nil
 	})
 
-	if _, err := c.get(t.Context(), nil, false); err != nil {
+	if _, err := c.get(t.Context(), nil, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	// 用户点「检查更新」必须拿到实时结果，否则刚发布的版本要等缓存过期才看得见。
-	if _, err := c.get(t.Context(), nil, true); err != nil {
+	if _, err := c.get(t.Context(), nil, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -65,12 +65,12 @@ func TestReleaseCacheExpiresAfterTTL(t *testing.T) {
 		return &selfupdate.Release{TagName: "v0.3.8"}, nil
 	})
 
-	if _, err := c.get(t.Context(), nil, false); err != nil {
+	if _, err := c.get(t.Context(), nil, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	// 把落库时间往前拨到刚过期，模拟 TTL 到点。
 	c.at = time.Now().Add(-releaseTTL - time.Second)
-	if _, err := c.get(t.Context(), nil, false); err != nil {
+	if _, err := c.get(t.Context(), nil, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -85,11 +85,11 @@ func TestReleaseCacheUsesShorterTTLForErrors(t *testing.T) {
 		return nil, errors.New("github 不可达")
 	})
 
-	if _, err := c.get(t.Context(), nil, false); err == nil {
+	if _, err := c.get(t.Context(), nil, false, ""); err == nil {
 		t.Fatal("期望返回错误")
 	}
 	// 失败结果也要缓存一会儿，否则 GitHub 不可达时每次页面加载都白等一次超时。
-	if _, err := c.get(t.Context(), nil, false); err == nil {
+	if _, err := c.get(t.Context(), nil, false, ""); err == nil {
 		t.Fatal("期望返回错误")
 	}
 	if calls != 1 {
@@ -101,7 +101,7 @@ func TestReleaseCacheUsesShorterTTLForErrors(t *testing.T) {
 		t.Fatalf("错误 TTL(%v) 必须短于成功 TTL(%v)", releaseErrTTL, releaseTTL)
 	}
 	c.at = time.Now().Add(-releaseErrTTL - time.Second)
-	if _, err := c.get(t.Context(), nil, false); err == nil {
+	if _, err := c.get(t.Context(), nil, false, ""); err == nil {
 		t.Fatal("期望返回错误")
 	}
 	if calls != 2 {
@@ -114,7 +114,7 @@ func TestReleaseCacheDoesNotPoisonOnCallerCancel(t *testing.T) {
 	c := newTestCache(func(ctx context.Context, _ *http.Client) (*selfupdate.Release, error) {
 		return good, nil
 	})
-	if _, err := c.get(t.Context(), nil, false); err != nil {
+	if _, err := c.get(t.Context(), nil, false, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -127,7 +127,7 @@ func TestReleaseCacheDoesNotPoisonOnCallerCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.get(ctx, nil, false); err == nil {
+	if _, err := c.get(ctx, nil, false, ""); err == nil {
 		t.Fatal("调用方已取消时应把错误透传给它")
 	}
 
@@ -145,11 +145,54 @@ func TestReleaseCacheDoesNotPoisonOnCallerCancel(t *testing.T) {
 	c.fetch = func(context.Context, *http.Client) (*selfupdate.Release, error) {
 		return good, nil
 	}
-	rel, err := c.get(t.Context(), nil, false)
+	rel, err := c.get(t.Context(), nil, false, "")
 	if err != nil {
 		t.Fatalf("取消之后的正常请求不应报错: %v", err)
 	}
 	if rel == nil || rel.TagName != "v0.3.8" {
 		t.Fatalf("应拿到正常结果，得到 %+v", rel)
+	}
+}
+
+func TestReleaseCacheChangesWithNetwork(t *testing.T) {
+	calls := 0
+	c := newTestCache(func(context.Context, *http.Client) (*selfupdate.Release, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("direct unavailable")
+		}
+		return &selfupdate.Release{TagName: "v0.3.21"}, nil
+	})
+	if _, err := c.get(t.Context(), nil, false, ""); err == nil {
+		t.Fatal("expected direct error")
+	}
+	if _, err := c.get(t.Context(), nil, false, "http://localhost:7897"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.get(t.Context(), nil, false, "http://localhost:7897"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("same proxy should reuse cache; calls=%d", calls)
+	}
+	if _, err := c.get(t.Context(), nil, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatalf("switching back to direct must refetch; calls=%d", calls)
+	}
+}
+
+func TestUpdateSettingsValidation(t *testing.T) {
+	for _, tc := range []struct {
+		proxy string
+		valid bool
+	}{
+		{"", true}, {" http://127.0.0.1:7897 ", true}, {"localhost:7897", false},
+	} {
+		cfg := updateSettings{Proxy: tc.proxy}
+		if err := cfg.validate(); (err == nil) != tc.valid {
+			t.Errorf("validation: %v", err)
+		}
 	}
 }

@@ -1613,6 +1613,10 @@ export interface FindingTrafficDetail {
   response: EvidenceBodyPreview;
 }
 
+export interface UpdateSettings {
+  proxy: string;
+}
+
 /** GET /api/update/check —— 当前版本与 GitHub 最新正式版的比较结果。 */
 export interface UpdateCheck {
   /** 当前运行的版本；开发构建为 "dev" 或 git describe 的带后缀形式。 */

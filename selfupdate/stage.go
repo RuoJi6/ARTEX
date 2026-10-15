@@ -52,6 +52,11 @@ func Stage(ctx context.Context, c *http.Client, rel *Release, currentVersion str
 	if err != nil {
 		return err
 	}
+	return stageAt(ctx, c, rel, currentVersion, prog, p)
+}
+
+// stageAt keeps downloads and executable replacement testable in an isolated directory.
+func stageAt(ctx context.Context, c *http.Client, rel *Release, currentVersion string, prog Progress, p Paths) error {
 	if err := checkWritable(p.Dir); err != nil {
 		return err
 	}
