@@ -1,0 +1,210 @@
+name: deploy-demo
+
+on:
+  # 网页手工发布的正式版；Actions 自己发布的版本由 workflow_call 接入。
+  release:
+    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      commit:
+        required: true
+        type: string
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已发布的最新正式版标签；留空自动选择最新正式版"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# 不中断正在上传的部署；旧版本在构建前和上线前都会检查是否仍为 latest。
+concurrency:
+  group: demo-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name != 'release' || github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      DEMO_URL: ${{ vars.DEMO_URL }}
+      NEXT_PUBLIC_MOCK: "1"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Select a published, complete, latest release
+        id: release
+        uses: actions/github-script@v7
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const { data: latest } = await github.rest.repos.getLatestRelease({ owner, repo });
+            const tag = process.env.REQUESTED_TAG || latest.tag_name;
+            if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag)) {
+              throw new Error('只允许 v主版本.次版本.修订号 的正式标签');
+            }
+            const { data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+            if (release.draft || release.prerelease) throw new Error('草稿和预发布版本不可部署');
+            const version = tag.slice(1);
+            const assets = new Set(release.assets.map(asset => asset.name));
+            for (const platform of ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64', 'windows-amd64']) {
+              if (!assets.has(`artex-${version}-${platform}.zip`)) throw new Error(`缺少 ${platform} 发布包`);
+            }
+            if (!assets.has('SHA256SUMS')) throw new Error('缺少发布校验文件');
+            core.setOutput('tag', tag);
+            core.setOutput('current', String(tag === latest.tag_name));
+            if (tag !== latest.tag_name) {
+              core.notice(`${tag} 已被 ${latest.tag_name} 替代，跳过以免覆盖新版 Demo`);
+            }
+
+      - name: Check deployment configuration
+        if: steps.release.outputs.current == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          for name in VERCEL_ORG_ID VERCEL_PROJECT_ID VERCEL_TOKEN DEMO_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::请先在仓库 Actions 中配置 $name，参见 README 的在线 Demo 部署说明"
+              exit 1
+            fi
+          done
+          if [[ ! "$DEMO_URL" =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]+/?$ ]]; then
+            echo "::error::DEMO_URL 必须是 HTTPS 生产域名，不能含路径、查询参数或凭据"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.release.outputs.current == 'true'
+        with:
+          ref: refs/tags/${{ steps.release.outputs.tag }}
+          persist-credentials: false
+
+      - name: Verify the released commit and write deployment metadata
+        if: steps.release.outputs.current == 'true'
+        env:
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          if [ -n "$EXPECTED_COMMIT" ] && [ "$commit" != "$EXPECTED_COMMIT" ]; then
+            echo "::error::发布标签已移动，拒绝部署与 Release 构建不同的提交"
+            exit 1
+          fi
+          mkdir -p web/public
+          jq -n --arg tag "$RELEASE_TAG" --arg commit "$commit" \
+            --arg release "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" \
+            '{tag: $tag, commit: $commit, release: $release, mock: true}' > web/public/demo-version.json
+          # 兼容首次部署尚未含此配置的历史正式版；CLI 部署不受此开关影响。
+          jq -n '{"$schema":"https://openapi.vercel.sh/vercel.json", framework:"nextjs", installCommand:"npm ci", buildCommand:"npm run build", git:{deploymentEnabled:false}}' > web/vercel.json
+
+      - uses: actions/setup-node@v4
+        if: steps.release.outputs.current == 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Vercel CLI
+        if: steps.release.outputs.current == 'true'
+        run: npm install --global vercel@64.2.0
+
+      - name: Configure the dedicated demo project
+        if: steps.release.outputs.current == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          # CLI 以 web/ 为项目根；设置与 runner 一致的 Node 主版本。
+          curl --fail-with-body --silent --show-error --request PATCH \
+            --header "Authorization: Bearer $VERCEL_TOKEN" --header 'Content-Type: application/json' \
+            --data '{"framework":"nextjs","nodeVersion":"22.x","rootDirectory":null,"installCommand":"npm ci","buildCommand":"npm run build"}' \
+            "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID" \
+            --output /tmp/demo-project.json
+          curl --fail-with-body --silent --show-error --request POST \
+            --header "Authorization: Bearer $VERCEL_TOKEN" --header 'Content-Type: application/json' \
+            --data '{"key":"NEXT_PUBLIC_MOCK","value":"1","type":"plain","target":["production"]}' \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env?teamId=$VERCEL_ORG_ID&upsert=true" \
+            --output /tmp/demo-env.json
+          jq -e '(.failed // []) | length == 0' /tmp/demo-env.json
+          # 项目令牌无法调用 CLI alias 依赖的用户信息接口，直接配置项目域名。
+          # 将域名关联到项目后，--prod 会随每次发布自动更新该域名。
+          domain="${DEMO_URL#https://}"
+          domain="${domain%/}"
+          status=$(curl --silent --show-error --write-out '%{http_code}' \
+            --header "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/domains/$domain?teamId=$VERCEL_ORG_ID" \
+            --output /tmp/demo-domain.json)
+          if [ "$status" = "404" ]; then
+            jq -n --arg name "$domain" '{name:$name}' > /tmp/demo-domain-input.json
+            curl --fail-with-body --silent --show-error --request POST \
+              --header "Authorization: Bearer $VERCEL_TOKEN" --header 'Content-Type: application/json' \
+              --data-binary @/tmp/demo-domain-input.json \
+              "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_ORG_ID" \
+              --output /tmp/demo-domain.json
+          elif [ "$status" != "200" ]; then
+            jq '.error' /tmp/demo-domain.json
+            exit 1
+          fi
+          jq -e --arg domain "$domain" '.name == $domain and .verified == true' /tmp/demo-domain.json
+
+      - name: Pull production project settings
+        if: steps.release.outputs.current == 'true'
+        working-directory: web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Build the mock demo
+        if: steps.release.outputs.current == 'true'
+        working-directory: web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+
+      - name: Check latest release again before publishing
+        if: steps.release.outputs.current == 'true'
+        id: publish
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        with:
+          script: |
+            const { data: latest } = await github.rest.repos.getLatestRelease(context.repo);
+            const current = latest.tag_name === process.env.RELEASE_TAG;
+            core.setOutput('current', String(current));
+            if (!current) core.notice('构建期间已有更新的正式版发布，保留线上版本，等待新版部署');
+
+      - name: Deploy the prebuilt demo to production
+        if: steps.publish.outputs.current == 'true'
+        id: deploy
+        working-directory: web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          url=$(vercel deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "### Demo 已部署" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 正式版本：${{ steps.release.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 固定网址：$DEMO_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 部署地址：$url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify production version metadata
+        if: steps.publish.outputs.current == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          # 检查公开的生产域名；Vercel 可单独保护部署专属的随机域名。
+          curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 3 \
+            "${DEMO_URL%/}/demo-version.json" -o /tmp/demo-version.json
+          jq -e --arg tag "$RELEASE_TAG" '.tag == $tag and .mock == true' /tmp/demo-version.json

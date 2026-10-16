@@ -305,6 +305,8 @@ const (
 	settingJudgeProfileID        = "llm_judge_profile_id"
 	settingJudgePrompt           = "llm_judge_prompt"
 	settingJudgeTimeoutSecs      = "llm_judge_timeout_seconds"
+	settingJudgeRetryCount       = "llm_judge_retry_count"
+	settingJudgeRetryIntervalMS  = "llm_judge_retry_interval_ms"
 	settingJudgeFailAction       = "llm_judge_fail_action"
 	settingJudgeAskTimeoutSecs   = "llm_judge_ask_timeout_seconds"
 	settingJudgeAskTimeoutAction = "llm_judge_ask_timeout_action"
@@ -327,7 +329,9 @@ type JudgeConfig struct {
 	Enabled                bool   `json:"enabled"`
 	ProfileID              int64  `json:"profile_id"` // 0 = follow active/default
 	Prompt                 string `json:"prompt"`
-	TimeoutSeconds         int    `json:"timeout_seconds"`
+	TimeoutSeconds         int    `json:"timeout_seconds"` // per attempt
+	RetryCount             int    `json:"retry_count"`     // additional attempts; 0 = disabled
+	RetryIntervalMS        int    `json:"retry_interval_ms"`
 	FailAction             string `json:"fail_action"` // allow|ask|deny
 	AskTimeoutSeconds      int    `json:"ask_timeout_seconds"`
 	AskTimeoutAction       string `json:"ask_timeout_action"`       // allow|deny
@@ -342,6 +346,8 @@ func (i *Interceptor) judgeConfig() JudgeConfig {
 		Enabled:                i.db.GetBool(settingJudgeEnabled, false),
 		ProfileID:              int64(i.getSettingInt(settingJudgeProfileID, 0)),
 		TimeoutSeconds:         i.getSettingInt(settingJudgeTimeoutSecs, defaultJudgeTimeoutSecs),
+		RetryCount:             min(max(i.getSettingInt(settingJudgeRetryCount, 0), 0), MaxJudgeRetryCount),
+		RetryIntervalMS:        min(max(i.getSettingInt(settingJudgeRetryIntervalMS, defaultJudgeRetryIntervalMS), 0), MaxJudgeRetryIntervalMS),
 		FailAction:             i.getSettingChoice(settingJudgeFailAction, defaultJudgeFailAction, "allow", "ask", "deny"),
 		AskTimeoutSeconds:      i.getSettingInt(settingJudgeAskTimeoutSecs, defaultJudgeAskTimeoutSecs),
 		AskTimeoutAction:       i.getSettingChoice(settingJudgeAskTimeoutAction, defaultJudgeAskTimeoutAction, "allow", "deny"),
@@ -395,6 +401,9 @@ func (i *Interceptor) GetJudgeConfig() JudgeConfig { return i.judgeConfig() }
 // SetJudgeConfig persists the judge configuration. An empty Prompt clears the
 // override (the built-in template is used again).
 func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
+	if err := c.ValidateRetry(); err != nil {
+		return err
+	}
 	if err := i.db.SetBool(settingJudgeEnabled, c.Enabled); err != nil {
 		return err
 	}
@@ -411,6 +420,12 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 		return err
 	}
 	if err := i.db.SetSetting(settingJudgeTimeoutSecs, strconv.Itoa(c.TimeoutSeconds)); err != nil {
+		return err
+	}
+	if err := i.db.SetSetting(settingJudgeRetryCount, strconv.Itoa(c.RetryCount)); err != nil {
+		return err
+	}
+	if err := i.db.SetSetting(settingJudgeRetryIntervalMS, strconv.Itoa(c.RetryIntervalMS)); err != nil {
 		return err
 	}
 	if err := i.db.SetSetting(settingJudgeFailAction, c.FailAction); err != nil {
@@ -432,7 +447,8 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 // returns (Decision, true) when the judge produced a terminal verdict, or
 // (Decision{}, false) when the fallback is disabled or not wired (caller then
 // keeps the current behavior: allow). On model error or an unparseable reply it
-// falls back to the configured FailAction. Ask verdicts carry the human-approval
+// retries up to RetryCount times, then falls back to the configured FailAction.
+// Ask verdicts carry the human-approval
 // timeout so the existing HandleAsk consumes them unchanged.
 func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.RawMessage) (Decision, bool) {
 	cfg := i.judgeConfig()
@@ -444,13 +460,13 @@ func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.Raw
 	}
 
 	cctx := ctx
+	cancel := func() {}
 	if cfg.TimeoutSeconds > 0 {
-		var cancel context.CancelFunc
 		cctx, cancel = context.WithTimeout(ctx, time.Duration(cfg.TimeoutSeconds)*time.Second)
-		defer cancel()
 	}
 
 	input, contextErr := BuildReviewInput(cctx, tool, arguments)
+	cancel() // Capture once; each model attempt gets its own timeout below.
 	cfg.Prompt = EffectiveJudgePrompt(cfg.Prompt)
 	var out Decision
 	var err error
@@ -461,7 +477,7 @@ func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.Raw
 		out = Decision{Action: "ask", ModelFallback: true, Message: "审查上下文不完整，需要人工确认：" + contextErr.Error()}
 	} else {
 		modelInput, _ = json.Marshal(input)
-		out, err = rv(cctx, cfg.ProfileID, cfg.Prompt, input)
+		out, err = reviewWithRetry(ctx, cfg, rv, input)
 	}
 	if err != nil {
 		out = Decision{ProfileID: out.ProfileID, ModelFallback: true, Action: cfg.FailAction, Message: "模型审批失败,按失败策略处理: " + err.Error()}

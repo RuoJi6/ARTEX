@@ -103,6 +103,9 @@ type Server struct {
 	provCacheMu   sync.Mutex
 	provByProfile map[int64]*provEntry
 	provCacheGen  uint64
+	// Quota histories survive provider/agent cache invalidation. Key 0 belongs
+	// to the non-persisted global config; persisted profiles use their DB IDs.
+	requestLimiters map[int64]*agent.RequestLimiter
 
 	// llmHealth is the process-wide circuit-breaker state for LLM failover (轮询).
 	// It deliberately lives OUTSIDE the provider caches: rebuilding the chain
@@ -446,7 +449,7 @@ func (s *Server) applyLLM(cfg agent.Config) error {
 	}
 	if prov == nil {
 		var err error
-		prov, err = cfg.NewProvider()
+		prov, err = cfg.NewProviderWithLimiter(s.requestLimiterForProfile(0))
 		if err != nil {
 			return err
 		}
@@ -581,29 +584,49 @@ func (s *Server) providerForProfile(id int64) (llm.Provider, agent.Config, bool)
 	if !ok {
 		return nil, agent.Config{}, false
 	}
-	prov, err := cfg.NewProvider()
-	if err != nil {
-		log.Printf("[engine] build provider for LLM profile %d failed: %v", id, err)
-		return nil, agent.Config{}, false
-	}
-	// Wrap with recorder, tagged with this profile's name.
-	if p, _ := s.m.pg.ProfileByID(id); p != nil {
-		prov = llmrec.Wrap(prov, s.m.PG(), cfg.Model, p.Name, cfg.ThinkingType, cfg.ReasoningEffort, s.m.LLMRecordEnabled)
-		prov = bindSideProvider(prov, cfg, id, p.Name)
-	}
+	profile, _ := s.m.pg.ProfileByID(id)
 	s.provCacheMu.Lock()
 	if generation != s.provCacheGen {
 		s.provCacheMu.Unlock()
 		return s.providerForProfile(id)
 	}
 	if e := s.provByProfile[id]; e != nil { // lost the race → keep the winner
-		prov, cfg = e.prov, e.cfg
-	} else {
-		s.provByProfile[id] = &provEntry{prov: prov, cfg: cfg}
-		log.Printf("[engine] built provider for LLM profile %d (%s / %s)", id, cfg.Provider(), cfg.Model)
+		s.provCacheMu.Unlock()
+		return e.prov, e.cfg, true
 	}
+	// Building the HTTP client does not perform network I/O. Keep this step
+	// under the generation lock so a stale build cannot overwrite the retained
+	// limiter's settings after a newer configuration has already been installed.
+	prov, err := cfg.NewProviderWithLimiter(s.requestLimiterForProfileLocked(id))
+	if err != nil {
+		s.provCacheMu.Unlock()
+		log.Printf("[engine] build provider for LLM profile %d failed: %v", id, err)
+		return nil, agent.Config{}, false
+	}
+	if profile != nil {
+		prov = llmrec.Wrap(prov, s.m.PG(), cfg.Model, profile.Name, cfg.ThinkingType, cfg.ReasoningEffort, s.m.LLMRecordEnabled)
+		prov = bindSideProvider(prov, cfg, id, profile.Name)
+	}
+	s.provByProfile[id] = &provEntry{prov: prov, cfg: cfg}
+	log.Printf("[engine] built provider for LLM profile %d (%s / %s)", id, cfg.Provider(), cfg.Model)
 	s.provCacheMu.Unlock()
 	return prov, cfg, true
+}
+
+func (s *Server) requestLimiterForProfile(id int64) *agent.RequestLimiter {
+	s.provCacheMu.Lock()
+	defer s.provCacheMu.Unlock()
+	return s.requestLimiterForProfileLocked(id)
+}
+
+func (s *Server) requestLimiterForProfileLocked(id int64) *agent.RequestLimiter {
+	if s.requestLimiters == nil {
+		s.requestLimiters = make(map[int64]*agent.RequestLimiter)
+	}
+	if s.requestLimiters[id] == nil {
+		s.requestLimiters[id] = &agent.RequestLimiter{}
+	}
+	return s.requestLimiters[id]
 }
 
 // chatAgentForProfile returns a ChatAgent built from a specific LLM profile, cached

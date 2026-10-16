@@ -250,14 +250,30 @@ func (c Config) Provider() string {
 	return "anthropic"
 }
 
-// NewProvider builds an llm.Provider from the config. When a rate is set, the
-// limiter lives on the single provider instance — so planner + all workers +
-// main agent (which share this provider) are bounded by one shared rate limit.
+// NewProvider builds a provider with its own HTTP request limiter. Every HTTP
+// attempt, including SDK retries, counts toward both rolling rate windows.
 func (c Config) NewProvider() (llm.Provider, error) {
+	return c.NewProviderWithLimiter(&RequestLimiter{})
+}
+
+// NewProviderWithLimiter reuses quota history across provider rebuilds. Callers
+// sharing a profile must retain the same limiter outside their provider cache.
+func (c Config) NewProviderWithLimiter(limiter *RequestLimiter) (llm.Provider, error) {
 	client, err := quotaAwareHTTPClient(c.Proxy, c.SessionHeaderKey)
 	if err != nil {
 		return nil, err
 	}
+	return c.newProvider(client, limiter)
+}
+
+func (c Config) newProvider(client *http.Client, limiter *RequestLimiter) (llm.Provider, error) {
+	if limiter == nil {
+		limiter = &RequestLimiter{}
+	}
+	if err := limiter.configure(c.RatePerSecond, c.RatePerMinute); err != nil {
+		return nil, err
+	}
+	client.Transport = rateLimitedTransport{base: client.Transport, limiter: limiter}
 	lc := llm.Config{
 		Format:     c.Format,
 		BaseURL:    c.BaseURL,
@@ -277,9 +293,8 @@ func (c Config) NewProvider() (llm.Provider, error) {
 	lc.RetryInterval = c.Retry.ConnectInterval
 	lc.EmptyResponseRetries = c.Retry.EmptyAttempts
 	lc.EmptyResponseInterval = c.Retry.EmptyInterval
-	if c.RatePerSecond > 0 || c.RatePerMinute > 0 {
-		lc.RateLimit = &llm.RateLimit{PerSecond: c.RatePerSecond, PerMinute: c.RatePerMinute}
-	}
+	// Norma's limiter allows a full-window burst and excludes establishment
+	// retries. Enforce limits on HTTP attempts instead; do not also enable it.
 	return llm.NewProvider(lc)
 }
 

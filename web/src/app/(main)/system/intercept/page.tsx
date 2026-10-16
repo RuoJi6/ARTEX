@@ -31,6 +31,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Field as FormField, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
@@ -210,6 +211,8 @@ const defaultJudge = (): JudgeConfig => ({
   profile_id: 0,
   prompt: "",
   timeout_seconds: 15,
+  retry_count: 0,
+  retry_interval_ms: 1000,
   fail_action: "allow",
   ask_timeout_seconds: 300,
   ask_timeout_action: "deny",
@@ -217,7 +220,7 @@ const defaultJudge = (): JudgeConfig => ({
 });
 
 function JudgeCard() {
-  const [cfg, setCfg] = React.useState<JudgeConfig>(defaultJudge());
+  const [cfg, setCfg] = React.useState<JudgeConfig>(defaultJudge);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
@@ -347,7 +350,7 @@ function JudgeCard() {
         <div className="grid gap-4 lg:grid-cols-5">
           {/* 左:提示词编辑器(直接展开,主区域) */}
           <Card className="lg:col-span-3">
-            <CardContent className="flex h-full flex-col gap-2 p-4">
+            <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-4">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">审批提示词</p>
@@ -358,7 +361,7 @@ function JudgeCard() {
                 </Button>
               </div>
               <Textarea
-                className="min-h-[22rem] flex-1 resize-none font-mono text-xs leading-relaxed"
+                className="field-sizing-fixed min-h-[22rem] max-h-[none] flex-1 resize-none font-mono text-xs leading-relaxed"
                 value={cfg.prompt}
                 onChange={(e) => patch({ prompt: e.target.value })}
                 placeholder="留空使用内置模板"
@@ -386,7 +389,7 @@ function JudgeCard() {
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field label="模型判定超时（秒）">
+                <Field label="每次模型判定超时（秒）">
                   <Input
                     type="number"
                     min={1}
@@ -397,7 +400,48 @@ function JudgeCard() {
                     }}
                   />
                 </Field>
-                <Field label="模型失败时（出错 / 超时 / 无法解析）">
+                <FieldGroup>
+                  <FormField>
+                    <FieldLabel htmlFor="judge-retry-count">失败重试次数</FieldLabel>
+                    <Input
+                      id="judge-retry-count"
+                      type="number"
+                      min={0}
+                      max={20}
+                      step={1}
+                      value={cfg.retry_count}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (Number.isInteger(n) && n >= 0 && n <= 20) patch({ retry_count: n });
+                      }}
+                      aria-describedby="judge-retry-count-hint"
+                    />
+                    <FieldDescription id="judge-retry-count-hint">
+                      首次审批失败后额外重试 0–20 次，0 表示不重试。出错、超时或裁决无法解析时重试；正常放行、转人工或拦截后立即结束。
+                    </FieldDescription>
+                  </FormField>
+                  <FormField data-disabled={cfg.retry_count === 0}>
+                    <FieldLabel htmlFor="judge-retry-interval">重试间隔（毫秒）</FieldLabel>
+                    <Input
+                      id="judge-retry-interval"
+                      type="number"
+                      min={0}
+                      max={3600000}
+                      step={1}
+                      value={cfg.retry_interval_ms}
+                      disabled={cfg.retry_count === 0}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (Number.isInteger(n) && n >= 0 && n <= 3600000) patch({ retry_interval_ms: n });
+                      }}
+                      aria-describedby="judge-retry-interval-hint"
+                    />
+                    <FieldDescription id="judge-retry-interval-hint">
+                      默认 1000 毫秒，0 表示立即重试。每次审批均有独立超时，全部尝试失败后执行下方失败策略。模型配置中的建连和空响应重试仍在每次审批内生效。
+                    </FieldDescription>
+                  </FormField>
+                </FieldGroup>
+                <Field label="模型失败时（重试耗尽后）">
                   <Select value={cfg.fail_action} onValueChange={(v) => patch({ fail_action: v as JudgeConfig["fail_action"] })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>

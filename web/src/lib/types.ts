@@ -1372,7 +1372,9 @@ export interface JudgeConfig {
   enabled: boolean;
   profile_id: number; // 0 = 跟随激活/默认配置
   prompt: string; // 判定提示词;GET 未设置时后端回填内置模板全文
-  timeout_seconds: number; // 模型调用超时
+  timeout_seconds: number; // 每次模型审批调用的超时
+  retry_count: number; // 审批失败后的额外重试次数，0 = 不重试
+  retry_interval_ms: number; // 审批重试间隔（毫秒），0 = 立即重试
   fail_action: "allow" | "ask" | "deny"; // 模型出错/超时/不可解析时的回退
   ask_timeout_seconds: number; // 模型判 ask 转人工后的审批等待超时
   ask_timeout_action: "allow" | "deny"; // 审批超时后的默认动作

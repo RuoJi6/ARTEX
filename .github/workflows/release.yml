@@ -181,6 +181,17 @@ jobs:
       - name: Publish complete release
         run: gh release edit "$RELEASE_TAG" --draft=false --latest
 
+  # GITHUB_TOKEN 发布的 Release 不会再次触发 release: published 工作流。
+  # 直接依赖发布 job，保证 ZIP、校验文件和镜像全部发布成功后才更新 Demo。
+  demo:
+    needs: [prepare, release]
+    uses: ./.github/workflows/demo.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      commit: ${{ needs.prepare.outputs.commit }}
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
   # ④ 在原生 AMD64 / ARM64 runner 上构建和测试，再推送架构镜像。
   docker:
     needs: [prepare, binaries]
