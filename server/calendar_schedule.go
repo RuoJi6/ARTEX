@@ -15,6 +15,7 @@ type scheduleWindow struct {
 	active    bool
 	complete  bool
 	key       string
+	start     time.Time
 	nextStart *time.Time
 	nextEnd   *time.Time
 }
@@ -81,7 +82,7 @@ func evaluateScheduleWindow(s *db.TaskSchedule, now time.Time) scheduleWindow {
 		if s.EndDate != "" {
 			key += ":" + s.EndDate
 		}
-		w := scheduleWindow{active: active, complete: complete, key: key, nextEnd: end}
+		w := scheduleWindow{active: active, complete: complete, key: key, start: start, nextEnd: end}
 		if now.Before(start) {
 			w.key = ""
 			w.nextStart = &start
@@ -109,6 +110,7 @@ func evaluateScheduleWindow(s *db.TaskSchedule, now time.Time) scheduleWindow {
 		start, end := windowBounds(day, s, loc)
 		if !now.Before(start) && (end == nil || now.Before(*end)) {
 			w.active = true
+			w.start = start
 			w.key = "active:" + start.Format("2006-01-02T15:04")
 			w.nextEnd = end
 			// Do not pause between adjacent windows (e.g. Saturday + Sunday full days).
@@ -124,6 +126,34 @@ func evaluateScheduleWindow(s *db.TaskSchedule, now time.Time) scheduleWindow {
 	return w
 }
 
+// evaluateRuntimeScheduleWindow applies startup/manual state to a calendar
+// window. A plan's creation date says nothing about when its next window opens.
+func evaluateRuntimeScheduleWindow(item *db.TaskSchedule, now, startedAt time.Time) scheduleWindow {
+	w := evaluateScheduleWindow(item, now)
+	if !item.Enabled || item.Status == "completed" {
+		w.active = false
+		return w
+	}
+	// Only suppress an unrecorded window that was already open at startup.
+	// An explicit configuration edit clears LastWindowKey and advances UpdatedAt;
+	// allow such edits (as well as newly-created plans) to enter the current window.
+	if w.active && item.LastWindowKey == "" && item.CreatedAt.Before(startedAt) &&
+		!item.UpdatedAt.After(startedAt) && !w.start.IsZero() && w.start.Before(startedAt) {
+		w.active = false
+		w.key = "missed:" + w.key
+	}
+	if strings.HasPrefix(item.LastWindowKey, "missed:") && item.LastWindowKey == "missed:"+w.key {
+		w.active = false
+		w.key = item.LastWindowKey
+	}
+	if item.LastWindowKey == "manual" && !w.active {
+		w.active = true
+		w.key = "manual"
+		w.complete = false
+	}
+	return w
+}
+
 func (sc *Scheduler) fireTaskSchedules() {
 	sc.s.scheduleMu.Lock()
 	defer sc.s.scheduleMu.Unlock()
@@ -135,26 +165,7 @@ func (sc *Scheduler) fireTaskSchedules() {
 	open := map[int64]bool{}
 	windows := map[int64]scheduleWindow{}
 	for _, item := range items {
-		w := evaluateScheduleWindow(item, now)
-		// A service restart must not replay a window that started while the
-		// service was down. Newly-created schedules are allowed to enter an
-		// already-open window because their creation is an explicit user action.
-		if w.active && item.LastWindowKey == "" && item.CreatedAt.Before(sc.startedAt) {
-			w.active = false
-			w.key = "missed:" + w.key
-		}
-		if strings.HasPrefix(item.LastWindowKey, "missed:") && item.LastWindowKey == "missed:"+w.key {
-			w.active = false
-			w.key = item.LastWindowKey
-		}
-		if item.LastWindowKey == "manual" && !w.active {
-			w.active = true
-			w.key = "manual"
-			w.complete = false
-		}
-		if !item.Enabled || item.Status == "completed" {
-			w.active = false
-		}
+		w := evaluateRuntimeScheduleWindow(item, now, sc.startedAt)
 		windows[item.ID] = w
 		if w.active {
 			for _, id := range item.TaskIDs {
