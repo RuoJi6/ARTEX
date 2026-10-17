@@ -223,7 +223,10 @@ Press Enter at the PostgreSQL password prompt to generate a secure random passwo
 An existing \`.env\` file and persistent data are preserved when install is run again.
 
 Run \`./artexctl help\` for start, stop, restart, status, logs, verification,
-and administrator password reset commands. Open http://localhost:8787 after startup.
+and administrator password reset commands. After startup, use
+\`http://<server-ip-or-domain>:8787\` from another machine or
+\`http://localhost:8787\` on the server itself. Allow TCP port 8787 through the
+firewall when remote access is required; use an HTTPS reverse proxy in production.
 EOF
 
 write_checksums "$PACKAGE_ROOT" images/artex-image.tar images/postgres-image.tar > "$PACKAGE_ROOT/SHA256SUMS"

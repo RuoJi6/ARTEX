@@ -208,7 +208,7 @@ cd artex-linux-amd64-offline
 ./artexctl install
 ```
 
-安装程序会先校验并载入离线镜像，然后创建 `.env` 和数据目录并启动服务。PostgreSQL 密码可以手动输入；直接回车会生成随机密码。重复执行安装不会覆盖已有 `.env` 或持久化数据。启动后访问 **http://localhost:8787**。
+安装程序会先校验并载入离线镜像，然后创建 `.env` 和数据目录并启动服务。PostgreSQL 密码可以手动输入；直接回车会生成随机密码。重复执行安装不会覆盖已有 `.env` 或持久化数据。部署在远程服务器时，通过 **http://服务器IP或域名:8787** 访问；仅在服务器本机访问时使用 **http://localhost:8787**。请确认防火墙已放行 TCP 8787，生产环境建议通过反向代理提供 HTTPS。
 
 离线包包含 ARTEX 与 PostgreSQL 镜像、`docker-compose.yml`、`.env.example`、`skills/`、校验文件、清单和 `artexctl`。常用管理命令：
 
