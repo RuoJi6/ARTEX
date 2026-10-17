@@ -13,14 +13,10 @@ BINARY ?= artex
 GO     ?= go
 NPM    ?= npm
 
-# 版本戳：与 build.sh 一致，注入 main.version。显式信任当前仓库，兼容 WSL root
-# 构建 /mnt/c 下由 Windows 用户拥有的工作区；git 不可用时回退 "dev"。
-VERSION ?= $(shell git -c safe.directory="$(CURDIR)" describe --tags --always --dirty 2>/dev/null || echo dev)
-VERSION := $(VERSION:v%=%)
-
-# Go 链接参数：去符号表 + 去 buildid + 写版本号（与原 build.sh 对齐）。
-LDFLAGS := -s -w -buildid= -X main.version=$(VERSION)
-# 版本已经由 LDFLAGS 显式注入，不再让 Go 调用 Git 生成额外 VCS 元数据。
+# 离线/本地构建不依赖 Git；仅写入固定构建标识，调用方仍可按需覆盖。
+BUILD_LABEL ?= offline
+LDFLAGS := -s -w -buildid= -X main.version=$(BUILD_LABEL)
+# 构建标识已经由 LDFLAGS 显式注入，不再让 Go 调用 Git 生成 VCS 元数据。
 GO_BUILD_FLAGS := -buildvcs=false -trimpath
 
 WEB_OUT   := web/out
@@ -59,11 +55,11 @@ docker: build-web
 	  -ldflags "$(LDFLAGS)" -o dist/$(TARGETARCH)/artex ./cmd/artex
 	docker build -t $(IMAGE) .
 
-# 构建当前提交的单架构离线部署包（应用镜像 + PostgreSQL + Compose + Skills）。
+# 构建当前工作区的单架构离线部署包（应用镜像 + PostgreSQL + Compose + Skills）。
 # ARGS 可传镜像名/tag/包名；默认输出到 dist/offline，成功后清理构建中间产物：
 #   make offline-package
-#   make offline-package ARGS="artex 0.2.0"
-#   make offline-package ARGS="myrepo/artex v0.1.0 my-pkg"
+#   make offline-package ARGS="artex offline"
+#   make offline-package ARGS="myrepo/artex offline my-pkg"
 #   make offline-package TARGETARCH=arm64
 offline-package:
 	TARGETARCH=$(TARGETARCH) bash ./build-offline.sh $(ARGS)

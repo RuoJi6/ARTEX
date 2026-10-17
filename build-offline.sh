@@ -2,13 +2,12 @@
 # Build a self-contained ARTEX offline deployment bundle for one Linux architecture.
 #
 # Usage:
-#   ./build-offline.sh [image-name] [tag] [package-name]
-#   make offline-package ARGS="myrepo/artex v1.2.3 artex-1.2.3-offline"
+#   ./build-offline.sh [image-name] [image-tag] [package-name]
+#   make offline-package ARGS="myrepo/artex offline artex-offline"
 #
 # Environment:
 #   TARGETARCH=amd64|arm64       Target Linux architecture (default: host architecture)
 #   OFFLINE_OUTPUT_DIR=path      Output directory (default: dist/offline)
-#   OVERWRITE=1                  Replace an existing archive with the same name
 #   KEEP_BUILD_ARTIFACTS=1       Keep frontend and Go build artifacts for debugging
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -24,20 +23,19 @@ die()  { printf '\033[31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 usage() {
   cat <<'EOF'
 用法：
-  ./build-offline.sh [镜像名] [tag] [包名]
+  ./build-offline.sh [镜像名] [镜像标签] [包名]
 
 示例：
   ./build-offline.sh
-  ./build-offline.sh artex v1.2.3
-  ./build-offline.sh myrepo/artex v1.2.3 artex-1.2.3-offline
+  ./build-offline.sh artex offline
+  ./build-offline.sh myrepo/artex offline artex-offline
 
 环境变量：
   TARGETARCH=amd64|arm64    目标 Linux 架构，默认使用当前主机架构
   OFFLINE_OUTPUT_DIR=路径   输出目录，默认 dist/offline
-  OVERWRITE=1               覆盖同名离线包
   KEEP_BUILD_ARTIFACTS=1    保留前端及 Go 构建产物，默认成功后删除
 
-脚本构建当前 Git 工作区，不会切换分支。产物包含 ARTEX/PostgreSQL 镜像、
+脚本构建当前工作区，不依赖或切换 Git 分支。产物包含 ARTEX/PostgreSQL 镜像、
 Docker Compose、内置 Skills、安装脚本、镜像校验和及构建清单。
 EOF
 }
@@ -60,24 +58,14 @@ normalize_arch() {
   esac
 }
 
-default_tag() {
-  if command -v git >/dev/null 2>&1 &&
-    git -c safe.directory="$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git -c safe.directory="$ROOT_DIR" describe --tags --always --dirty 2>/dev/null || printf '%s' "dev"
-  else
-    printf '%s' "dev"
-  fi
-}
-
 host_arch="$(normalize_arch "$(uname -m)")" || die "不支持的主机架构：$(uname -m)"
 TARGETARCH="$(normalize_arch "${TARGETARCH:-$host_arch}")" || die "TARGETARCH 仅支持 amd64 或 arm64"
 IMAGE_NAME="${1:-${OFFLINE_IMAGE:-artex}}"
-TAG="${2:-${OFFLINE_TAG:-$(default_tag)}}"
-VERSION="${TAG#v}"
+IMAGE_TAG="${2:-${OFFLINE_IMAGE_TAG:-offline}}"
 image_slug="$(printf '%s' "$IMAGE_NAME" | sed 's|.*/||; s|[^A-Za-z0-9._-]|-|g')"
-PKG_NAME="${3:-${image_slug}-${TAG}-linux-${TARGETARCH}-offline}"
+PKG_NAME="${3:-${image_slug}-linux-${TARGETARCH}-offline}"
 OUTPUT_DIR="${OFFLINE_OUTPUT_DIR:-dist/offline}"
-FULL_IMAGE="${IMAGE_NAME}:${TAG}"
+FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 POSTGRES_IMAGE="postgres:16-alpine"
 PLATFORM="linux/${TARGETARCH}"
 
@@ -85,10 +73,9 @@ PLATFORM="linux/${TARGETARCH}"
 case "$IMAGE_NAME" in
   *[[:space:]]*|*@*) die "镜像名不能包含空白或 digest；请传不含 tag 的镜像仓库名" ;;
 esac
-[[ "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || die "非法镜像 tag：$TAG"
+[[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || die "非法镜像标签：$IMAGE_TAG"
 [[ "$PKG_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] ||
   die "非法包名：只允许 1-128 位字母、数字、点、下划线和连字符"
-[ -n "$VERSION" ] || die "版本号不能为空"
 
 for cmd in docker make go npm tar sed uname mktemp cp mv; do
   require_command "$cmd"
@@ -153,7 +140,7 @@ info "离线包名：$PKG_NAME"
 
 info "1/8 通过 Makefile 构建 ARTEX 镜像"
 DOCKER_DEFAULT_PLATFORM="$PLATFORM" \
-  make docker VERSION="$VERSION" IMAGE="$FULL_IMAGE" TARGETARCH="$TARGETARCH"
+  make docker BUILD_LABEL="$IMAGE_TAG" IMAGE="$FULL_IMAGE" TARGETARCH="$TARGETARCH"
 verify_image_arch "$FULL_IMAGE"
 
 info "2/8 拉取 PostgreSQL 镜像"
@@ -177,7 +164,7 @@ cp -R skills "$PACKAGE_ROOT/skills"
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     ARTEX_IMAGE=*) printf 'ARTEX_IMAGE=%s\n' "$IMAGE_NAME" ;;
-    ARTEX_TAG=*) printf 'ARTEX_TAG=%s\n' "$TAG" ;;
+    ARTEX_TAG=*) printf 'ARTEX_TAG=%s\n' "$IMAGE_TAG" ;;
     *) printf '%s\n' "$line" ;;
   esac
 done < .env.example > "$PACKAGE_ROOT/.env.example"
@@ -244,14 +231,12 @@ printf '[+] 部署完成：http://localhost:8787（首次进入 /setup 设置管
 INSTALL
 chmod 0755 "$PACKAGE_ROOT/install.sh"
 
-git_commit="$(git -c safe.directory="$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf '%s' unknown)"
 app_image_id="$(docker image inspect --format '{{.Id}}' "$FULL_IMAGE")"
 postgres_image_id="$(docker image inspect --format '{{.Id}}' "$POSTGRES_IMAGE")"
 cat > "$PACKAGE_ROOT/MANIFEST.txt" <<EOF
 ARTEX offline deployment bundle
 package=$PKG_NAME
-version=$VERSION
-git_commit=$git_commit
+image_tag=$IMAGE_TAG
 platform=$PLATFORM
 application_image=$FULL_IMAGE
 application_image_id=$app_image_id
@@ -260,7 +245,7 @@ postgres_image_id=$postgres_image_id
 EOF
 
 cat > "$PACKAGE_ROOT/README.md" <<EOF
-# ARTEX $TAG 离线部署包
+# ARTEX 离线部署包
 
 - 平台：\`$PLATFORM\`
 - 应用镜像：\`$FULL_IMAGE\`
@@ -293,7 +278,7 @@ mkdir -p "$OUTPUT_DIR"
 FINAL_ARCHIVE="$OUTPUT_DIR/${PKG_NAME}.tar.gz"
 FINAL_CHECKSUM="$FINAL_ARCHIVE.sha256"
 if [ -e "$FINAL_ARCHIVE" ] || [ -e "$FINAL_CHECKSUM" ]; then
-  [ "${OVERWRITE:-0}" = "1" ] || die "产物已存在：$FINAL_ARCHIVE（如需覆盖请设置 OVERWRITE=1）"
+  info "发现同名离线包，使用本次构建结果覆盖"
   rm -f -- "$FINAL_ARCHIVE" "$FINAL_CHECKSUM"
 fi
 mv "$TEMP_ARCHIVE" "$FINAL_ARCHIVE"
