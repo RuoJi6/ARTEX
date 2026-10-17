@@ -57,13 +57,14 @@ docker: build-web
 	  -ldflags "$(LDFLAGS)" -o dist/$(TARGETARCH)/artex ./cmd/artex
 	docker build -t $(IMAGE) .
 
-# 构建离线安装包（调用 build-offline.sh，内含镜像构建+保存+打包+清理）。
-# ARGS 可传镜像名/tag/包名（与 build-offline.sh 参数一致）：
-#   make offline-package                                # 默认 artex:0.1.0
+# 构建当前提交的单架构离线部署包（应用镜像 + PostgreSQL + Compose + Skills）。
+# ARGS 可传镜像名/tag/包名；默认输出到 dist/offline，并保留 Make 构建产物：
+#   make offline-package
 #   make offline-package ARGS="artex 0.2.0"
 #   make offline-package ARGS="myrepo/artex v0.1.0 my-pkg"
+#   make offline-package TARGETARCH=arm64
 offline-package:
-	./build-offline.sh $(ARGS)
+	TARGETARCH=$(TARGETARCH) bash ./build-offline.sh $(ARGS)
 
 # 开发模式（后端 + 代理 + 前端 dev，见 dev.sh）
 dev:
