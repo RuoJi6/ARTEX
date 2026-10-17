@@ -7,7 +7,7 @@
 # 用法：make help 查看全部目标；make build 构建当前平台单二进制。
 #
 # 依赖：go（编译）、node/npm（构建内嵌前端时）。Unix 环境（Linux / macOS / WSL）
-# 均可直接运行；纯 Windows 原生仍用 start.bat + build.sh。
+# 均可直接运行；纯 Windows 原生仍用 start.bat + scripts/build.sh。
 
 BINARY ?= artex
 GO     ?= go
@@ -62,11 +62,11 @@ docker: build-web
 #   make offline-package ARGS="myrepo/artex offline my-pkg"
 #   make offline-package TARGETARCH=arm64
 offline-package:
-	TARGETARCH=$(TARGETARCH) bash ./build-offline.sh $(ARGS)
+	TARGETARCH=$(TARGETARCH) bash ./scripts/build-offline.sh $(ARGS)
 
-# 开发模式（后端 + 代理 + 前端 dev，见 dev.sh）
+# 开发模式（后端 + 代理 + 前端 dev，见 scripts/dev.sh）
 dev:
-	./dev.sh
+	./scripts/dev.sh
 
 # 运行全部测试
 test:
@@ -80,9 +80,9 @@ install:
 update:
 	./update.sh
 
-# 跨平台 Release 打包（等价 build.sh --release）
+# 跨平台 Release 打包（等价 scripts/build.sh --release）
 release:
-	./build.sh --release
+	./scripts/build.sh --release
 
 # 重置管理员密码
 reset-password:
@@ -94,17 +94,17 @@ clean:
 	  dist/amd64 dist/arm64 $(BINARY)
 
 help:
-	@echo "ARTEX 构建目标："
+	@echo "ARTEX build targets:"
 	@echo ""
-	@echo "  make build            构建内嵌前端单二进制（当前平台）"
-	@echo "  make build-web        只导出前端静态产物到 server/webui/dist"
-	@echo "  make build-backend    只编译后端（不内嵌前端，dev 用）"
-	@echo "  make docker           构建 Docker 镜像（自动探测架构，IMAGE/TARGETARCH 可覆盖）"
-	@echo "  make offline-package  构建离线安装包（ARGS 可传镜像名/tag/包名）"
-	@echo "  make dev              开发模式（dev.sh）"
-	@echo "  make test             运行全部测试"
-	@echo "  make install          首次安装（install.sh）"
-	@echo "  make update           升级（update.sh）"
-	@echo "  make release          跨平台 Release（build.sh --release）"
-	@echo "  make reset-password   重置管理员密码"
-	@echo "  make clean            清理构建产物"
+	@echo "  make build            Build a frontend-embedded binary for the current platform"
+	@echo "  make build-web        Export frontend assets to server/webui/dist"
+	@echo "  make build-backend    Build the backend without embedded frontend assets"
+	@echo "  make docker           Build the Docker image; IMAGE and TARGETARCH are configurable"
+	@echo "  make offline-package  Build the offline deployment bundle"
+	@echo "  make dev              Run the development environment"
+	@echo "  make test             Run all Go tests"
+	@echo "  make install          Run the repository installer"
+	@echo "  make update           Run the repository updater"
+	@echo "  make release          Build cross-platform release archives"
+	@echo "  make reset-password   Reset the administrator password"
+	@echo "  make clean            Remove build artifacts but keep offline bundles"

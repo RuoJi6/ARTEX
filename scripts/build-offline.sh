@@ -2,7 +2,7 @@
 # Build a self-contained ARTEX offline deployment bundle for one Linux architecture.
 #
 # Usage:
-#   ./build-offline.sh [image-name] [image-tag] [package-name]
+#   ./scripts/build-offline.sh [image-name] [image-tag] [package-name]
 #   make offline-package ARGS="myrepo/artex offline artex-offline"
 #
 # Environment:
@@ -12,7 +12,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 info() { printf '\033[36m[*]\033[0m %s\n' "$*"; }
@@ -22,21 +22,22 @@ die()  { printf '\033[31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-用法：
-  ./build-offline.sh [镜像名] [镜像标签] [包名]
+Build a self-contained ARTEX offline deployment bundle.
 
-示例：
-  ./build-offline.sh
-  ./build-offline.sh artex offline
-  ./build-offline.sh myrepo/artex offline artex-offline
+Usage:
+  ./scripts/build-offline.sh [image-name] [image-tag] [package-name]
 
-环境变量：
-  TARGETARCH=amd64|arm64    目标 Linux 架构，默认使用当前主机架构
-  OFFLINE_OUTPUT_DIR=路径   输出目录，默认 dist/offline
-  KEEP_BUILD_ARTIFACTS=1    即使失败也保留前端及 Go 构建产物，默认退出时删除
+Examples:
+  ./scripts/build-offline.sh
+  ./scripts/build-offline.sh artex offline
+  ./scripts/build-offline.sh myrepo/artex offline artex-offline
 
-脚本构建当前工作区，不依赖或切换 Git 分支。产物包含 ARTEX/PostgreSQL 镜像、
-Docker Compose、内置 Skills、安装脚本、镜像校验和及构建清单。
+Environment:
+  TARGETARCH=amd64|arm64    Target Linux architecture; defaults to the host architecture
+  OFFLINE_OUTPUT_DIR=path   Output directory; defaults to dist/offline
+  KEEP_BUILD_ARTIFACTS=1    Keep frontend and Go artifacts even when the build fails
+
+The build uses the current working tree and does not depend on Git metadata.
 EOF
 }
 
@@ -44,10 +45,10 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   usage
   exit 0
 fi
-[ "$#" -le 3 ] || die "参数过多，请使用 --help 查看用法"
+[ "$#" -le 3 ] || die "Too many arguments. Run with --help for usage."
 
 require_command() {
-  command -v "$1" >/dev/null 2>&1 || die "未检测到必需命令：$1"
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
 normalize_arch() {
@@ -58,8 +59,8 @@ normalize_arch() {
   esac
 }
 
-host_arch="$(normalize_arch "$(uname -m)")" || die "不支持的主机架构：$(uname -m)"
-TARGETARCH="$(normalize_arch "${TARGETARCH:-$host_arch}")" || die "TARGETARCH 仅支持 amd64 或 arm64"
+host_arch="$(normalize_arch "$(uname -m)")" || die "Unsupported host architecture: $(uname -m)"
+TARGETARCH="$(normalize_arch "${TARGETARCH:-$host_arch}")" || die "TARGETARCH must be amd64 or arm64."
 IMAGE_NAME="${1:-${OFFLINE_IMAGE:-artex}}"
 IMAGE_TAG="${2:-${OFFLINE_IMAGE_TAG:-offline}}"
 image_slug="$(printf '%s' "$IMAGE_NAME" | sed 's|.*/||; s|[^A-Za-z0-9._-]|-|g')"
@@ -69,29 +70,29 @@ FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 POSTGRES_IMAGE="postgres:16-alpine"
 PLATFORM="linux/${TARGETARCH}"
 
-[ -n "$IMAGE_NAME" ] || die "镜像名不能为空"
+[ -n "$IMAGE_NAME" ] || die "The image name cannot be empty."
 case "$IMAGE_NAME" in
-  *[[:space:]]*|*@*) die "镜像名不能包含空白或 digest；请传不含 tag 的镜像仓库名" ;;
+  *[[:space:]]*|*@*) die "The image name must not contain whitespace or a digest." ;;
 esac
-[[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || die "非法镜像标签：$IMAGE_TAG"
+[[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || die "Invalid image tag: $IMAGE_TAG"
 [[ "$PKG_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] ||
-  die "非法包名：只允许 1-128 位字母、数字、点、下划线和连字符"
+  die "Invalid package name. Use 1-128 letters, numbers, dots, underscores, or hyphens."
 
 for cmd in docker make go npm tar sed uname mktemp cp mv; do
   require_command "$cmd"
 done
 if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
-  die "未检测到 sha256sum 或 shasum"
+  die "sha256sum or shasum is required."
 fi
-docker info >/dev/null 2>&1 || die "Docker daemon 不可用"
-docker compose version >/dev/null 2>&1 || die "未检测到 docker compose 插件"
+docker info >/dev/null 2>&1 || die "The Docker daemon is not available."
+docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not installed."
 
-for required in Makefile Dockerfile docker-compose.yml .env.example skills; do
-  [ -e "$required" ] || die "缺少构建输入：$required"
+for required in Makefile Dockerfile docker-compose.yml .env.example skills scripts/artexctl; do
+  [ -e "$required" ] || die "Required build input is missing: $required"
 done
 
 WORK_DIR="$(mktemp -d)"
-[ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ] || die "无法创建临时目录"
+[ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ] || die "Unable to create a temporary directory."
 PACKAGE_ROOT="$WORK_DIR/$PKG_NAME"
 BUILD_ARTIFACTS_CLEANED=0
 
@@ -121,7 +122,7 @@ cleanup() {
 
   if [ "${KEEP_BUILD_ARTIFACTS:-0}" != "1" ]; then
     if [ "$exit_code" -ne 0 ]; then
-      warn "构建未完成，正在清理中间产物"
+      warn "Build did not complete; removing intermediate files."
     fi
     cleanup_build_artifacts
   fi
@@ -138,9 +139,9 @@ image_arch() {
 
 verify_image_arch() {
   image="$1"
-  actual="$(image_arch "$image")" || die "无法读取镜像信息：$image"
-  actual="$(normalize_arch "$actual")" || die "镜像架构不受支持：$image ($actual)"
-  [ "$actual" = "$TARGETARCH" ] || die "镜像架构错误：$image 是 $actual，期望 $TARGETARCH"
+  actual="$(image_arch "$image")" || die "Unable to inspect image: $image"
+  actual="$(normalize_arch "$actual")" || die "Unsupported image architecture: $image ($actual)"
+  [ "$actual" = "$TARGETARCH" ] || die "Image architecture mismatch: $image is $actual, expected $TARGETARCH."
 }
 
 write_checksums() {
@@ -153,30 +154,32 @@ write_checksums() {
   fi
 }
 
-info "目标镜像：$FULL_IMAGE"
-info "目标平台：$PLATFORM"
-info "离线包名：$PKG_NAME"
+info "Application image: $FULL_IMAGE"
+info "Target platform: $PLATFORM"
+info "Offline package: $PKG_NAME"
 
-info "1/8 通过 Makefile 构建 ARTEX 镜像"
+info "1/8 Building the ARTEX image through Makefile"
 DOCKER_DEFAULT_PLATFORM="$PLATFORM" \
   make docker BUILD_LABEL="$IMAGE_TAG" IMAGE="$FULL_IMAGE" TARGETARCH="$TARGETARCH"
 verify_image_arch "$FULL_IMAGE"
 
-info "2/8 拉取 PostgreSQL 镜像"
+info "2/8 Fetching the PostgreSQL image"
 docker pull --platform "$PLATFORM" "$POSTGRES_IMAGE"
 verify_image_arch "$POSTGRES_IMAGE"
 
-info "3/8 验证 ARTEX 镜像可执行"
+info "3/8 Running the ARTEX image smoke test"
 docker run --rm --platform "$PLATFORM" --entrypoint /app/artex "$FULL_IMAGE" -h >/dev/null
 
-info "4/8 导出容器镜像"
+info "4/8 Exporting container images"
 mkdir -p "$PACKAGE_ROOT/images"
 docker save --output "$PACKAGE_ROOT/images/artex-image.tar" "$FULL_IMAGE"
 docker save --output "$PACKAGE_ROOT/images/postgres-image.tar" "$POSTGRES_IMAGE"
 
-info "5/8 组装部署文件"
+info "5/8 Assembling deployment files"
 cp docker-compose.yml "$PACKAGE_ROOT/docker-compose.yml"
 cp -R skills "$PACKAGE_ROOT/skills"
+cp scripts/artexctl "$PACKAGE_ROOT/artexctl"
+chmod 0755 "$PACKAGE_ROOT/artexctl"
 
 # Reuse the repository's canonical environment template and only pin the image
 # identity for this bundle, avoiding a second, drifting copy of Compose settings.
@@ -187,68 +190,6 @@ while IFS= read -r line || [ -n "$line" ]; do
     *) printf '%s\n' "$line" ;;
   esac
 done < .env.example > "$PACKAGE_ROOT/.env.example"
-
-cat > "$PACKAGE_ROOT/install.sh" <<'INSTALL'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-IFS=$'\n\t'
-umask 077
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-info() { printf '[*] %s\n' "$*"; }
-die()  { printf '[x] %s\n' "$*" >&2; exit 1; }
-
-command -v docker >/dev/null 2>&1 || die "未检测到 docker"
-docker info >/dev/null 2>&1 || die "Docker daemon 不可用"
-docker compose version >/dev/null 2>&1 || die "未检测到 docker compose 插件"
-
-info "1/4 校验离线镜像"
-if [ -f SHA256SUMS ]; then
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -c SHA256SUMS
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 -c SHA256SUMS
-  else
-    die "缺少 sha256sum/shasum，无法校验离线镜像"
-  fi
-fi
-
-shopt -s nullglob
-images=(images/*.tar)
-[ "${#images[@]}" -gt 0 ] || die "离线包中没有镜像文件"
-
-info "2/4 加载容器镜像"
-for image in "${images[@]}"; do
-  docker load --input "$image"
-done
-
-info "3/4 准备部署配置"
-if [ ! -f .env ]; then
-  password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
-  temp_env=".env.tmp.$$"
-  trap 'rm -f -- "${temp_env:-}"' EXIT INT TERM
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      POSTGRES_PASSWORD=*) printf 'POSTGRES_PASSWORD=%s\n' "$password" ;;
-      *) printf '%s\n' "$line" ;;
-    esac
-  done < .env.example > "$temp_env"
-  mv "$temp_env" .env
-  trap - EXIT INT TERM
-  printf '[+] 已生成 .env，并设置随机数据库密码\n'
-else
-  chmod 600 .env
-  printf '[!] 保留已有 .env 配置\n'
-fi
-mkdir -p data skills
-docker compose config >/dev/null
-
-info "4/4 启动服务"
-docker compose up -d
-docker compose ps
-printf '[+] 部署完成：http://localhost:8787（首次进入 /setup 设置管理员密码）\n'
-INSTALL
-chmod 0755 "$PACKAGE_ROOT/install.sh"
 
 app_image_id="$(docker image inspect --format '{{.Id}}' "$FULL_IMAGE")"
 postgres_image_id="$(docker image inspect --format '{{.Id}}' "$POSTGRES_IMAGE")"
@@ -264,51 +205,51 @@ postgres_image_id=$postgres_image_id
 EOF
 
 cat > "$PACKAGE_ROOT/README.md" <<EOF
-# ARTEX 离线部署包
+# ARTEX Offline Deployment Bundle
 
-- 平台：\`$PLATFORM\`
-- 应用镜像：\`$FULL_IMAGE\`
-- 数据库镜像：\`$POSTGRES_IMAGE\`
+- Platform: \`$PLATFORM\`
+- Application image: \`$FULL_IMAGE\`
+- Database image: \`$POSTGRES_IMAGE\`
 
-## 部署
+## Install
 
 \`\`\`bash
 tar xzf $PKG_NAME.tar.gz
 cd $PKG_NAME
-./install.sh
+./artexctl install
 \`\`\`
 
-安装脚本会先校验并加载镜像，首次部署时生成权限为 0600 的 \`.env\` 和随机数据库密码，
-然后通过 Docker Compose 启动服务。启动后访问 http://localhost:8787。
+Press Enter at the PostgreSQL password prompt to generate a secure random password.
+An existing \`.env\` file and persistent data are preserved when install is run again.
 
-如需配置 LLM，请在启动前编辑 \`.env\`，或者启动后在 ARTEX 页面中配置。
-不要删除 \`skills/\`，该目录会挂载到容器中并保存后续 Skill 修改。
+Run \`./artexctl help\` for start, stop, restart, status, logs, verification,
+and administrator password reset commands. Open http://localhost:8787 after startup.
 EOF
 
 write_checksums "$PACKAGE_ROOT" images/artex-image.tar images/postgres-image.tar > "$PACKAGE_ROOT/SHA256SUMS"
 docker compose --env-file "$PACKAGE_ROOT/.env.example" -f "$PACKAGE_ROOT/docker-compose.yml" config >/dev/null
 
-info "6/8 创建压缩包"
+info "6/8 Creating the compressed archive"
 TEMP_ARCHIVE="$WORK_DIR/${PKG_NAME}.tar.gz"
 tar -C "$WORK_DIR" -czf "$TEMP_ARCHIVE" "$PKG_NAME"
 
-info "7/8 写入输出目录"
+info "7/8 Writing the final output"
 mkdir -p "$OUTPUT_DIR"
 FINAL_ARCHIVE="$OUTPUT_DIR/${PKG_NAME}.tar.gz"
 FINAL_CHECKSUM="$FINAL_ARCHIVE.sha256"
 if [ -e "$FINAL_ARCHIVE" ] || [ -e "$FINAL_CHECKSUM" ]; then
-  info "发现同名离线包，使用本次构建结果覆盖"
+  info "Replacing the existing package with the completed build"
   rm -f -- "$FINAL_ARCHIVE" "$FINAL_CHECKSUM"
 fi
 mv "$TEMP_ARCHIVE" "$FINAL_ARCHIVE"
 write_checksums "$OUTPUT_DIR" "$(basename "$FINAL_ARCHIVE")" > "$FINAL_CHECKSUM"
 
-info "8/8 清理构建中间产物"
+info "8/8 Cleaning intermediate build files"
 if [ "${KEEP_BUILD_ARTIFACTS:-0}" = "1" ]; then
-  warn "已按 KEEP_BUILD_ARTIFACTS=1 保留构建中间产物"
+  warn "Intermediate files were preserved because KEEP_BUILD_ARTIFACTS=1."
 else
   cleanup_build_artifacts
 fi
 
-ok "离线包：$FINAL_ARCHIVE"
-ok "校验值：$FINAL_CHECKSUM"
+ok "Offline package: $FINAL_ARCHIVE"
+ok "Checksum file: $FINAL_CHECKSUM"
