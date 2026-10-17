@@ -37,11 +37,10 @@ build: build-web
 	CGO_ENABLED=0 $(GO) build -tags embedui -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/artex
 
 # 只导出前端静态产物到 server/webui/dist
-# 用 `NEXT_EXPORT=1 npm run build` 而非 `npm run build:static`：后者脚本里的
-# `NEXT_EXPORT=1` 是 Unix 语法，Windows 版 npm（cmd.exe）无法解析；这里在 make
-# 的 sh 环境里设变量，跨平台都能跑。
+# build:static 由 Node 脚本设置 NEXT_EXPORT，兼容 Linux/macOS，以及 WSL 中调用
+# Windows npm/node.exe 的混合环境。
 build-web:
-	cd web && $(NPM) ci && NEXT_EXPORT=1 $(NPM) run build
+	cd web && $(NPM) ci && $(NPM) run build:static
 	rm -rf $(EMBED_DIR) && mkdir -p $(EMBED_DIR) && cp -r $(WEB_OUT)/. $(EMBED_DIR)/
 
 # 只编译后端（不内嵌前端，dev 模式用）
