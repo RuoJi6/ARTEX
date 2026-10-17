@@ -8,7 +8,7 @@
 # Environment:
 #   TARGETARCH=amd64|arm64       Target Linux architecture (default: host architecture)
 #   OFFLINE_OUTPUT_DIR=path      Output directory (default: dist/offline)
-#   KEEP_BUILD_ARTIFACTS=1       Keep frontend and Go build artifacts for debugging
+#   KEEP_BUILD_ARTIFACTS=1       Keep frontend and Go artifacts even on failure
 set -Eeuo pipefail
 IFS=$'\n\t'
 
@@ -33,7 +33,7 @@ usage() {
 环境变量：
   TARGETARCH=amd64|arm64    目标 Linux 架构，默认使用当前主机架构
   OFFLINE_OUTPUT_DIR=路径   输出目录，默认 dist/offline
-  KEEP_BUILD_ARTIFACTS=1    保留前端及 Go 构建产物，默认成功后删除
+  KEEP_BUILD_ARTIFACTS=1    即使失败也保留前端及 Go 构建产物，默认退出时删除
 
 脚本构建当前工作区，不依赖或切换 Git 分支。产物包含 ARTEX/PostgreSQL 镜像、
 Docker Compose、内置 Skills、安装脚本、镜像校验和及构建清单。
@@ -93,17 +93,13 @@ done
 WORK_DIR="$(mktemp -d)"
 [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ] || die "无法创建临时目录"
 PACKAGE_ROOT="$WORK_DIR/$PKG_NAME"
-
-cleanup() {
-  if [ -n "${WORK_DIR:-}" ] && [ -d "$WORK_DIR" ]; then
-    rm -rf -- "$WORK_DIR"
-  fi
-}
-trap cleanup EXIT INT TERM
+BUILD_ARTIFACTS_CLEANED=0
 
 cleanup_build_artifacts() {
+  [ "$BUILD_ARTIFACTS_CLEANED" = "1" ] && return 0
+
   # Only remove paths produced or replaced by `make docker`. Keep dist/offline,
-  # which contains the final archive and its checksum.
+  # which contains the last successful archive and its checksum.
   rm -rf -- \
     web/node_modules \
     web/.next \
@@ -111,7 +107,30 @@ cleanup_build_artifacts() {
     web/tsconfig.tsbuildinfo \
     server/webui/dist \
     "dist/$TARGETARCH"
+  BUILD_ARTIFACTS_CLEANED=1
 }
+
+cleanup() {
+  exit_code=$?
+  trap - EXIT INT TERM
+  set +e
+
+  if [ -n "${WORK_DIR:-}" ] && [ -d "$WORK_DIR" ]; then
+    rm -rf -- "$WORK_DIR"
+  fi
+
+  if [ "${KEEP_BUILD_ARTIFACTS:-0}" != "1" ]; then
+    if [ "$exit_code" -ne 0 ]; then
+      warn "构建未完成，正在清理中间产物"
+    fi
+    cleanup_build_artifacts
+  fi
+
+  exit "$exit_code"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 image_arch() {
   docker image inspect --format '{{.Architecture}}' "$1" 2>/dev/null

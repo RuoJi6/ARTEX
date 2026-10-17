@@ -56,7 +56,7 @@ docker: build-web
 	docker build -t $(IMAGE) .
 
 # 构建当前工作区的单架构离线部署包（应用镜像 + PostgreSQL + Compose + Skills）。
-# ARGS 可传镜像名/tag/包名；默认输出到 dist/offline，成功后清理构建中间产物：
+# ARGS 可传镜像名/tag/包名；默认输出到 dist/offline，退出时清理构建中间产物：
 #   make offline-package
 #   make offline-package ARGS="artex offline"
 #   make offline-package ARGS="myrepo/artex offline my-pkg"
