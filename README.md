@@ -178,6 +178,52 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./scripts/build.sh --release
 ./scripts/build.sh --target linux/amd64 --upx
 ```
 
+### 方式六：构建离线 Docker 部署包
+
+适用于目标服务器无法访问外网的场景。构建机需要 Bash、GNU Make、Go、Node.js/npm、Docker 及 Docker Compose；构建期间会编译当前工作区代码，并准备 ARTEX 和 PostgreSQL 镜像。目标服务器只需要 Docker 及 Docker Compose，不需要 Go、Node.js，也不需要访问镜像仓库。
+
+在有构建环境和网络的机器上执行：
+
+```bash
+# 默认按构建机架构生成 amd64 或 arm64 离线包
+make offline-package
+
+# 也可以显式指定目标架构
+make offline-package TARGETARCH=amd64
+make offline-package TARGETARCH=arm64
+```
+
+默认产物位于 `dist/offline/`，例如：
+
+```text
+artex-linux-amd64-offline.tar.gz
+artex-linux-amd64-offline.tar.gz.sha256
+```
+
+将 `.tar.gz` 复制到目标服务器后安装：
+
+```bash
+tar -xzf artex-linux-amd64-offline.tar.gz
+cd artex-linux-amd64-offline
+./artexctl install
+```
+
+安装程序会先校验并载入离线镜像，然后创建 `.env` 和数据目录并启动服务。PostgreSQL 密码可以手动输入；直接回车会生成随机密码。重复执行安装不会覆盖已有 `.env` 或持久化数据。启动后访问 **http://localhost:8787**。
+
+离线包包含 ARTEX 与 PostgreSQL 镜像、`docker-compose.yml`、`.env.example`、`skills/`、校验文件、清单和 `artexctl`。常用管理命令：
+
+```bash
+./artexctl status
+./artexctl logs                 # 也可指定服务：postgres 或 artex
+./artexctl restart
+./artexctl stop
+./artexctl start
+./artexctl reset-password      # 重置 ARTEX 管理员密码
+./artexctl verify              # 重新校验离线镜像文件
+```
+
+无人值守安装可使用 `./artexctl install --non-interactive`，默认随机生成 PostgreSQL 密码；如需指定，可通过 `ARTEX_POSTGRES_PASSWORD` 环境变量传入。
+
 ---
 
 ## 更新升级
