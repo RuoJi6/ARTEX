@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+info() { printf '[INFO] %s\n' "$*"; }
+ok()   { printf '[OK] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*" >&2; }
+die()  { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+ARTEX offline deployment manager
+
+Usage:
+  ./artexctl <command> [options]
+
+Commands:
+  install [--non-interactive]  Verify and load images, initialize .env, and start ARTEX
+  start                        Start the deployment
+  stop                         Stop the deployment without deleting data
+  restart                      Restart all services
+  status                       Show service status
+  logs [service]               Follow service logs
+  reset-password               Reset the ARTEX administrator password
+  verify                       Verify bundled image checksums
+  help                         Show this help
+
+Environment:
+  ARTEX_POSTGRES_PASSWORD      PostgreSQL password for non-interactive first install
+
+Existing .env files and persistent data are never overwritten by install.
+EOF
+}
+
+require_docker() {
+  command -v docker >/dev/null 2>&1 || die "Docker is not installed."
+  docker info >/dev/null 2>&1 || die "The Docker daemon is not available."
+  docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not installed."
+  [ -f docker-compose.yml ] || die "docker-compose.yml is missing."
+}
+
+checksum_command() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "shasum"
+  else
+    return 1
+  fi
+}
+
+verify_bundle() {
+  [ -f SHA256SUMS ] || die "SHA256SUMS is missing."
+  checksum_tool="$(checksum_command)" || die "sha256sum or shasum is required."
+
+  info "Verifying bundled container images..."
+  if [ "$checksum_tool" = "sha256sum" ]; then
+    sha256sum -c SHA256SUMS
+  else
+    shasum -a 256 -c SHA256SUMS
+  fi
+  ok "Bundle verification completed."
+}
+
+random_password() {
+  od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+validate_postgres_password() {
+  password_value="$1"
+  [ "${#password_value}" -ge 8 ] || die "The PostgreSQL password must contain at least 8 characters."
+  [ "${#password_value}" -le 128 ] || die "The PostgreSQL password must not exceed 128 characters."
+  case "$password_value" in
+    *[!A-Za-z0-9._~-]*)
+      die "The PostgreSQL password may only contain letters, numbers, dots, underscores, tildes, and hyphens."
+      ;;
+  esac
+}
+
+prompt_postgres_password() {
+  if [ ! -t 0 ]; then
+    random_password
+    return
+  fi
+
+  read -r -s -p "Enter PostgreSQL password (press Enter to generate one): " password_value
+  printf '\n' >&2
+  if [ -z "$password_value" ]; then
+    random_password
+    return
+  fi
+
+  validate_postgres_password "$password_value"
+  read -r -s -p "Confirm PostgreSQL password: " password_confirm
+  printf '\n' >&2
+  [ "$password_value" = "$password_confirm" ] || die "The PostgreSQL passwords do not match."
+  printf '%s' "$password_value"
+}
+
+create_env() {
+  non_interactive="$1"
+  [ -f .env.example ] || die ".env.example is missing."
+
+  if [ -f .env ]; then
+    chmod 600 .env
+    warn "Existing .env file preserved."
+    return
+  fi
+
+  if [ -n "${ARTEX_POSTGRES_PASSWORD:-}" ]; then
+    postgres_password="$ARTEX_POSTGRES_PASSWORD"
+  elif [ "$non_interactive" = "1" ]; then
+    postgres_password="$(random_password)"
+  else
+    postgres_password="$(prompt_postgres_password)"
+  fi
+  validate_postgres_password "$postgres_password"
+
+  temp_env=".env.tmp.$$"
+  trap 'rm -f -- "${temp_env:-}"' EXIT INT TERM
+  password_written=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      POSTGRES_PASSWORD=*)
+        printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password"
+        password_written=1
+        ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done < .env.example > "$temp_env"
+  [ "$password_written" = "1" ] || printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password" >> "$temp_env"
+  chmod 600 "$temp_env"
+  mv "$temp_env" .env
+  trap - EXIT INT TERM
+  unset postgres_password password_value password_confirm ARTEX_POSTGRES_PASSWORD
+  ok ".env created with a protected PostgreSQL password."
+}
+
+load_images() {
+  shopt -s nullglob
+  image_files=(images/*.tar)
+  [ "${#image_files[@]}" -gt 0 ] || die "No container image archives were found in images/."
+
+  info "Loading bundled container images..."
+  for image_file in "${image_files[@]}"; do
+    docker load --input "$image_file"
+  done
+  ok "Container images loaded."
+}
+
+compose_ready() {
+  docker compose config >/dev/null
+}
+
+install_bundle() {
+  non_interactive=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --non-interactive) non_interactive=1 ;;
+      -h|--help)
+        printf 'Usage: ./artexctl install [--non-interactive]\n'
+        return
+        ;;
+      *) die "Unknown install option: $1" ;;
+    esac
+    shift
+  done
+
+  require_docker
+  verify_bundle
+  load_images
+  create_env "$non_interactive"
+  mkdir -p data skills
+
+  info "Validating Docker Compose configuration..."
+  compose_ready
+  info "Starting ARTEX..."
+  docker compose up -d
+  docker compose ps
+  ok "ARTEX is available at http://localhost:8787"
+}
+
+start_services() {
+  require_docker
+  compose_ready
+  docker compose up -d
+  ok "ARTEX services started."
+}
+
+stop_services() {
+  require_docker
+  docker compose stop
+  ok "ARTEX services stopped. Persistent data was preserved."
+}
+
+restart_services() {
+  require_docker
+  compose_ready
+  docker compose restart
+  ok "ARTEX services restarted."
+}
+
+show_status() {
+  require_docker
+  docker compose ps
+}
+
+show_logs() {
+  require_docker
+  docker compose logs -f "$@"
+}
+
+env_value() {
+  key="$1"
+  fallback="$2"
+  value=""
+  if [ -f .env ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        "$key"=*) value="${line#*=}" ;;
+      esac
+    done < .env
+  fi
+  printf '%s' "${value:-$fallback}"
+}
+
+prompt_admin_password() {
+  [ -t 0 ] || die "reset-password requires an interactive terminal."
+  read -r -s -p "Enter the new ARTEX administrator password: " admin_password
+  printf '\n' >&2
+  [ -n "$admin_password" ] || die "The administrator password cannot be empty."
+  read -r -s -p "Confirm the new password: " admin_password_confirm
+  printf '\n' >&2
+  [ "$admin_password" = "$admin_password_confirm" ] || die "The administrator passwords do not match."
+  printf '%s' "$admin_password"
+}
+
+reset_admin_password() {
+  require_docker
+  [ -f .env ] || die ".env is missing. Run './artexctl install' first."
+
+  db_user="$(env_value POSTGRES_USER artex)"
+  db_name="$(env_value POSTGRES_DB artex)"
+  db_password="$(env_value POSTGRES_PASSWORD '')"
+  [ -n "$db_password" ] || die "POSTGRES_PASSWORD is missing from .env."
+  new_password="$(prompt_admin_password)"
+
+  export ARTEX_RESET_NEWPASS="$new_password"
+  export PGPASSWORD="$db_password"
+  read -r -d '' reset_sql <<'SQL' || true
+\set ON_ERROR_STOP on
+\getenv newpw ARTEX_RESET_NEWPASS
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+INSERT INTO settings(key, value)
+VALUES ('auth.password_hash', crypt(:'newpw', gen_salt('bf', 10)))
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+SQL
+
+  info "Resetting the ARTEX administrator password..."
+  if ! printf '%s\n' "$reset_sql" | docker compose exec -T \
+    -e ARTEX_RESET_NEWPASS -e PGPASSWORD postgres \
+    psql -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1 -q >/dev/null; then
+    unset ARTEX_RESET_NEWPASS PGPASSWORD new_password db_password
+    die "Password reset failed. Verify that PostgreSQL is running and pgcrypto is available."
+  fi
+
+  unset ARTEX_RESET_NEWPASS PGPASSWORD new_password db_password admin_password admin_password_confirm
+  ok "The ARTEX administrator password was reset. Sign in with username ARTEX."
+}
+
+command_name="${1:-help}"
+[ "$#" -eq 0 ] || shift
+
+case "$command_name" in
+  install) install_bundle "$@" ;;
+  start) [ "$#" -eq 0 ] || die "start does not accept arguments."; start_services ;;
+  stop) [ "$#" -eq 0 ] || die "stop does not accept arguments."; stop_services ;;
+  restart) [ "$#" -eq 0 ] || die "restart does not accept arguments."; restart_services ;;
+  status) [ "$#" -eq 0 ] || die "status does not accept arguments."; show_status ;;
+  logs) show_logs "$@" ;;
+  reset-password) [ "$#" -eq 0 ] || die "reset-password does not accept arguments."; reset_admin_password ;;
+  verify) [ "$#" -eq 0 ] || die "verify does not accept arguments."; verify_bundle ;;
+  help|-h|--help) usage ;;
+  *) die "Unknown command: $command_name. Run './artexctl help'." ;;
+esac

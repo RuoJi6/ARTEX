@@ -13,6 +13,16 @@ import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Sheet,
   SheetContent,
   SheetHeader,
@@ -50,6 +60,7 @@ export default function MCPPage() {
 
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<MCPServer | null>(null); // null = add mode
+  const [deleteTarget, setDeleteTarget] = React.useState<MCPServer | null>(null); // null = 未弹删除确认
   const [tab, setTab] = React.useState<"config" | "tools">("config");
   const [form, setForm] = React.useState<FormState>(emptyForm);
   const [saving, setSaving] = React.useState(false);
@@ -201,6 +212,7 @@ export default function MCPPage() {
     try {
       await api.deleteMcpServer(s.id);
       toast.success(`已删除：${s.name}`);
+      setDeleteTarget(null);
       setOpen(false);
       load();
     } catch (e) {
@@ -399,7 +411,7 @@ export default function MCPPage() {
                     size="icon"
                     variant="outline"
                     aria-label="删除"
-                    onClick={() => removeServer(s)}
+                    onClick={() => setDeleteTarget(s)}
                   >
                     <Trash2Icon className="text-destructive" />
                   </Button>
@@ -477,6 +489,19 @@ export default function MCPPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除 MCP 服务器「{deleteTarget?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>删除后该服务器提供的工具将不再注入 Agent。此操作不可撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteTarget && void removeServer(deleteTarget)}>删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

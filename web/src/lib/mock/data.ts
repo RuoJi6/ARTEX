@@ -20,12 +20,16 @@ import type {
   InterceptAudit,
   InterceptPending,
   InterceptRule,
+  KBSource,
   LLMPoolStatus,
   LLMProfile,
   LLMTask,
   MCPServer,
   MCPTool,
   MissingSkill,
+  NotificationChannel,
+  NotificationDelivery,
+  NotificationMeta,
   PromptVar,
   PromptVersion,
   SessionTokenUsage,
@@ -3210,6 +3214,64 @@ export const mcpToolsById: Record<number, MCPTool[]> = {
     { name: "browser_snapshot", description: "抓取可访问性快照" },
   ],
 };
+
+// ── 知识库 (RAG) ─────────────────────────────────────────────────────────────
+export const kbSources: KBSource[] = [
+  {
+    name: "cve",
+    type: "dify",
+    api_key_set: true,
+    fields: { base_url: "http://dify:8080", dataset_id: "cve-knowledge", timeout: "5s", min_score: 0.65 },
+  },
+  {
+    name: "internal",
+    type: "dify",
+    api_key_set: false,
+    fields: { base_url: "http://dify:8080", dataset_id: "internal-docs" },
+  },
+];
+
+// ── 通知推送 (notify) ─────────────────────────────────────────────────────────
+export const notifyMeta: NotificationMeta = {
+  kinds: [
+    { kind: "dingtalk", default_rate_per_min: 20, secret_keys: ["access_token", "secret"] },
+    { kind: "feishu", default_rate_per_min: 20, secret_keys: ["webhook_url"] },
+    { kind: "wecom", default_rate_per_min: 20, secret_keys: ["key"] },
+    { kind: "telegram", default_rate_per_min: 20, secret_keys: ["bot_token", "chat_id"] },
+    { kind: "email", default_rate_per_min: 10, secret_keys: ["password"] },
+    { kind: "webhook", default_rate_per_min: 20, secret_keys: [] },
+  ],
+  enabled: true,
+  public_base_url: "http://artex.example.com",
+  digest_interval_min: "60",
+  defaults: { digest_interval_min: 60 },
+  stats: { channels: 1, channels_on: 1, pending: 0, failed: 0, sent_today: 3, backlog_age_ms: 0 },
+};
+
+export const notifyChannels: NotificationChannel[] = [
+  {
+    id: 1,
+    name: "安全告警群",
+    kind: "dingtalk",
+    enabled: true,
+    mode: "realtime",
+    config: { access_token: "__masked__tok", secret: "__masked__sec" },
+    filter: {
+      min_severity: "high",
+      task_ids: [],
+      asset_ids: [],
+      vulnclass_include: [],
+      vulnclass_exclude: [],
+      on_status_change: false,
+    },
+    rate_per_min: 20,
+    created_at: "2026-08-01T10:00:00Z",
+    updated_at: "2026-08-01T10:00:00Z",
+    secret_keys: ["access_token", "secret"],
+  },
+];
+
+export const notifyDeliveries: NotificationDelivery[] = [];
 
 // ── Skills ───────────────────────────────────────────────────────────────────
 export const skills: SkillItem[] = [

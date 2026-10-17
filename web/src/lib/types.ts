@@ -40,6 +40,7 @@ export interface Task {
   archive_blocked_by_task_id?: string; // live direct dependent that must be archived first
   company_ids?: number[]; // associated company scopes; current company assets join the task at creation
   coverage_enabled?: boolean; // 资产覆盖度功能开关(创建时定,默认开)；false=不计算/不展示覆盖度
+  kb_enabled?: boolean; // 外部知识库(RAG)任务级开关(创建时定,默认关)；true=注入 knowledge_search 工具与检索引导
 }
 
 export interface TaskCategory {
@@ -1219,6 +1220,16 @@ export interface MCPServer {
 export interface MCPTool {
   name: string;
   description: string;
+}
+
+// ---- 知识库 (RAG) ----
+export interface KBSource {
+  name: string;
+  type: string; // 后端类型，当前仅 "dify"
+  enabled?: boolean; // 是否启用（读时恒有；缺省=启用）
+  api_key?: string; // 写时填；读时恒为空
+  api_key_set?: boolean; // 读时告知是否已设置密钥
+  fields?: Record<string, unknown>; // 后端专属字段（dify: base_url/dataset_id/timeout/min_score）
 }
 
 // ---- Skills ----

@@ -58,6 +58,7 @@ import type {
   InterceptRule,
   JudgeConfig,
   JudgeUsage,
+  KBSource,
   LLMPoolStatus,
   LLMProfile,
   LLMRecordDetail,
@@ -306,6 +307,7 @@ export const api = {
     seedFirstIntent?: boolean;
     planHeartbeatSeconds?: number;
     coverageEnabled?: boolean;
+    kbEnabled?: boolean;
     interceptRules?: AssetInterceptRuleInput[];
     schedule?: ScheduleInput;
   }) =>
@@ -321,6 +323,7 @@ export const api = {
       seed_first_intent: input.seedFirstIntent ?? false,
       plan_heartbeat_seconds: input.planHeartbeatSeconds ?? 0, // 0 = 后端归一到默认 600(10min)
       coverage_enabled: input.coverageEnabled ?? true, // 默认开;false=关闭资产覆盖度功能
+      kb_enabled: input.kbEnabled ?? false, // 默认关;true=开启外部知识库(RAG)注入
       intercept_rules: input.interceptRules ?? [], // 任务级资产拦截规则
       schedule: input.schedule ? schedulePayload(input.schedule) : undefined,
     }),
@@ -915,6 +918,9 @@ export const api = {
   setBasicAuthSettings: (settings: { enabled: boolean; username: string; password: string }) =>
     put<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth", settings),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
+  // 知识库 (RAG)：多源列表。GET 返回的 api_key 恒为空（用 api_key_set 判断是否已设）。
+  kbSources: () => get<{ sources: KBSource[] }>("/settings/kb").then((r) => arr(r.sources)),
+  saveKBSources: (sources: KBSource[]) => put<{ ok: boolean; sources: KBSource[] }>("/settings/kb", { sources }),
   // Run a real "test" search with the given (or saved) config to verify it works.
   testWebSearch: (patch: {
     web_search_backend?: string;

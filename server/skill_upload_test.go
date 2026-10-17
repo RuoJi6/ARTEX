@@ -64,6 +64,33 @@ func TestSkillRelPath(t *testing.T) {
 	}
 }
 
+func TestWalkSkillFilesUsesSlashSeparatedAPIPaths(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "scripts", "helpers"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts", "helpers", "run.py"), []byte("pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := walkSkillFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"scripts/", "scripts/helpers/", "scripts/helpers/run.py"}
+	if len(entries) != len(want) {
+		t.Fatalf("walkSkillFiles() = %q, want %q", entries, want)
+	}
+	for i := range want {
+		if entries[i] != want[i] {
+			t.Errorf("walkSkillFiles()[%d] = %q, want %q", i, entries[i], want[i])
+		}
+		if strings.Contains(entries[i], `\`) {
+			t.Errorf("walkSkillFiles()[%d] contains a Windows separator: %q", i, entries[i])
+		}
+	}
+}
+
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
