@@ -9,6 +9,7 @@
 #   TARGETARCH=amd64|arm64       Target Linux architecture (default: host architecture)
 #   OFFLINE_OUTPUT_DIR=path      Output directory (default: dist/offline)
 #   OVERWRITE=1                  Replace an existing archive with the same name
+#   KEEP_BUILD_ARTIFACTS=1       Keep frontend and Go build artifacts for debugging
 set -Eeuo pipefail
 IFS=$'\n\t'
 
@@ -34,6 +35,7 @@ usage() {
   TARGETARCH=amd64|arm64    目标 Linux 架构，默认使用当前主机架构
   OFFLINE_OUTPUT_DIR=路径   输出目录，默认 dist/offline
   OVERWRITE=1               覆盖同名离线包
+  KEEP_BUILD_ARTIFACTS=1    保留前端及 Go 构建产物，默认成功后删除
 
 脚本构建当前 Git 工作区，不会切换分支。产物包含 ARTEX/PostgreSQL 镜像、
 Docker Compose、内置 Skills、安装脚本、镜像校验和及构建清单。
@@ -110,6 +112,18 @@ cleanup() {
   fi
 }
 trap cleanup EXIT INT TERM
+
+cleanup_build_artifacts() {
+  # Only remove paths produced or replaced by `make docker`. Keep dist/offline,
+  # which contains the final archive and its checksum.
+  rm -rf -- \
+    web/node_modules \
+    web/.next \
+    web/out \
+    web/tsconfig.tsbuildinfo \
+    server/webui/dist \
+    "dist/$TARGETARCH"
+}
 
 image_arch() {
   docker image inspect --format '{{.Architecture}}' "$1" 2>/dev/null
@@ -284,7 +298,12 @@ fi
 mv "$TEMP_ARCHIVE" "$FINAL_ARCHIVE"
 write_checksums "$OUTPUT_DIR" "$(basename "$FINAL_ARCHIVE")" > "$FINAL_CHECKSUM"
 
-info "8/8 完成"
+info "8/8 清理构建中间产物"
+if [ "${KEEP_BUILD_ARTIFACTS:-0}" = "1" ]; then
+  warn "已按 KEEP_BUILD_ARTIFACTS=1 保留构建中间产物"
+else
+  cleanup_build_artifacts
+fi
+
 ok "离线包：$FINAL_ARCHIVE"
 ok "校验值：$FINAL_CHECKSUM"
-warn "Makefile 构建产物已保留；确认不再需要后可执行 make clean"

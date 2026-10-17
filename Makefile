@@ -57,7 +57,7 @@ docker: build-web
 	docker build -t $(IMAGE) .
 
 # 构建当前提交的单架构离线部署包（应用镜像 + PostgreSQL + Compose + Skills）。
-# ARGS 可传镜像名/tag/包名；默认输出到 dist/offline，并保留 Make 构建产物：
+# ARGS 可传镜像名/tag/包名；默认输出到 dist/offline，成功后清理构建中间产物：
 #   make offline-package
 #   make offline-package ARGS="artex 0.2.0"
 #   make offline-package ARGS="myrepo/artex v0.1.0 my-pkg"
@@ -89,9 +89,10 @@ release:
 reset-password:
 	./reset-password.sh
 
-# 清理构建产物
+# 清理构建产物，但保留 dist/offline 中已经生成的离线包
 clean:
-	rm -rf $(EMBED_DIR) $(WEB_OUT) web/.next dist $(BINARY)
+	rm -rf $(EMBED_DIR) $(WEB_OUT) web/.next web/node_modules web/tsconfig.tsbuildinfo \
+	  dist/amd64 dist/arm64 $(BINARY)
 
 help:
 	@echo "ARTEX 构建目标："
