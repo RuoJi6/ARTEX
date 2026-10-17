@@ -158,25 +158,71 @@ cd web && npm ci && npm run build:static && cd ..
 # 2) 拷进内嵌目录
 cp -r web/out server/webui/dist
 # 3) 编译（-tags embedui 才内嵌前端）
-CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
+CGO_ENABLED=0 go build -buildvcs=false -tags embedui -o artex ./cmd/artex
 ./start.sh
 ```
 
 ### 方式五：构建跨平台 Release 压缩包
 
-`build.sh` 会先构建并嵌入前端，再使用 Go linker 去除调试信息，并将发布文件压缩为 zip。Release 模式默认生成 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 的 zip 包：
+`scripts/build.sh` 会先构建并嵌入前端，再使用 Go linker 去除调试信息，并将发布文件压缩为 zip。Release 模式默认生成 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 的 zip 包：
 
 ```bash
-./build.sh --release
+./scripts/build.sh --release
 # 产物：dist/artex-0.3.3-*.zip
 ```
 
 UPX 自解压二进制可能与部分 Linux 内核、虚拟化环境或安全策略不兼容，因此默认不启用。可用 `ARTEX_TARGETS` 自定义目标；确认目标运行环境兼容时，可显式传入 `--upx` 进一步缩小二进制：
 
 ```bash
-ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
-./build.sh --target linux/amd64 --upx
+ARTEX_TARGETS=linux/amd64,windows/amd64 ./scripts/build.sh --release
+./scripts/build.sh --target linux/amd64 --upx
 ```
+
+### 方式六：构建离线 Docker 部署包
+
+适用于目标服务器无法访问外网的场景。构建机需要 Bash、GNU Make、Go、Node.js/npm、Docker 及 Docker Compose；构建期间会编译当前工作区代码，并准备 ARTEX 和 PostgreSQL 镜像。目标服务器只需要 Docker 及 Docker Compose，不需要 Go、Node.js，也不需要访问镜像仓库。
+
+在有构建环境和网络的机器上执行：
+
+```bash
+# 默认按构建机架构生成 amd64 或 arm64 离线包
+make offline-package
+
+# 也可以显式指定目标架构
+make offline-package TARGETARCH=amd64
+make offline-package TARGETARCH=arm64
+```
+
+默认产物位于 `dist/offline/`，例如：
+
+```text
+artex-linux-amd64-offline.tar.gz
+artex-linux-amd64-offline.tar.gz.sha256
+```
+
+将 `.tar.gz` 复制到目标服务器后安装：
+
+```bash
+tar -xzf artex-linux-amd64-offline.tar.gz
+cd artex-linux-amd64-offline
+./artexctl install
+```
+
+安装程序会先校验并载入离线镜像，然后创建 `.env` 和数据目录并启动服务。PostgreSQL 密码可以手动输入；直接回车会生成随机密码。重复执行安装不会覆盖已有 `.env` 或持久化数据。部署在远程服务器时，通过 **http://服务器IP或域名:8787** 访问；仅在服务器本机访问时使用 **http://localhost:8787**。请确认防火墙已放行 TCP 8787，生产环境建议通过反向代理提供 HTTPS。
+
+离线包包含 ARTEX 与 PostgreSQL 镜像、`docker-compose.yml`、`.env.example`、`skills/`、校验文件、清单和 `artexctl`。常用管理命令：
+
+```bash
+./artexctl status
+./artexctl logs                 # 也可指定服务：postgres 或 artex
+./artexctl restart
+./artexctl stop
+./artexctl start
+./artexctl reset-password      # 重置 ARTEX 管理员密码
+./artexctl verify              # 重新校验离线镜像文件
+```
+
+无人值守安装可使用 `./artexctl install --non-interactive`，默认随机生成 PostgreSQL 密码；如需指定，可通过 `ARTEX_POSTGRES_PASSWORD` 环境变量传入。
 
 ---
 
@@ -288,7 +334,7 @@ cp -r <解压目录>/skills ./ && cp <解压目录>/artex ./
 git pull
 cd web && npm ci && npm run build:static && cd ..
 cp -r web/out server/webui/dist
-CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
+CGO_ENABLED=0 go build -buildvcs=false -tags embedui -o artex ./cmd/artex
 # 重启 ./start.sh
 ```
 
@@ -392,7 +438,7 @@ server {
 ### 本地运行与测试
 
 ```bash
-./dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173) → http://localhost:5173
+./scripts/dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173) → http://localhost:5173
 ```
 
 - 后端：`go run ./cmd/artex`（不带 `-tags embedui` 则不内嵌前端）
