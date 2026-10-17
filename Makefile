@@ -13,12 +13,15 @@ BINARY ?= artex
 GO     ?= go
 NPM    ?= npm
 
-# 版本戳：与 build.sh 一致，注入 main.version。git 不可用时回退 "dev"。
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# 版本戳：与 build.sh 一致，注入 main.version。显式信任当前仓库，兼容 WSL root
+# 构建 /mnt/c 下由 Windows 用户拥有的工作区；git 不可用时回退 "dev"。
+VERSION ?= $(shell git -c safe.directory="$(CURDIR)" describe --tags --always --dirty 2>/dev/null || echo dev)
 VERSION := $(VERSION:v%=%)
 
 # Go 链接参数：去符号表 + 去 buildid + 写版本号（与原 build.sh 对齐）。
 LDFLAGS := -s -w -buildid= -X main.version=$(VERSION)
+# 版本已经由 LDFLAGS 显式注入，不再让 Go 调用 Git 生成额外 VCS 元数据。
+GO_BUILD_FLAGS := -buildvcs=false -trimpath
 
 WEB_OUT   := web/out
 EMBED_DIR := server/webui/dist
@@ -34,7 +37,7 @@ TARGETARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 
 # 构建内嵌前端的单二进制（当前平台）
 build: build-web
-	CGO_ENABLED=0 $(GO) build -tags embedui -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/artex
+	CGO_ENABLED=0 $(GO) build -tags embedui $(GO_BUILD_FLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/artex
 
 # 只导出前端静态产物到 server/webui/dist
 # build:static 由 Node 脚本设置 NEXT_EXPORT，兼容 Linux/macOS，以及 WSL 中调用
@@ -45,14 +48,14 @@ build-web:
 
 # 只编译后端（不内嵌前端，dev 模式用）
 build-backend:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/artex
+	CGO_ENABLED=0 $(GO) build $(GO_BUILD_FLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/artex
 
 # 构建 Docker 镜像（本地单架构，默认 amd64）。等价 CI docker job 的本地简化版：
 # 前端静态 → 编译 linux 二进制到 dist/<arch>/artex → docker build 拷进镜像。
 # arm64 机器用：make docker TARGETARCH=arm64
 docker: build-web
 	mkdir -p dist/$(TARGETARCH)
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(TARGETARCH) $(GO) build -tags embedui -trimpath \
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(TARGETARCH) $(GO) build -tags embedui $(GO_BUILD_FLAGS) \
 	  -ldflags "$(LDFLAGS)" -o dist/$(TARGETARCH)/artex ./cmd/artex
 	docker build -t $(IMAGE) .
 

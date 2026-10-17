@@ -61,8 +61,9 @@ normalize_arch() {
 }
 
 default_tag() {
-  if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git describe --tags --always --dirty 2>/dev/null || printf '%s' "dev"
+  if command -v git >/dev/null 2>&1 &&
+    git -c safe.directory="$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -c safe.directory="$ROOT_DIR" describe --tags --always --dirty 2>/dev/null || printf '%s' "dev"
   else
     printf '%s' "dev"
   fi
@@ -243,7 +244,7 @@ printf '[+] 部署完成：http://localhost:8787（首次进入 /setup 设置管
 INSTALL
 chmod 0755 "$PACKAGE_ROOT/install.sh"
 
-git_commit="$(git rev-parse HEAD 2>/dev/null || printf '%s' unknown)"
+git_commit="$(git -c safe.directory="$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf '%s' unknown)"
 app_image_id="$(docker image inspect --format '{{.Id}}' "$FULL_IMAGE")"
 postgres_image_id="$(docker image inspect --format '{{.Id}}' "$POSTGRES_IMAGE")"
 cat > "$PACKAGE_ROOT/MANIFEST.txt" <<EOF
