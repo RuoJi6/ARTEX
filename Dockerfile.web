@@ -1,0 +1,5 @@
+# ARTEX 前端镜像（前后端分离模式）：nginx 托管 Next 静态导出。
+# 构建前需先执行 make build-web 产出 web/out。
+FROM nginx:alpine
+COPY web/out /usr/share/nginx/html
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
