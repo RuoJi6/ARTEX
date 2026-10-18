@@ -87,7 +87,7 @@ fi
 docker info >/dev/null 2>&1 || die "The Docker daemon is not available."
 docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not installed."
 
-for required in Makefile Dockerfile docker-compose.yml .env.example skills scripts/artexctl; do
+for required in Makefile Dockerfile .env.example skills scripts/artexctl; do
   [ -e "$required" ] || die "Required build input is missing: $required"
 done
 
@@ -176,7 +176,7 @@ docker save --output "$PACKAGE_ROOT/images/artex-image.tar" "$FULL_IMAGE"
 docker save --output "$PACKAGE_ROOT/images/postgres-image.tar" "$POSTGRES_IMAGE"
 
 info "5/8 Assembling deployment files"
-cp docker-compose.yml "$PACKAGE_ROOT/docker-compose.yml"
+# 离线包不内置 docker-compose.yml；由 artexctl 在安装时按数据目录动态生成。
 cp -R skills "$PACKAGE_ROOT/skills"
 cp scripts/artexctl "$PACKAGE_ROOT/artexctl"
 chmod 0755 "$PACKAGE_ROOT/artexctl"
@@ -219,8 +219,11 @@ cd $PKG_NAME
 ./artexctl install
 \`\`\`
 
-Press Enter at the PostgreSQL password prompt to generate a secure random password.
-An existing \`.env\` file and persistent data are preserved when install is run again.
+Press Enter at the PostgreSQL password prompt to generate a secure random password,
+then choose a data directory (defaults to \`/opt/artex\`) and a mapped port (defaults to
+\`8787\`). All persistent state — the \`.env\` file, application data, skills, and
+PostgreSQL — lives under that directory, so re-installing to a different path reuses it
+automatically.
 
 Run \`./artexctl help\` for start, stop, restart, status, logs, verification,
 and administrator password reset commands. After startup, use
@@ -230,7 +233,6 @@ firewall when remote access is required; use an HTTPS reverse proxy in productio
 EOF
 
 write_checksums "$PACKAGE_ROOT" images/artex-image.tar images/postgres-image.tar > "$PACKAGE_ROOT/SHA256SUMS"
-docker compose --env-file "$PACKAGE_ROOT/.env.example" -f "$PACKAGE_ROOT/docker-compose.yml" config >/dev/null
 
 info "6/8 Creating the compressed archive"
 TEMP_ARCHIVE="$WORK_DIR/${PKG_NAME}.tar.gz"

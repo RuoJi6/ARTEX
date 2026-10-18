@@ -23,6 +23,7 @@ Commands:
   start                        Start the deployment
   stop                         Stop the deployment without deleting data
   restart                      Restart all services
+  rollback                     Roll back to the previously installed image
   status                       Show service status
   logs [service]               Follow service logs
   reset-password               Reset the ARTEX administrator password
@@ -31,6 +32,8 @@ Commands:
 
 Environment:
   ARTEX_POSTGRES_PASSWORD      PostgreSQL password for non-interactive first install
+  ARTEX_DATA_DIR               Data directory for non-interactive first install (default /opt/artex)
+  ARTEX_PORT                   Mapped web UI/API port for non-interactive first install (default 8787)
 
 Existing .env files and persistent data are never overwritten by install.
 EOF
@@ -40,7 +43,6 @@ require_docker() {
   command -v docker >/dev/null 2>&1 || die "Docker is not installed."
   docker info >/dev/null 2>&1 || die "The Docker daemon is not available."
   docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not installed."
-  [ -f docker-compose.yml ] || die "docker-compose.yml is missing."
 }
 
 checksum_command() {
@@ -101,13 +103,88 @@ prompt_postgres_password() {
   printf '%s' "$password_value"
 }
 
+prompt_data_dir() {
+  non_interactive="$1"
+  if [ -n "${ARTEX_DATA_DIR:-}" ]; then
+    printf '%s' "$ARTEX_DATA_DIR"
+    return
+  fi
+  if [ "$non_interactive" = "1" ] || [ ! -t 0 ]; then
+    printf '%s' "/opt/artex"
+    return
+  fi
+  read -r -p "Enter data directory [/opt/artex]: " data_dir
+  if [ -z "$data_dir" ]; then
+    data_dir="/opt/artex"
+  fi
+  printf '%s' "$data_dir"
+}
+
+validate_data_dir() {
+  data_dir_value="$1"
+  case "$data_dir_value" in
+    ""|*[[:space:]]*)
+      die "The data directory must be a non-empty absolute path without spaces, e.g. /opt/artex"
+      ;;
+    /*) : ;;
+    *) die "The data directory must be an absolute path (starting with /), e.g. /opt/artex" ;;
+  esac
+}
+
+prompt_port() {
+  non_interactive="$1"
+  if [ -n "${ARTEX_PORT:-}" ]; then
+    printf '%s' "$ARTEX_PORT"
+    return
+  fi
+  if [ "$non_interactive" = "1" ] || [ ! -t 0 ]; then
+    printf '%s' "8787"
+    return
+  fi
+  read -r -p "Enter mapped port [8787]: " port
+  if [ -z "$port" ]; then
+    port="8787"
+  fi
+  printf '%s' "$port"
+}
+
+validate_port() {
+  port_value="$1"
+  case "$port_value" in
+    ''|*[!0-9]*) die "The port must be a number (1-65535)." ;;
+  esac
+  if [ "$port_value" -lt 1 ] || [ "$port_value" -gt 65535 ]; then
+    die "The port must be between 1 and 65535."
+  fi
+}
+
 create_env() {
   non_interactive="$1"
   [ -f .env.example ] || die ".env.example is missing."
 
-  if [ -f .env ]; then
-    chmod 600 .env
-    warn "Existing .env file preserved."
+  data_dir="$(prompt_data_dir "$non_interactive")"
+  validate_data_dir "$data_dir"
+  if ! mkdir -p "$data_dir"; then
+    die "无法创建数据目录 $data_dir，请检查写入权限（必要时用 sudo 运行）"
+  fi
+
+  env_path="$data_dir/.env"
+
+  # 权威 .env 放在数据目录里；包目录的 .env 只是指向它的软链，
+  # 这样换目录/重解压都不会丢数据库密码。
+  if [ -f "$env_path" ]; then
+    chmod 600 "$env_path"
+    ln -sfn "$env_path" .env
+    warn "已复用数据目录中的 .env（$env_path）。"
+    return
+  fi
+
+  # 老安装：包目录里是普通文件 .env，一次性迁移到数据目录
+  if [ -f .env ] && [ ! -L .env ]; then
+    mv .env "$env_path"
+    chmod 600 "$env_path"
+    ln -sfn "$env_path" .env
+    warn "已将旧 .env 迁移到 $env_path。"
     return
   fi
 
@@ -120,24 +197,40 @@ create_env() {
   fi
   validate_postgres_password "$postgres_password"
 
+  port="$(prompt_port "$non_interactive")"
+  validate_port "$port"
+
   temp_env=".env.tmp.$$"
   trap 'rm -f -- "${temp_env:-}"' EXIT INT TERM
   password_written=0
+  data_dir_written=0
+  port_written=0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       POSTGRES_PASSWORD=*)
         printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password"
         password_written=1
         ;;
+      ARTEX_DATA_DIR=*)
+        printf 'ARTEX_DATA_DIR=%s\n' "$data_dir"
+        data_dir_written=1
+        ;;
+      ARTEX_PORT=*)
+        printf 'ARTEX_PORT=%s\n' "$port"
+        port_written=1
+        ;;
       *) printf '%s\n' "$line" ;;
     esac
   done < .env.example > "$temp_env"
   [ "$password_written" = "1" ] || printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password" >> "$temp_env"
+  [ "$data_dir_written" = "1" ] || printf 'ARTEX_DATA_DIR=%s\n' "$data_dir" >> "$temp_env"
+  [ "$port_written" = "1" ] || printf 'ARTEX_PORT=%s\n' "$port" >> "$temp_env"
   chmod 600 "$temp_env"
-  mv "$temp_env" .env
+  mv "$temp_env" "$env_path"
+  ln -sfn "$env_path" .env
   trap - EXIT INT TERM
-  unset postgres_password password_value password_confirm ARTEX_POSTGRES_PASSWORD
-  ok ".env created with a protected PostgreSQL password."
+  unset postgres_password password_value password_confirm ARTEX_POSTGRES_PASSWORD data_dir port
+  ok ".env 已写入数据目录：$env_path"
 }
 
 load_images() {
@@ -152,8 +245,84 @@ load_images() {
   ok "Container images loaded."
 }
 
+app_image_ref() {
+  printf '%s:%s' "$(env_value ARTEX_IMAGE artex)" "$(env_value ARTEX_TAG offline)"
+}
+
+# 在加载新镜像前，把当前应用镜像保留为 :previous，便于回退。
+tag_previous() {
+  app_image="$(app_image_ref)"
+  previous_image="${app_image%:*}:previous"
+  if docker image inspect "$app_image" >/dev/null 2>&1; then
+    docker tag "$app_image" "$previous_image"
+    info "已将当前镜像保留为 $previous_image"
+  fi
+}
+
+# 将整个数据目录打包到 $data_dir/backup/（按时间命名）。排除 backup 目录自身，
+# 避免备份套备份。
+backup_data() {
+  data_dir="$1"
+  backup_dir="$data_dir/backup"
+  mkdir -p "$backup_dir"
+  backup_file="$backup_dir/artex-backup-$(date +%F-%H%M%S).tgz"
+  tar czf "$backup_file" -C "$data_dir" --exclude='./backup' .
+  chmod 600 "$backup_file"
+  info "已备份到 $backup_file"
+}
+
 compose_ready() {
-  docker compose config >/dev/null
+  compose config >/dev/null
+}
+
+# 按数据目录动态生成离线版 docker-compose.yml。所有持久化数据（应用数据、skills、
+# PostgreSQL）都 bind mount 到数据目录下，不依赖包目录或命名卷。
+generate_compose() {
+  data_dir="$1"
+  cat > "$data_dir/docker-compose.yml" <<EOF
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: \${POSTGRES_USER:-artex}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: \${POSTGRES_DB:-artex}
+    volumes:
+      - $data_dir/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-artex} -d \${POSTGRES_DB:-artex}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  artex:
+    image: \${ARTEX_IMAGE:-ruoji6/artex}:\${ARTEX_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ARTEX_PG_DSN: postgres://\${POSTGRES_USER:-artex}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-artex}?sslmode=disable
+      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: \${OPENAI_API_KEY:-}
+      ARTEX_LLM_PROVIDER: \${ARTEX_LLM_PROVIDER:-}
+      ARTEX_LLM_MODEL: \${ARTEX_LLM_MODEL:-}
+      ARTEX_LLM_BASE_URL: \${ARTEX_LLM_BASE_URL:-}
+      ARTEX_LLM_PROXY: \${ARTEX_LLM_PROXY:-}
+    ports:
+      - "\${ARTEX_PORT:-8787}:8787"
+      - "127.0.0.1:8788:8788"
+    volumes:
+      - $data_dir/data:/app/data
+      - $data_dir/skills:/app/skills
+    restart: unless-stopped
+EOF
+}
+
+# 统一的 compose 入口：始终指向数据目录里生成的 compose 文件，并从同一目录读取 .env。
+compose() {
+  data_dir="$(env_value ARTEX_DATA_DIR /opt/artex)"
+  docker compose --project-directory "$data_dir" -f "$data_dir/docker-compose.yml" "$@"
 }
 
 install_bundle() {
@@ -172,46 +341,80 @@ install_bundle() {
 
   require_docker
   verify_bundle
+  tag_previous
   load_images
   create_env "$non_interactive"
-  mkdir -p data skills
+  data_dir="$(env_value ARTEX_DATA_DIR /opt/artex)"
+  if ! mkdir -p "$data_dir/data" "$data_dir/skills" "$data_dir/pgdata" "$data_dir/backup"; then
+    die "无法创建数据目录 $data_dir，请检查写入权限（必要时用 sudo 运行）"
+  fi
+  # 内置技能首次（或缺失时）落盘，不覆盖用户已有技能
+  if [ -d skills ]; then
+    cp -rn skills/. "$data_dir/skills/" 2>/dev/null || true
+  fi
+  info "数据目录: $data_dir"
 
+  # 区分首次安装与升级：pgdata 已有数据（PG_VERSION）说明是升级。
+  if [ -s "$data_dir/pgdata/PG_VERSION" ]; then
+    info "检测到已有数据，本次为升级，先停止并备份..."
+    compose stop 2>/dev/null || true
+    backup_data "$data_dir"
+  else
+    info "首次安装"
+    # postgres 容器以 UID 70 运行，预置数据目录属主（最佳努力，失败不阻断）
+    chown -R 70:70 "$data_dir/pgdata" 2>/dev/null || true
+  fi
+
+  info "Generating docker-compose.yml..."
+  generate_compose "$data_dir"
   info "Validating Docker Compose configuration..."
   compose_ready
   info "Starting ARTEX..."
-  docker compose up -d
-  docker compose ps
+  compose up -d
+  compose ps
   ok "ARTEX is available at http://localhost:8787"
 }
 
 start_services() {
   require_docker
   compose_ready
-  docker compose up -d
+  compose up -d
   ok "ARTEX services started."
 }
 
 stop_services() {
   require_docker
-  docker compose stop
+  compose stop
   ok "ARTEX services stopped. Persistent data was preserved."
 }
 
 restart_services() {
   require_docker
   compose_ready
-  docker compose restart
+  compose restart
   ok "ARTEX services restarted."
+}
+
+rollback_services() {
+  require_docker
+  app_image="$(app_image_ref)"
+  previous_image="${app_image%:*}:previous"
+  if ! docker image inspect "$previous_image" >/dev/null 2>&1; then
+    die "没有可回退的旧镜像（$previous_image）"
+  fi
+  docker tag "$previous_image" "$app_image"
+  compose up -d
+  ok "已回退到旧镜像 $previous_image。"
 }
 
 show_status() {
   require_docker
-  docker compose ps
+  compose ps
 }
 
 show_logs() {
   require_docker
-  docker compose logs -f "$@"
+  compose logs -f "$@"
 }
 
 env_value() {
@@ -261,7 +464,7 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 SQL
 
   info "Resetting the ARTEX administrator password..."
-  if ! printf '%s\n' "$reset_sql" | docker compose exec -T \
+  if ! printf '%s\n' "$reset_sql" | compose exec -T \
     -e ARTEX_RESET_NEWPASS -e PGPASSWORD postgres \
     psql -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1 -q >/dev/null; then
     unset ARTEX_RESET_NEWPASS PGPASSWORD new_password db_password
@@ -280,6 +483,7 @@ case "$command_name" in
   start) [ "$#" -eq 0 ] || die "start does not accept arguments."; start_services ;;
   stop) [ "$#" -eq 0 ] || die "stop does not accept arguments."; stop_services ;;
   restart) [ "$#" -eq 0 ] || die "restart does not accept arguments."; restart_services ;;
+  rollback) [ "$#" -eq 0 ] || die "rollback does not accept arguments."; rollback_services ;;
   status) [ "$#" -eq 0 ] || die "status does not accept arguments."; show_status ;;
   logs) show_logs "$@" ;;
   reset-password) [ "$#" -eq 0 ] || die "reset-password does not accept arguments."; reset_admin_password ;;
