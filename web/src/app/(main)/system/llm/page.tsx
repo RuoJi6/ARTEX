@@ -43,6 +43,7 @@ const THINKING_TYPES: { value: string; label: string }[] = [
   { value: NONE, label: "不发送（默认）" },
   { value: "disabled", label: "关闭" },
   { value: "enabled", label: "开启" },
+  { value: "adaptive", label: "adaptive（5.5 代模型）" },
 ];
 // 输出上限用哪个请求字段名（仅 openai 格式有意义）。NONE ↔ "" 走同一套哨兵转换。
 const MAX_TOKENS_FIELDS: { value: string; label: string }[] = [
@@ -725,7 +726,8 @@ function ProfileSheet({
                 <Label className="text-sm">思考开关 · thinking.type</Label>
                 <p className="text-muted-foreground text-xs">
                   控制是否发送 thinking 字段。不发送=不带该字段（兼容 MiniMax 等不支持 的模型）；关闭=发
-                  disabled；开启=发 enabled。与下面的强度互相独立。
+                  disabled；开启=发 enabled（经典协议，5.5 代模型已不支持）；adaptive=发
+                  adaptive（5.5 代模型专用，需配合强度使用）。与下面的强度互相独立。
                 </p>
               </div>
               <Select value={thinkingType} onValueChange={setThinkingType}>
