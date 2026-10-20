@@ -158,25 +158,115 @@ cd web && npm ci && npm run build:static && cd ..
 # 2) 拷进内嵌目录
 cp -r web/out server/webui/dist
 # 3) 编译（-tags embedui 才内嵌前端）
-CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
+CGO_ENABLED=0 go build -buildvcs=false -tags embedui -o artex ./cmd/artex
 ./start.sh
 ```
 
 ### 方式五：构建跨平台 Release 压缩包
 
-`build.sh` 会先构建并嵌入前端，再使用 Go linker 去除调试信息，并将发布文件压缩为 zip。Release 模式默认生成 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 的 zip 包：
+`scripts/build.sh` 会先构建并嵌入前端，再使用 Go linker 去除调试信息，并将发布文件压缩为 zip。Release 模式默认生成 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 的 zip 包：
 
 ```bash
-./build.sh --release
+./scripts/build.sh --release
 # 产物：dist/artex-0.3.3-*.zip
 ```
 
 UPX 自解压二进制可能与部分 Linux 内核、虚拟化环境或安全策略不兼容，因此默认不启用。可用 `ARTEX_TARGETS` 自定义目标；确认目标运行环境兼容时，可显式传入 `--upx` 进一步缩小二进制：
 
 ```bash
-ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
-./build.sh --target linux/amd64 --upx
+ARTEX_TARGETS=linux/amd64,windows/amd64 ./scripts/build.sh --release
+./scripts/build.sh --target linux/amd64 --upx
 ```
+
+### 方式六：构建离线 Docker 部署包
+
+适用于目标服务器无法访问外网的场景。构建机需要 Bash、GNU Make、Go、Node.js/npm、Docker 及 Docker Compose；构建期间会编译当前工作区代码，并准备 ARTEX 和 PostgreSQL 镜像。目标服务器只需要 Docker 及 Docker Compose，不需要 Go、Node.js，也不需要访问镜像仓库。
+
+在有构建环境和网络的机器上执行：
+
+```bash
+# 默认按构建机架构生成 amd64 或 arm64 离线包
+make offline-package
+
+# 指定版本（镜像 tag + 二进制 build 标识，包名也会带上版本）
+make offline-package VERSION=v1.0.0
+
+# 前后端分离部署（nginx 前端 + api 后端，三容器：artex-pg / artex-nginx / artex-api）
+make offline-package DEPLOY_MODE=separated
+
+# 也可以显式指定目标架构
+make offline-package TARGETARCH=amd64
+make offline-package TARGETARCH=arm64
+```
+
+- `DEPLOY_MODE=monolith`（默认）：前端内嵌进 Go 二进制，单容器 + PostgreSQL，对外 **HTTP（默认 8787）**。
+- `DEPLOY_MODE=separated`：nginx 托管前端静态并反代 `/api` 到后端，三容器（`artex-pg` / `artex-api` / `artex-nginx`），对外默认 **HTTPS（443）**，80 端口 301 跳转。
+
+默认产物位于 `dist/offline/`，例如：
+
+```text
+artex-linux-amd64-offline.tar.gz
+artex-linux-amd64-offline.tar.gz.sha256
+```
+
+将 `.tar.gz` 复制到目标服务器后安装：
+
+```bash
+tar -xzf artex-linux-amd64-offline.tar.gz
+cd artex-linux-amd64-offline
+sudo ./artexctl install
+```
+
+安装程序会先校验并载入离线镜像，然后交互提示以下配置（回车用默认值）：
+
+| 提示 | 默认值 | 说明 |
+|---|---|---|
+| PostgreSQL 密码 | 随机生成 | 回车自动生成强随机密码 |
+| 数据目录 | `/opt/artex` | 所有持久化数据统一存放于此 |
+| 对外端口 | 一体 HTTP 8787 / 分离 HTTPS 443 | 分离模式还会提示 HTTP 端口（默认 80，用于跳转） |
+| HTTPS 证书目录 | 自动生成 | 仅分离模式；回车在 artex-api 容器内生成唯一自签证书 |
+
+所有持久化数据统一在数据目录（默认 `/opt/artex`）下，换目录/重解压都不会丢：
+
+```text
+/opt/artex/
+├── .env               权威配置（包目录 .env 是指向它的软链）
+├── docker-compose.yml 安装时动态生成
+├── nginx.conf         分离模式动态生成（HTTPS）
+├── data/  skills/  pgdata/  backup/  tls/
+```
+
+重复执行 `install` 不会覆盖已有 `.env` 或持久化数据，检测到已有数据时会先自动备份到 `backup/` 再升级。访问地址：一体模式 `http://服务器IP:8787`；分离模式 `https://服务器IP`（自签证书浏览器会告警，属预期）。请确认防火墙放行对应端口。
+
+离线包包含镜像 tar、`.env.example`、`skills/`、校验文件、清单和 `artexctl`（安装时按数据目录动态生成 compose 与 nginx 配置）。常用管理命令：
+
+```bash
+./artexctl status
+./artexctl logs                  # 分离模式可指定服务：pg / api / nginx
+./artexctl restart
+./artexctl stop
+./artexctl start
+./artexctl reconfigure           # 改 .env 后重新生成 compose/nginx 并应用
+./artexctl rollback              # 回退到上一版本镜像
+./artexctl reset-password        # 重置 ARTEX 管理员密码
+./artexctl verify                # 重新校验离线镜像文件
+```
+
+无人值守安装：`./artexctl install --non-interactive`，默认随机生成 PostgreSQL 密码、自签 HTTPS 证书；可用环境变量覆盖：`ARTEX_POSTGRES_PASSWORD`、`ARTEX_DATA_DIR`、`ARTEX_PORT`、`ARTEX_HTTP_PORT`、`ARTEX_TLS_CERT`。
+
+#### 替换为正式 HTTPS 证书
+
+分离模式默认用自签证书（仅加密传输、不验证身份，浏览器会告警）。如需换成正式证书（如 Let's Encrypt）：
+
+1. 准备一个证书目录，里面放 **`server.crt`**（证书/证书链）和 **`server.key`**（私钥）两个文件，文件名固定。若证书是 `fullchain.pem` / `privkey.pem` 这类命名，先重命名：
+   ```bash
+   mkdir -p /home/user/cert
+   cp fullchain.pem /home/user/cert/server.crt
+   cp privkey.pem  /home/user/cert/server.key
+   ```
+2. 安装时在「HTTPS certificate directory」提示输入该目录，或无人值守时用 `ARTEX_TLS_CERT=/home/user/cert ./artexctl install --non-interactive`。
+3. 安装程序会把证书**复制**到数据目录 `$ARTEX_DATA_DIR/tls/`，之后 nginx 从这里读取，原目录可保留也可删除。
+4. 已安装实例要换证书：直接替换 `$ARTEX_DATA_DIR/tls/server.crt` 和 `server.key`，再 `./artexctl restart`。
 
 ---
 
@@ -289,7 +379,7 @@ cp -r <解压目录>/skills ./ && cp <解压目录>/artex ./
 git pull
 cd web && npm ci && npm run build:static && cd ..
 cp -r web/out server/webui/dist
-CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
+CGO_ENABLED=0 go build -buildvcs=false -tags embedui -o artex ./cmd/artex
 # 重启 ./start.sh
 ```
 
@@ -336,6 +426,8 @@ WHERE key = 'auth.http_basic';
 ```
 
 ### 反向代理部署（HTTPS / 只开放 443）
+
+> 本节适用于**一体模式**或仓库 Docker 部署（前端/API 同端口）。**前后端分离模式**已内置 nginx 终结 HTTPS，无需额外反代（见「方式六：构建离线 Docker 部署包」）。
 
 前端和 API/SSE 都由同一个后端端口（默认 `:8787`）提供，实时活动流默认走**同源**地址，因此**无需配置 `NEXT_PUBLIC_SSE_BASE`**，公网只开放 443、把 8787 留在内网即可。
 
@@ -393,7 +485,7 @@ server {
 ### 本地运行与测试
 
 ```bash
-./dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173) → http://localhost:5173
+./scripts/dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173) → http://localhost:5173
 ```
 
 - 后端：`go run ./cmd/artex`（不带 `-tags embedui` 则不内嵌前端）

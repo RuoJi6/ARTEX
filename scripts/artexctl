@@ -1,0 +1,739 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+info() { printf '[INFO] %s\n' "$*"; }
+ok()   { printf '[OK] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*" >&2; }
+die()  { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+ARTEX offline deployment manager
+
+Usage:
+  ./artexctl <command> [options]
+
+Commands:
+  install [--non-interactive]  Verify and load images, initialize .env, and start ARTEX
+  start                        Start the deployment
+  stop                         Stop the deployment without deleting data
+  restart                      Restart all services
+  rollback                     Roll back to the previously installed image
+  reconfigure                  Regenerate compose/nginx config from .env and apply
+  status                       Show service status
+  logs [service]               Follow service logs
+  reset-password               Reset the ARTEX administrator password
+  verify                       Verify bundled image checksums
+  help                         Show this help
+
+Environment:
+  ARTEX_POSTGRES_PASSWORD      PostgreSQL password for non-interactive first install
+  ARTEX_DATA_DIR               Data directory for non-interactive first install (default /opt/artex)
+  ARTEX_PORT                   Mapped port for non-interactive first install (8787 monolith / 443 separated)
+  ARTEX_HTTP_PORT              HTTP redirect port for non-interactive install (separated, default 80)
+  ARTEX_TLS_CERT               HTTPS certificate directory for non-interactive install (empty = auto-generate)
+
+Existing .env files and persistent data are never overwritten by install.
+EOF
+}
+
+require_docker() {
+  command -v docker >/dev/null 2>&1 || die "Docker is not installed."
+  docker info >/dev/null 2>&1 || die "The Docker daemon is not available."
+  docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not installed."
+}
+
+checksum_command() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "shasum"
+  else
+    return 1
+  fi
+}
+
+verify_bundle() {
+  [ -f SHA256SUMS ] || die "SHA256SUMS is missing."
+  checksum_tool="$(checksum_command)" || die "sha256sum or shasum is required."
+
+  info "Verifying bundled container images..."
+  if [ "$checksum_tool" = "sha256sum" ]; then
+    sha256sum -c SHA256SUMS
+  else
+    shasum -a 256 -c SHA256SUMS
+  fi
+  ok "Bundle verification completed."
+}
+
+random_password() {
+  od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+validate_postgres_password() {
+  password_value="$1"
+  [ "${#password_value}" -ge 8 ] || die "The PostgreSQL password must contain at least 8 characters."
+  [ "${#password_value}" -le 128 ] || die "The PostgreSQL password must not exceed 128 characters."
+  case "$password_value" in
+    *[!A-Za-z0-9._~-]*)
+      die "The PostgreSQL password may only contain letters, numbers, dots, underscores, tildes, and hyphens."
+      ;;
+  esac
+}
+
+prompt_postgres_password() {
+  if [ ! -t 0 ]; then
+    random_password
+    return
+  fi
+
+  read -r -s -p "Enter PostgreSQL password (press Enter to generate one): " password_value
+  printf '\n' >&2
+  if [ -z "$password_value" ]; then
+    random_password
+    return
+  fi
+
+  validate_postgres_password "$password_value"
+  read -r -s -p "Confirm PostgreSQL password: " password_confirm
+  printf '\n' >&2
+  [ "$password_value" = "$password_confirm" ] || die "The PostgreSQL passwords do not match."
+  printf '%s' "$password_value"
+}
+
+prompt_data_dir() {
+  non_interactive="$1"
+  if [ -n "${ARTEX_DATA_DIR:-}" ]; then
+    printf '%s' "$ARTEX_DATA_DIR"
+    return
+  fi
+  if [ "$non_interactive" = "1" ] || [ ! -t 0 ]; then
+    printf '%s' "/opt/artex"
+    return
+  fi
+  read -r -p "Enter data directory [/opt/artex]: " data_dir
+  if [ -z "$data_dir" ]; then
+    data_dir="/opt/artex"
+  fi
+  printf '%s' "$data_dir"
+}
+
+validate_data_dir() {
+  data_dir_value="$1"
+  case "$data_dir_value" in
+    ""|*[[:space:]]*)
+      die "The data directory must be a non-empty absolute path without spaces, e.g. /opt/artex"
+      ;;
+    /*) : ;;
+    *) die "The data directory must be an absolute path (starting with /), e.g. /opt/artex" ;;
+  esac
+}
+
+prompt_port() {
+  non_interactive="$1"
+  mode="$2"
+  if [ "$mode" = "separated" ]; then
+    default_port="443"
+    prompt_label="HTTPS"
+  else
+    default_port="8787"
+    prompt_label="HTTP"
+  fi
+  if [ -n "${ARTEX_PORT:-}" ]; then
+    printf '%s' "$ARTEX_PORT"
+    return
+  fi
+  if [ "$non_interactive" = "1" ] || [ ! -t 0 ]; then
+    printf '%s' "$default_port"
+    return
+  fi
+  read -r -p "Enter $prompt_label port [$default_port]: " port
+  if [ -z "$port" ]; then
+    port="$default_port"
+  fi
+  printf '%s' "$port"
+}
+
+# 分离模式的 HTTP 端口（仅用于 80 → HTTPS 跳转），默认 80。
+prompt_http_port() {
+  non_interactive="$1"
+  if [ -n "${ARTEX_HTTP_PORT:-}" ]; then
+    printf '%s' "$ARTEX_HTTP_PORT"
+    return
+  fi
+  if [ "$non_interactive" = "1" ] || [ ! -t 0 ]; then
+    printf '%s' "80"
+    return
+  fi
+  read -r -p "Enter HTTP port [80]: " http_port
+  if [ -z "$http_port" ]; then
+    http_port="80"
+  fi
+  printf '%s' "$http_port"
+}
+
+validate_port() {
+  port_value="$1"
+  case "$port_value" in
+    ''|*[!0-9]*) die "The port must be a number (1-65535)." ;;
+  esac
+  if [ "$port_value" -lt 1 ] || [ "$port_value" -gt 65535 ]; then
+    die "The port must be between 1 and 65535."
+  fi
+}
+
+create_env() {
+  non_interactive="$1"
+  [ -f .env.example ] || die ".env.example is missing."
+
+  data_dir="$(prompt_data_dir "$non_interactive")"
+  validate_data_dir "$data_dir"
+  if ! mkdir -p "$data_dir"; then
+    die "无法创建数据目录 $data_dir，请检查写入权限（必要时用 sudo 运行）"
+  fi
+
+  env_path="$data_dir/.env"
+
+  # 权威 .env 放在数据目录里；包目录的 .env 只是指向它的软链，
+  # 这样换目录/重解压都不会丢数据库密码。
+  if [ -f "$env_path" ]; then
+    chmod 600 "$env_path"
+    ln -sfn "$env_path" .env
+    warn "已复用数据目录中的 .env（$env_path）。"
+    return
+  fi
+
+  # 老安装：包目录里是普通文件 .env，一次性迁移到数据目录
+  if [ -f .env ] && [ ! -L .env ]; then
+    mv .env "$env_path"
+    chmod 600 "$env_path"
+    ln -sfn "$env_path" .env
+    warn "已将旧 .env 迁移到 $env_path。"
+    return
+  fi
+
+  if [ -n "${ARTEX_POSTGRES_PASSWORD:-}" ]; then
+    postgres_password="$ARTEX_POSTGRES_PASSWORD"
+  elif [ "$non_interactive" = "1" ]; then
+    postgres_password="$(random_password)"
+  else
+    postgres_password="$(prompt_postgres_password)"
+  fi
+  validate_postgres_password "$postgres_password"
+
+  # 从模板读取部署模式，决定端口默认值（分离模式对外是 nginx 的 HTTPS 端口）。
+  mode=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ARTEX_MODE=*) mode="${line#ARTEX_MODE=}" ;;
+    esac
+  done < .env.example
+  mode="${mode:-monolith}"
+
+  port="$(prompt_port "$non_interactive" "$mode")"
+  validate_port "$port"
+
+  http_port="80"
+  if [ "$mode" = "separated" ]; then
+    http_port="$(prompt_http_port "$non_interactive")"
+    validate_port "$http_port"
+  fi
+
+  temp_env=".env.tmp.$$"
+  trap 'rm -f -- "${temp_env:-}"' EXIT INT TERM
+  password_written=0
+  data_dir_written=0
+  port_written=0
+  http_port_written=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      POSTGRES_PASSWORD=*)
+        printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password"
+        password_written=1
+        ;;
+      ARTEX_DATA_DIR=*)
+        printf 'ARTEX_DATA_DIR=%s\n' "$data_dir"
+        data_dir_written=1
+        ;;
+      ARTEX_PORT=*)
+        printf 'ARTEX_PORT=%s\n' "$port"
+        port_written=1
+        ;;
+      ARTEX_HTTP_PORT=*)
+        printf 'ARTEX_HTTP_PORT=%s\n' "$http_port"
+        http_port_written=1
+        ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done < .env.example > "$temp_env"
+  [ "$password_written" = "1" ] || printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password" >> "$temp_env"
+  [ "$data_dir_written" = "1" ] || printf 'ARTEX_DATA_DIR=%s\n' "$data_dir" >> "$temp_env"
+  [ "$port_written" = "1" ] || printf 'ARTEX_PORT=%s\n' "$port" >> "$temp_env"
+  [ "$http_port_written" = "1" ] || printf 'ARTEX_HTTP_PORT=%s\n' "$http_port" >> "$temp_env"
+  chmod 600 "$temp_env"
+  mv "$temp_env" "$env_path"
+  ln -sfn "$env_path" .env
+  trap - EXIT INT TERM
+  unset postgres_password password_value password_confirm ARTEX_POSTGRES_PASSWORD data_dir port http_port
+  ok ".env 已写入数据目录：$env_path"
+}
+
+load_images() {
+  shopt -s nullglob
+  image_files=(images/*.tar)
+  [ "${#image_files[@]}" -gt 0 ] || die "No container image archives were found in images/."
+
+  info "Loading bundled container images..."
+  for image_file in "${image_files[@]}"; do
+    docker load --input "$image_file"
+  done
+  ok "Container images loaded."
+}
+
+app_images() {
+  mode="$(env_value ARTEX_MODE monolith)"
+  tag="$(env_value ARTEX_TAG offline)"
+  if [ "$mode" = "separated" ]; then
+    printf '%s:%s %s:%s' \
+      "$(env_value ARTEX_API_IMAGE artex-api)" "$tag" \
+      "$(env_value ARTEX_NGINX_IMAGE artex-nginx)" "$tag"
+  else
+    printf '%s:%s' "$(env_value ARTEX_IMAGE artex)" "$tag"
+  fi
+}
+
+# 在加载新镜像前，把当前应用镜像保留为 :previous，便于回退。
+tag_previous() {
+  for app_image in $(app_images); do
+    previous_image="${app_image%:*}:previous"
+    if docker image inspect "$app_image" >/dev/null 2>&1; then
+      docker tag "$app_image" "$previous_image"
+      info "已将当前镜像保留为 $previous_image"
+    fi
+  done
+}
+
+# 将整个数据目录打包到 $data_dir/backup/（按时间命名）。排除 backup 目录自身，
+# 避免备份套备份。
+backup_data() {
+  data_dir="$1"
+  backup_dir="$data_dir/backup"
+  mkdir -p "$backup_dir"
+  backup_file="$backup_dir/artex-backup-$(date +%F-%H%M%S).tgz"
+  tar czf "$backup_file" -C "$data_dir" --exclude='./backup' .
+  chmod 600 "$backup_file"
+  info "已备份到 $backup_file"
+}
+
+compose_ready() {
+  compose config >/dev/null
+}
+
+# 按数据目录动态生成离线版 docker-compose.yml。所有持久化数据（应用数据、skills、
+# PostgreSQL）都 bind mount 到数据目录下，不依赖包目录或命名卷。
+generate_compose() {
+  data_dir="$1"
+  mode="$(env_value ARTEX_MODE monolith)"
+  if [ "$mode" = "separated" ]; then
+    write_compose_separated "$data_dir"
+    generate_nginx_conf "$data_dir"
+  else
+    write_compose_monolith "$data_dir"
+  fi
+}
+
+write_compose_monolith() {
+  data_dir="$1"
+  cat > "$data_dir/docker-compose.yml" <<EOF
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: \${POSTGRES_USER:-artex}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: \${POSTGRES_DB:-artex}
+    volumes:
+      - $data_dir/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-artex} -d \${POSTGRES_DB:-artex}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  artex:
+    image: \${ARTEX_IMAGE:-ruoji6/artex}:\${ARTEX_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ARTEX_PG_DSN: postgres://\${POSTGRES_USER:-artex}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-artex}?sslmode=disable
+      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: \${OPENAI_API_KEY:-}
+      ARTEX_LLM_PROVIDER: \${ARTEX_LLM_PROVIDER:-}
+      ARTEX_LLM_MODEL: \${ARTEX_LLM_MODEL:-}
+      ARTEX_LLM_BASE_URL: \${ARTEX_LLM_BASE_URL:-}
+      ARTEX_LLM_PROXY: \${ARTEX_LLM_PROXY:-}
+    ports:
+      - "\${ARTEX_PORT:-8787}:8787"
+      - "127.0.0.1:8788:8788"
+    volumes:
+      - $data_dir/data:/app/data
+      - $data_dir/skills:/app/skills
+    restart: unless-stopped
+EOF
+}
+
+write_compose_separated() {
+  data_dir="$1"
+
+  cat > "$data_dir/docker-compose.yml" <<EOF
+services:
+  pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: \${POSTGRES_USER:-artex}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: \${POSTGRES_DB:-artex}
+    volumes:
+      - $data_dir/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-artex} -d \${POSTGRES_DB:-artex}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    image: \${ARTEX_API_IMAGE:-artex-api}:\${ARTEX_TAG:-latest}
+    depends_on:
+      pg:
+        condition: service_healthy
+    environment:
+      ARTEX_PG_DSN: postgres://\${POSTGRES_USER:-artex}:\${POSTGRES_PASSWORD}@pg:5432/\${POSTGRES_DB:-artex}?sslmode=disable
+      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: \${OPENAI_API_KEY:-}
+      ARTEX_LLM_PROVIDER: \${ARTEX_LLM_PROVIDER:-}
+      ARTEX_LLM_MODEL: \${ARTEX_LLM_MODEL:-}
+      ARTEX_LLM_BASE_URL: \${ARTEX_LLM_BASE_URL:-}
+      ARTEX_LLM_PROXY: \${ARTEX_LLM_PROXY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8787/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    ports:
+      - "127.0.0.1:8788:8788"
+    volumes:
+      - $data_dir/data:/app/data
+      - $data_dir/skills:/app/skills
+    restart: unless-stopped
+
+  nginx:
+    image: \${ARTEX_NGINX_IMAGE:-artex-nginx}:\${ARTEX_TAG:-latest}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "\${ARTEX_PORT:-443}:443"
+      - "\${ARTEX_HTTP_PORT:-80}:80"
+    volumes:
+      - $data_dir/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - $data_dir/tls:/etc/nginx/tls:ro
+    restart: unless-stopped
+EOF
+}
+
+# 生成分离模式的 nginx 配置到数据目录（compose 挂载覆盖镜像默认配置）。
+# 默认启用 HTTPS：80 跳转到 HTTPS，证书从 $data_dir/tls/ 读取。
+# HTTPS 端口非 443 时，把端口烤进 301 跳转目标，保证 http→https 跳转正确。
+generate_nginx_conf() {
+  data_dir="$1"
+  https_port="$(env_value ARTEX_PORT 443)"
+  port_suffix=""
+  [ "$https_port" = "443" ] || port_suffix=":$https_port"
+
+  cat > "$data_dir/nginx.conf" <<NGINX
+server {
+    listen 80;
+    return 301 https://\$host${port_suffix}\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name _;
+    # 用变量形式 proxy_pass 时必须显式指定 resolver（Docker 内置 DNS）。
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    ssl_certificate     /etc/nginx/tls/server.crt;
+    ssl_certificate_key /etc/nginx/tls/server.key;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/plain text/css application/javascript application/json image/svg+xml;
+
+    location / {
+        try_files \$uri \$uri/index.html \$uri.html /index.html;
+    }
+
+    location /api/ {
+        set \$backend http://api:8787;
+        proxy_pass \$backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+NGINX
+}
+
+# 准备 HTTPS 证书到 $data_dir/tls/。已有证书则复用；否则提示输入证书目录，
+# 为空则在 artex-api 容器内生成唯一自签证书（目标机无需 openssl，也不共享私钥）。
+setup_tls() {
+  data_dir="$1"
+  non_interactive="$2"
+  mkdir -p "$data_dir/tls"
+
+  if [ -s "$data_dir/tls/server.crt" ] && [ -s "$data_dir/tls/server.key" ]; then
+    info "复用已有证书 $data_dir/tls/"
+    return
+  fi
+
+  cert_dir=""
+  if [ -n "${ARTEX_TLS_CERT:-}" ]; then
+    cert_dir="$ARTEX_TLS_CERT"
+  elif [ "$non_interactive" != "1" ] && [ -t 0 ]; then
+    read -r -p "Enter HTTPS certificate directory (Enter to auto-generate): " cert_dir
+  fi
+
+  if [ -n "$cert_dir" ]; then
+    [ -f "$cert_dir/server.crt" ] && [ -f "$cert_dir/server.key" ] \
+      || die "证书目录 $cert_dir 需包含 server.crt 和 server.key"
+    cp "$cert_dir/server.crt" "$data_dir/tls/server.crt"
+    cp "$cert_dir/server.key" "$data_dir/tls/server.key"
+    info "已从 $cert_dir 复制证书"
+  else
+    info "在 artex-api 容器内生成自签证书..."
+    api_image="$(env_value ARTEX_API_IMAGE artex-api):$(env_value ARTEX_TAG offline)"
+    cid="artex-cert-$$"
+    docker rm -f "$cid" >/dev/null 2>&1 || true
+    if ! docker run --name "$cid" --entrypoint openssl "$api_image" \
+      req -x509 -nodes -newkey rsa:2048 -days 3650 \
+        -keyout /tmp/server.key -out /tmp/server.crt -subj "/CN=artex" >/dev/null 2>&1; then
+      docker rm -f "$cid" >/dev/null 2>&1 || true
+      die "容器内生成证书失败（镜像可能不含 openssl），请通过 ARTEX_TLS_CERT 提供证书目录"
+    fi
+    docker cp "$cid:/tmp/server.crt" "$data_dir/tls/server.crt"
+    docker cp "$cid:/tmp/server.key" "$data_dir/tls/server.key"
+    docker rm -f "$cid" >/dev/null 2>&1 || true
+  fi
+  chmod 600 "$data_dir/tls/server.key"
+}
+
+# 统一的 compose 入口：始终指向数据目录里生成的 compose 文件，并从同一目录读取 .env。
+compose() {
+  data_dir="$(env_value ARTEX_DATA_DIR /opt/artex)"
+  docker compose --project-directory "$data_dir" -f "$data_dir/docker-compose.yml" "$@"
+}
+
+install_bundle() {
+  non_interactive=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --non-interactive) non_interactive=1 ;;
+      -h|--help)
+        printf 'Usage: ./artexctl install [--non-interactive]\n'
+        return
+        ;;
+      *) die "Unknown install option: $1" ;;
+    esac
+    shift
+  done
+
+  require_docker
+  verify_bundle
+  tag_previous
+  load_images
+  create_env "$non_interactive"
+  data_dir="$(env_value ARTEX_DATA_DIR /opt/artex)"
+  if ! mkdir -p "$data_dir/data" "$data_dir/skills" "$data_dir/pgdata" "$data_dir/backup" "$data_dir/tls"; then
+    die "无法创建数据目录 $data_dir，请检查写入权限（必要时用 sudo 运行）"
+  fi
+  # 内置技能首次（或缺失时）落盘，不覆盖用户已有技能
+  if [ -d skills ]; then
+    cp -rn skills/. "$data_dir/skills/" 2>/dev/null || true
+  fi
+  info "数据目录: $data_dir"
+
+  # 区分首次安装与升级：pgdata 已有数据（PG_VERSION）说明是升级。
+  if [ -s "$data_dir/pgdata/PG_VERSION" ]; then
+    info "检测到已有数据，本次为升级，先停止并备份..."
+    compose stop 2>/dev/null || true
+    backup_data "$data_dir"
+  else
+    info "首次安装"
+    # postgres 容器以 UID 70 运行，预置数据目录属主（最佳努力，失败不阻断）
+    chown -R 70:70 "$data_dir/pgdata" 2>/dev/null || true
+  fi
+
+  # 分离模式：准备 HTTPS 证书（复用 / 复制 / 自签）
+  if [ "$(env_value ARTEX_MODE monolith)" = "separated" ]; then
+    setup_tls "$data_dir" "$non_interactive"
+  fi
+
+  info "Generating docker-compose.yml..."
+  generate_compose "$data_dir"
+  info "Validating Docker Compose configuration..."
+  compose_ready
+  info "Starting ARTEX..."
+  compose up -d
+  compose ps
+  ok "ARTEX is available at http://localhost:8787"
+}
+
+start_services() {
+  require_docker
+  compose_ready
+  compose up -d
+  ok "ARTEX services started."
+}
+
+stop_services() {
+  require_docker
+  compose stop
+  ok "ARTEX services stopped. Persistent data was preserved."
+}
+
+restart_services() {
+  require_docker
+  compose_ready
+  compose restart
+  ok "ARTEX services restarted."
+}
+
+rollback_services() {
+  require_docker
+  rolled_back=0
+  for app_image in $(app_images); do
+    previous_image="${app_image%:*}:previous"
+    if docker image inspect "$previous_image" >/dev/null 2>&1; then
+      docker tag "$previous_image" "$app_image"
+      info "已回退镜像 $app_image"
+      rolled_back=1
+    fi
+  done
+  if [ "$rolled_back" = "0" ]; then
+    die "没有可回退的旧镜像"
+  fi
+  compose up -d
+  ok "已回退到旧镜像。"
+}
+
+reconfigure_services() {
+  require_docker
+  data_dir="$(env_value ARTEX_DATA_DIR /opt/artex)"
+  info "重新生成 compose 与 nginx 配置..."
+  generate_compose "$data_dir"
+  compose_ready
+  compose up -d
+  ok "配置已重新生成并应用（改 .env 后运行此命令生效）。"
+}
+
+show_status() {
+  require_docker
+  compose ps
+}
+
+show_logs() {
+  require_docker
+  compose logs -f "$@"
+}
+
+env_value() {
+  key="$1"
+  fallback="$2"
+  value=""
+  if [ -f .env ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        "$key"=*) value="${line#*=}" ;;
+      esac
+    done < .env
+  fi
+  printf '%s' "${value:-$fallback}"
+}
+
+prompt_admin_password() {
+  [ -t 0 ] || die "reset-password requires an interactive terminal."
+  read -r -s -p "Enter the new ARTEX administrator password: " admin_password
+  printf '\n' >&2
+  [ -n "$admin_password" ] || die "The administrator password cannot be empty."
+  read -r -s -p "Confirm the new password: " admin_password_confirm
+  printf '\n' >&2
+  [ "$admin_password" = "$admin_password_confirm" ] || die "The administrator passwords do not match."
+  printf '%s' "$admin_password"
+}
+
+reset_admin_password() {
+  require_docker
+  [ -f .env ] || die ".env is missing. Run './artexctl install' first."
+
+  db_user="$(env_value POSTGRES_USER artex)"
+  db_name="$(env_value POSTGRES_DB artex)"
+  db_password="$(env_value POSTGRES_PASSWORD '')"
+  [ -n "$db_password" ] || die "POSTGRES_PASSWORD is missing from .env."
+  new_password="$(prompt_admin_password)"
+
+  export ARTEX_RESET_NEWPASS="$new_password"
+  export PGPASSWORD="$db_password"
+  read -r -d '' reset_sql <<'SQL' || true
+\set ON_ERROR_STOP on
+\getenv newpw ARTEX_RESET_NEWPASS
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+INSERT INTO settings(key, value)
+VALUES ('auth.password_hash', crypt(:'newpw', gen_salt('bf', 10)))
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+SQL
+
+  info "Resetting the ARTEX administrator password..."
+  if ! printf '%s\n' "$reset_sql" | compose exec -T \
+    -e ARTEX_RESET_NEWPASS -e PGPASSWORD postgres \
+    psql -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1 -q >/dev/null; then
+    unset ARTEX_RESET_NEWPASS PGPASSWORD new_password db_password
+    die "Password reset failed. Verify that PostgreSQL is running and pgcrypto is available."
+  fi
+
+  unset ARTEX_RESET_NEWPASS PGPASSWORD new_password db_password admin_password admin_password_confirm
+  ok "The ARTEX administrator password was reset. Sign in with username ARTEX."
+}
+
+command_name="${1:-help}"
+[ "$#" -eq 0 ] || shift
+
+case "$command_name" in
+  install) install_bundle "$@" ;;
+  start) [ "$#" -eq 0 ] || die "start does not accept arguments."; start_services ;;
+  stop) [ "$#" -eq 0 ] || die "stop does not accept arguments."; stop_services ;;
+  restart) [ "$#" -eq 0 ] || die "restart does not accept arguments."; restart_services ;;
+  rollback) [ "$#" -eq 0 ] || die "rollback does not accept arguments."; rollback_services ;;
+  reconfigure) [ "$#" -eq 0 ] || die "reconfigure does not accept arguments."; reconfigure_services ;;
+  status) [ "$#" -eq 0 ] || die "status does not accept arguments."; show_status ;;
+  logs) show_logs "$@" ;;
+  reset-password) [ "$#" -eq 0 ] || die "reset-password does not accept arguments."; reset_admin_password ;;
+  verify) [ "$#" -eq 0 ] || die "verify does not accept arguments."; verify_bundle ;;
+  help|-h|--help) usage ;;
+  *) die "Unknown command: $command_name. Run './artexctl help'." ;;
+esac
