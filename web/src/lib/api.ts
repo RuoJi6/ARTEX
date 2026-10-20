@@ -1087,7 +1087,7 @@ export const api = {
     rate_per_second?: number;
     rate_per_minute?: number;
     context_window_k?: number;
-    thinking_type?: string; // ""(不发送)|"disabled"|"enabled"
+    thinking_type?: string; // ""(不发送)|"disabled"|"enabled"|"adaptive"(5.5 代)
     reasoning_effort?: string; // ""(不发送)|"low"|"medium"|"high"|"xhigh"|"max"
     priority?: number; // 轮询顺位，越大越先用
     pool_exclude?: boolean; // true=不作为故障转移目标
