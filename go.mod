@@ -1,6 +1,6 @@
 module github.com/Autumn-27/artex
 
-go 1.26.3
+go 1.26.10
 
 require (
 	mvdan.cc/sh/v3 v3.10.0
