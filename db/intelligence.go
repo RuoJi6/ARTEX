@@ -260,8 +260,8 @@ func (d *DB) ListIntelligence(ctx context.Context, f IntelligenceFilter) (*Intel
 	if err != nil {
 		return nil, err
 	}
-	// Search titles and reporters; return the recorded content directly in each row.
-	where := scope + ` AND ($3='' OR kind=$3) AND ($4='' OR i.status=$4) AND ($5='' OR i.title ILIKE '%'||$5||'%' OR i.worker ILIKE '%'||$5||'%')`
+	// Search titles, content, evidence, and reporters; return the recorded content directly in each row.
+	where := scope + ` AND ($3='' OR kind=$3) AND ($4='' OR i.status=$4) AND ($5='' OR i.title ILIKE '%'||$5||'%' OR i.content ILIKE '%'||$5||'%' OR i.evidence ILIKE '%'||$5||'%' OR i.worker ILIKE '%'||$5||'%')`
 	args = append(args, f.Kind, f.Status, f.Query)
 	if err = d.QueryRowContext(ctx, `SELECT count(*)`+where, args...).Scan(&page.Total); err != nil {
 		return nil, err

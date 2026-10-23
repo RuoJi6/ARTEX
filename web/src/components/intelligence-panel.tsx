@@ -193,8 +193,8 @@ export function IntelligencePanel({
           </Tabs>
           <div className="flex flex-wrap items-center gap-2">
             <Input
-              aria-label="搜索情报标题或上报者"
-              placeholder="搜索标题或上报者"
+              aria-label="搜索情报标题、内容或上报者"
+              placeholder="搜索标题、内容或上报者"
               value={search}
               maxLength={200}
               onChange={(e) => setSearch(e.target.value)}

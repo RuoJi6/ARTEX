@@ -354,7 +354,17 @@ function TaskDetailInner() {
   );
 
   return (
-    <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col gap-0">
+    <Tabs
+      value={tab}
+      onValueChange={(value) => {
+        setTab(value);
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("tab", value);
+        params.delete("session");
+        router.replace(`/function/tasks/detail?${params.toString()}`, { scroll: false });
+      }}
+      className="flex flex-1 flex-col gap-0"
+    >
       {/* Top fixed area */}
       <header className="sticky top-0 z-10 flex flex-col gap-2 border-b bg-background/95 px-4 py-2.5 backdrop-blur lg:px-6">
         <div className="flex items-center gap-2">

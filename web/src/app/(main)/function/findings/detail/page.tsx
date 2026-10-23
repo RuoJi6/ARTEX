@@ -58,6 +58,7 @@ function FindingDetailInner() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
   const contextTaskId = searchParams.get("context_task") ?? "";
+  const backHref = contextTaskId ? `/function/tasks/detail?id=${contextTaskId}&tab=findings` : "/function/findings";
   const [finding, setFinding] = React.useState<Finding | null>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [tab, setTab] = React.useState("overview");
@@ -117,7 +118,7 @@ function FindingDetailInner() {
         <p className="text-muted-foreground">{loaded ? `未找到发现 ${id}` : "加载中…"}</p>
         {loaded && (
           <Button asChild variant="outline">
-            <Link href="/function/findings">
+            <Link href={backHref}>
               <ArrowLeftIcon /> 返回发现列表
             </Link>
           </Button>
@@ -135,7 +136,7 @@ function FindingDetailInner() {
         <div className="flex flex-wrap items-center gap-2">
           <SidebarTrigger className="-ml-1" />
           <Button asChild variant="ghost" size="icon" className="size-7">
-            <Link href="/function/findings">
+            <Link href={backHref}>
               <ArrowLeftIcon />
             </Link>
           </Button>
