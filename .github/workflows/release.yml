@@ -249,6 +249,62 @@ jobs:
           jq -e --arg version "${RELEASE_TAG#v}" '.ok == true and .version == $version' /tmp/artex-health.json
           curl --fail http://127.0.0.1:8787/ > /tmp/artex-index.html
           grep -qi '<!doctype html' /tmp/artex-index.html
+      - name: Verify compromised eMudhra certificates are distrusted
+        run: |
+          docker run --rm --entrypoint sh artex:smoke <<'EOF'
+          set -eu
+          ca_version="$(dpkg-query -W -f='${Version}' ca-certificates)"
+          dpkg --compare-versions "$ca_version" ge "20250419~deb12u2"
+          ARTEX_NODE_MIN_VERSION="22.23.4" node -e '
+            const minimum = process.env.ARTEX_NODE_MIN_VERSION.split(".").map(Number);
+            const actual = process.versions.node.split(".").map(Number);
+            for (let i = 0; i < 3; i++) {
+              if (actual[i] > minimum[i]) process.exit(0);
+              if (actual[i] < minimum[i]) process.exit(1);
+            }
+          '
+          if curl --fail --silent --show-error --max-time 15 \
+            https://dv-g3b-emudhra.we-have-a-problem.com/ >/dev/null; then
+            echo "curl accepted a certificate from a compromised eMudhra CA" >&2
+            exit 1
+          fi
+          if node -e '
+            fetch("https://dv-g3b-emudhra.we-have-a-problem.com/")
+              .then(() => process.exit(0), () => process.exit(1))
+          '; then
+            echo "Node accepted a certificate from a compromised eMudhra CA" >&2
+            exit 1
+          fi
+          NODE_PATH="$(npm root -g)" node <<'NODE'
+          const { chromium } = require("playwright");
+
+          (async () => {
+            const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
+            const page = await browser.newPage();
+            try {
+              await page.goto("https://dv-g3b-emudhra.we-have-a-problem.com/", {
+                waitUntil: "domcontentloaded",
+                timeout: 15000,
+              });
+              console.error("Chromium accepted a certificate from a compromised eMudhra CA");
+              process.exitCode = 1;
+            } catch (error) {
+              const message = String(error);
+              if (!/ERR_CERT_|CERT_/.test(message)) {
+                console.error(`Chromium verification failed for an unrelated reason: ${message}`);
+                process.exitCode = 1;
+              } else {
+                console.log("Chromium rejected the compromised eMudhra certificate");
+              }
+            } finally {
+              await browser.close();
+            }
+          })().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+          NODE
+          EOF
       - name: Push tested architecture image
         uses: docker/build-push-action@v6
         with:

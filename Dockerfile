@@ -12,14 +12,34 @@
 #   docker build -t artex:local .
 FROM python:3.12-slim-bookworm
 ARG TARGETARCH
+ARG ARTEX_CA_CERTIFICATES_MIN_VERSION=20250419~deb12u2
+ARG ARTEX_NODE_MIN_VERSION=22.23.4
+# Bump this when a security baseline changes so BuildKit cannot reuse an older
+# apt layer that predates the baseline.
+ARG ARTEX_SECURITY_BASELINE=2026-10-21
 # 常用工具：ripgrep / curl / vim，加一批 recon 常备件（按需增删）。
 # Node 从 NodeSource 装 22.x，与前端构建使用的主版本一致。
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    echo "ARTEX_SECURITY_BASELINE=${ARTEX_SECURITY_BASELINE}"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
       ca-certificates ripgrep curl wget vim git jq unzip \
-      dnsutils iputils-ping netcat-openbsd inetutils-telnet whois nmap \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+      dnsutils iputils-ping netcat-openbsd inetutils-telnet whois nmap; \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; \
+    apt-get install -y --no-install-recommends nodejs; \
+    ca_version="$(dpkg-query -W -f='${Version}' ca-certificates)"; \
+    echo "ca-certificates=${ca_version}"; \
+    dpkg --compare-versions "$ca_version" ge "$ARTEX_CA_CERTIFICATES_MIN_VERSION"; \
+    node --version; \
+    ARTEX_NODE_MIN_VERSION="$ARTEX_NODE_MIN_VERSION" node -e ' \
+      const minimum = process.env.ARTEX_NODE_MIN_VERSION.split(".").map(Number); \
+      const actual = process.versions.node.split(".").map(Number); \
+      for (let i = 0; i < 3; i++) { \
+        if (actual[i] > minimum[i]) process.exit(0); \
+        if (actual[i] < minimum[i]) process.exit(1); \
+      } \
+    '; \
+    rm -rf /var/lib/apt/lists/*
 # 预装 Playwright MCP 与 CLI（全局），运行时不再 npx 联网下载。
 # @playwright/mcp：browser MCP 直接 `npx @playwright/mcp`（已全局装好，无需 -y/@latest）。
 # @playwright/cli：提供 playwright-cli，装完顺带 --help 验证可执行。

@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 安全与发布
+
+- 更新 Go 至 1.26.10，并为 Docker 镜像增加最低 `ca-certificates` / Node.js 安全版本检查，避免继续构建信任已泄露 eMudhra 中间 CA 的旧镜像层。
+- Release 镜像冒烟测试验证 curl 与 Node.js 拒绝使用泄露 CA 签发的证书。
+
 ## [0.3.18] - 2026-10-12
 
 ### 审批审查
