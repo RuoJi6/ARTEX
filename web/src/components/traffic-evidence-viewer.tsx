@@ -4,6 +4,7 @@ import * as React from "react";
 
 import { toast } from "sonner";
 
+import { FindingRepeaterDialog, headersFromReqHead, type RepeaterInitial } from "@/components/finding-repeater-dialog";
 import { HttpCodeBlock } from "@/components/http-code-block";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,8 @@ export function TrafficEvidenceViewer({
   const [detail, setDetail] = React.useState<FindingTrafficDetail | null>(null);
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [repeaterOpen, setRepeaterOpen] = React.useState(false);
+  const [repeaterInitial, setRepeaterInitial] = React.useState<RepeaterInitial | undefined>();
   React.useEffect(() => {
     if (!bindingId) return;
     let active = true;
@@ -63,6 +66,7 @@ export function TrafficEvidenceViewer({
   }
 
   return (
+    <>
     <Dialog
       open={bindingId !== null}
       onOpenChange={(open) => {
@@ -76,6 +80,28 @@ export function TrafficEvidenceViewer({
             {detail?.binding.snapshot.url ?? "查看绑定时保存的请求与响应"}
           </DialogDescription>
         </DialogHeader>
+        {detail ? (
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (detail.request.truncated) {
+                  toast.info("请求体为预览片段，完整正文请先下载");
+                }
+                setRepeaterInitial({
+                  method: detail.binding.snapshot.method || "GET",
+                  url: detail.binding.snapshot.url || "",
+                  headersText: headersFromReqHead(detail.binding.snapshot.req_head),
+                  body: detail.request.content || "",
+                });
+                setRepeaterOpen(true);
+              }}
+            >
+              送入 Repeater
+            </Button>
+          </div>
+        ) : null}
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
@@ -120,8 +146,16 @@ export function TrafficEvidenceViewer({
         )}
       </DialogContent>
     </Dialog>
+      <FindingRepeaterDialog
+        open={repeaterOpen}
+        onOpenChange={setRepeaterOpen}
+        initial={repeaterInitial}
+        findingLabel={detail ? `证据 #${detail.binding.id}` : undefined}
+      />
+    </>
   );
 }
+
 
 export function CapturedTrafficViewer({ id, onClose }: { id: string | null; onClose: () => void }) {
   const [detail, setDetail] = React.useState<TrafficDetail | null>(null);
