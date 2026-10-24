@@ -33,6 +33,7 @@ import type {
   TrafficEvidenceRole,
   TrafficEvidenceSnapshot,
 } from "../types";
+import { MAX_TASK_REMARK_RUNES, MAX_TASK_WORKER_COUNT } from "../types";
 import * as D from "./data";
 
 const delay = (ms = 120) => new Promise((r) => setTimeout(r, ms));
@@ -998,6 +999,40 @@ function parseBody(body?: BodyInit | null): Record<string, unknown> {
   }
 }
 
+function mockRemark(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") throw new Error("备注必须是字符串");
+  const remark = value.trim();
+  if (Array.from(remark).length > MAX_TASK_REMARK_RUNES) {
+    throw new Error(`备注最多 ${MAX_TASK_REMARK_RUNES} 个字符`);
+  }
+  return remark;
+}
+
+function mockWorkerCount(value: unknown): number {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error("Worker 运行数量必须是整数");
+  }
+  if (value < 0) throw new Error("Worker 运行数量不能为负数");
+  if (value > MAX_TASK_WORKER_COUNT) throw new Error(`Worker 运行数量最多 ${MAX_TASK_WORKER_COUNT}`);
+  return value;
+}
+
+function mockStringField(value: unknown, label: string): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") throw new Error(`${label} 必须是字符串`);
+  return value;
+}
+
+function mockIntegerField(value: unknown, label: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${label} 必须是整数`);
+  }
+  return value;
+}
+
 export async function mockHandle<T>(method: string, rawPath: string, body?: BodyInit | null): Promise<T> {
   advanceMockRetests();
   await delay();
@@ -1173,19 +1208,24 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     const profileIDs = [...((b.llm_profile_ids as number[] | undefined) ?? [])];
     const sourceTaskIDs = [...((b.source_task_ids as string[] | undefined) ?? [])];
     const companyIDs = [...new Set((b.company_ids as number[] | undefined) ?? [])];
+    const name = mockStringField(b.name, "任务名称");
+    const description = mockStringField(b.description, "任务描述");
+    const goal = mockStringField(b.goal, "任务目标");
     if (companyIDs.some((companyID) => !mockCompanies.some((company) => company.id === companyID))) {
       throw new Error("关联企业不存在或无效");
     }
-    const categoryID = typeof b.category_id === "number" ? b.category_id : undefined;
+    const categoryID = mockIntegerField(b.category_id, "category_id") ?? undefined;
     const category = categoryID === undefined ? undefined : mockTaskCategories.find((item) => item.id === categoryID);
     if (categoryID !== undefined && !category) throw new Error("任务分类不存在");
     const created: Task = {
       id,
-      name: String(b.name ?? ""),
+      name,
+      remark: mockRemark(b.remark),
       category_id: category?.id,
       category_name: category?.name,
-      description: String(b.description ?? "新任务"),
-      goal: String(b.goal ?? ""),
+      description: description || "新任务",
+      goal,
+      worker_count: mockWorkerCount(b.worker_count),
       status: "created",
       created_at: now.toISOString(),
       created_unix: Math.floor(now.getTime() / 1000),
@@ -1300,9 +1340,9 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/task-templates" && m === "GET") return { templates: mockTaskTemplates };
   if (path === "/task-templates" && m === "POST") {
     const now = new Date().toISOString();
-    const name = normalizedTemplateName(b.name);
-    const description = String(b.description ?? "").trim();
-    const goal = String(b.goal ?? "").trim();
+    const name = normalizedTemplateName(mockStringField(b.name, "模板名称"));
+    const description = mockStringField(b.description, "模板描述").trim();
+    const goal = mockStringField(b.goal, "模板目标").trim();
     if (!name || !description || !goal) throw new Error("请填写模板名称、描述和目标");
     if (
       mockTaskTemplates.some((template) => normalizedTemplateName(template.name).toLowerCase() === name.toLowerCase())
@@ -1310,11 +1350,19 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       throw new Error("模板名称已存在");
     }
     const nextID = mockTaskTemplates.reduce((max, template) => Math.max(max, template.id), 0) + 1;
+    const categoryID = mockIntegerField(b.category_id, "category_id");
+    if (b.intercept_rules !== undefined && b.intercept_rules !== null && !Array.isArray(b.intercept_rules)) {
+      throw new Error("intercept_rules 必须是数组");
+    }
     const created: TaskTemplate = {
       id: nextID,
       name,
       description,
       goal,
+      remark: mockRemark(b.remark),
+      category_id: categoryID,
+      intercept_rules: Array.isArray(b.intercept_rules) ? b.intercept_rules : [],
+      worker_count: mockWorkerCount(b.worker_count),
       created_at: now,
       updated_at: now,
     };
@@ -1324,9 +1372,17 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (seg[0] === "task-templates" && seg.length === 2 && m === "PATCH") {
     const template = mockTaskTemplates.find((item) => item.id === Number(seg[1]));
     if (!template) return {};
-    const name = typeof b.name === "string" ? normalizedTemplateName(b.name) : template.name;
-    const description = typeof b.description === "string" ? b.description.trim() : template.description;
-    const goal = typeof b.goal === "string" ? b.goal.trim() : template.goal;
+    const has = (key: string) => Object.prototype.hasOwnProperty.call(b, key);
+    const nameValue = has("name") ? mockStringField(b.name, "模板名称") : undefined;
+    const descriptionValue = has("description") ? mockStringField(b.description, "模板描述") : undefined;
+    const goalValue = has("goal") ? mockStringField(b.goal, "模板目标") : undefined;
+    const categoryID = has("category_id") ? mockIntegerField(b.category_id, "category_id") : template.category_id;
+    if (has("intercept_rules") && b.intercept_rules !== null && !Array.isArray(b.intercept_rules)) {
+      throw new Error("intercept_rules 必须是数组");
+    }
+    const name = nameValue === undefined || b.name === null ? template.name : normalizedTemplateName(nameValue);
+    const description = descriptionValue === undefined || b.description === null ? template.description : descriptionValue.trim();
+    const goal = goalValue === undefined || b.goal === null ? template.goal : goalValue.trim();
     if (!name || !description || !goal) throw new Error("请填写模板名称、描述和目标");
     if (
       mockTaskTemplates.some(
@@ -1335,9 +1391,25 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     ) {
       throw new Error("模板名称已存在");
     }
+    const remark = has("remark") ? mockRemark(b.remark) : template.remark;
+    const workerCount = has("worker_count") ? mockWorkerCount(b.worker_count) : template.worker_count;
+    const hasName = has("name") && b.name !== null;
+    const hasDescription = has("description") && b.description !== null;
+    const hasGoal = has("goal") && b.goal !== null;
+    const hasCategory = has("category_id");
+    const hasRules = has("intercept_rules");
+    const hasRemark = has("remark");
+    const hasWorkerCount = has("worker_count");
+    if (!hasName && !hasDescription && !hasGoal && !hasCategory && !hasRules && !hasRemark && !hasWorkerCount) {
+      throw new Error("至少需要提供 name、description、goal、remark、category_id、intercept_rules 或 worker_count");
+    }
     template.name = name;
     template.description = description;
     template.goal = goal;
+    template.remark = remark;
+    if (hasCategory) template.category_id = categoryID;
+    if (hasRules) template.intercept_rules = Array.isArray(b.intercept_rules) ? b.intercept_rules : [];
+    template.worker_count = workerCount;
     template.updated_at = new Date().toISOString();
     mockTaskTemplates.sort((a, b) => b.updated_at.localeCompare(a.updated_at) || b.id - a.id);
     return template;
@@ -1356,12 +1428,34 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (seg[0] === "tasks" && seg.length === 2 && m === "PATCH") {
     const task = mockTasks.find((item) => item.id === seg[1]);
     if (!task) throw new Error("任务不存在");
-    if (typeof b.name === "string") task.name = b.name.trim();
-    if (typeof b.remark === "string") task.remark = b.remark.trim();
-    if (typeof b.pinned === "boolean") {
-      task.pinned = b.pinned;
-      task.pinned_at = b.pinned ? (task.pinned_at ?? new Date().toISOString()) : null;
+    const has = (key: string) => Object.prototype.hasOwnProperty.call(b, key);
+    if (has("name") && b.name !== null && typeof b.name !== "string") throw new Error("任务名称必须是字符串");
+    if (has("remark") && b.remark !== null && typeof b.remark !== "string") throw new Error("备注必须是字符串");
+    if (has("pinned") && b.pinned !== null && typeof b.pinned !== "boolean") throw new Error("pinned 必须是布尔值");
+    const namePresent = has("name") && b.name !== null;
+    const remarkPresent = has("remark") && b.remark !== null;
+    const pinnedPresent = has("pinned") && b.pinned !== null;
+    if (!namePresent && !remarkPresent && !pinnedPresent) throw new Error("至少需要提供 name、pinned 或 remark");
+    let nextName = task.name;
+    let nextRemark = task.remark;
+    let nextPinned = task.pinned;
+    let nextPinnedAt = task.pinned_at;
+    if (namePresent) {
+      const name = (b.name as string).trim();
+      if (!name) throw new Error("任务名称不能为空");
+      if (Array.from(name).length > 200) throw new Error("任务名称最多 200 个字符");
+      nextName = name;
     }
+    if (remarkPresent) nextRemark = mockRemark(b.remark);
+    if (pinnedPresent) {
+      const pinned = b.pinned as boolean;
+      nextPinned = pinned;
+      nextPinnedAt = pinned ? (task.pinned_at ?? new Date().toISOString()) : null;
+    }
+    task.name = nextName;
+    task.remark = nextRemark;
+    task.pinned = nextPinned;
+    task.pinned_at = nextPinnedAt;
     sortMockTasks();
     return structuredClone(task);
   }

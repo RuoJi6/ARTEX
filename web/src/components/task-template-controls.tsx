@@ -33,19 +33,28 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
-import type { AssetInterceptRuleInput, TaskCategory, TaskTemplate } from "@/lib/types";
+import {
+  MAX_TASK_REMARK_RUNES,
+  MAX_TASK_WORKER_COUNT,
+  parseWorkerCountInput,
+  type AssetInterceptRuleInput,
+  type TaskCategory,
+  type TaskTemplate,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface TemplateDraft {
   name: string;
   description: string;
   goal: string;
+  remark: string;
   categoryID: number | null;
   interceptRules: AssetInterceptRuleInput[];
+  workerCount: string; // 输入框用字符串;空/0=用全局默认
 }
 
 // TemplateSeed 是「另存为模板」时从创建表单带入的初值。
-type TemplateSeed = Pick<TemplateDraft, "description" | "goal" | "categoryID" | "interceptRules">;
+type TemplateSeed = Pick<TemplateDraft, "description" | "goal" | "remark" | "categoryID" | "interceptRules" | "workerCount">;
 
 interface TaskTemplateManagerProps {
   open: boolean;
@@ -61,8 +70,10 @@ const emptyDraft = (): TemplateDraft => ({
   name: "",
   description: "",
   goal: "",
+  remark: "",
   categoryID: null,
   interceptRules: [],
+  workerCount: "",
 });
 
 function templateDraft(template: TaskTemplate): TemplateDraft {
@@ -70,8 +81,10 @@ function templateDraft(template: TaskTemplate): TemplateDraft {
     name: template.name,
     description: template.description,
     goal: template.goal,
+    remark: template.remark ?? "",
     categoryID: template.category_id ?? null,
     interceptRules: template.intercept_rules ?? [],
+    workerCount: template.worker_count ? String(template.worker_count) : "",
   };
 }
 
@@ -108,8 +121,10 @@ function TaskTemplateManager({
           name: "",
           description: seed.description,
           goal: seed.goal,
+          remark: seed.remark,
           categoryID: seed.categoryID,
           interceptRules: seed.interceptRules,
+          workerCount: seed.workerCount,
         });
       } else if (templates[0]) {
         setSelectedID(templates[0].id);
@@ -132,7 +147,7 @@ function TaskTemplateManager({
     setDraft(emptyDraft());
   };
 
-  const updateDraft = (field: "name" | "description" | "goal", value: string) => {
+  const updateDraft = (field: "name" | "description" | "goal" | "remark" | "workerCount", value: string) => {
     setDraft((current) => ({ ...current, [field]: value }));
   };
 
@@ -141,11 +156,18 @@ function TaskTemplateManager({
   };
 
   async function save() {
+    const workerCount = parseWorkerCountInput(draft.workerCount);
+    if (workerCount == null) {
+      toast.error(`Worker 运行数量必须是 0-${MAX_TASK_WORKER_COUNT} 的整数`);
+      return;
+    }
     const input = {
       name: draft.name.trim(),
       description: draft.description.trim(),
       goal: draft.goal.trim(),
+      remark: draft.remark.trim(),
       category_id: draft.categoryID,
+      worker_count: workerCount,
       intercept_rules: draft.interceptRules
         .map((r) => ({ ...r, pattern: r.pattern.trim() }))
         .filter((r) => r.pattern !== ""),
@@ -207,7 +229,7 @@ function TaskTemplateManager({
         <SheetContent className="grid h-full w-full! max-w-none! grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:w-[48rem]! sm:max-w-[48rem]!">
           <SheetHeader className="border-b px-6 py-5">
             <SheetTitle>任务模板管理</SheetTitle>
-            <SheetDescription>模板保存描述、目标、分类与任务级拦截/允许规则；修改不会影响已经创建的任务。</SheetDescription>
+            <SheetDescription>模板保存描述、目标、备注、Worker 数量、分类与任务级拦截/允许规则；修改不会影响已经创建的任务。</SheetDescription>
           </SheetHeader>
           <div className="grid min-h-0 overflow-y-auto lg:grid-cols-[15rem_minmax(0,1fr)] lg:overflow-hidden">
             <div className="flex min-h-0 flex-col border-b p-3 lg:border-r lg:border-b-0">
@@ -232,6 +254,9 @@ function TaskTemplateManager({
                     >
                       <span className="block truncate font-medium text-sm">{template.name}</span>
                       <span className="block truncate text-muted-foreground text-xs">{template.description}</span>
+                      {template.remark ? (
+                        <span className="block truncate text-muted-foreground/80 text-xs">备注：{template.remark}</span>
+                      ) : null}
                     </button>
                   ))}
                 </div>
@@ -268,6 +293,31 @@ function TaskTemplateManager({
                     placeholder="任务需要达成的目标"
                     onChange={(event) => updateDraft("goal", event.target.value)}
                   />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="task-template-remark">备注（可选）</FieldLabel>
+                  <Textarea
+                    id="task-template-remark"
+                    className="min-h-20"
+                    maxLength={MAX_TASK_REMARK_RUNES}
+                    value={draft.remark}
+                    placeholder="预设备注，应用模板时写入新任务"
+                    onChange={(event) => updateDraft("remark", event.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="task-template-worker-count">Worker 运行数量（可选）</FieldLabel>
+                  <Input
+                    id="task-template-worker-count"
+                    type="number"
+                    min={0}
+                    max={MAX_TASK_WORKER_COUNT}
+                    className="w-40"
+                    placeholder="留空 = 全局默认"
+                    value={draft.workerCount}
+                    onChange={(event) => updateDraft("workerCount", event.target.value)}
+                  />
+                  <FieldDescription>应用模板时预填本任务 Worker 数；留空或 0 = 用全局默认。</FieldDescription>
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="task-template-category">任务分类</FieldLabel>
@@ -347,8 +397,10 @@ function TaskTemplateManager({
 interface TaskTemplateControlsProps {
   description: string;
   goal: string;
+  remark?: string;
   categoryID?: number;
   interceptRules?: AssetInterceptRuleInput[];
+  workerCount?: string;
   selectedTemplateID: number | null;
   onSelectedTemplateIDChange: (id: number | null) => void;
   onApply: (template: TaskTemplate) => void;
@@ -358,8 +410,10 @@ interface TaskTemplateControlsProps {
 export function TaskTemplateControls({
   description,
   goal,
+  remark = "",
   categoryID,
   interceptRules,
+  workerCount = "",
   selectedTemplateID,
   onSelectedTemplateIDChange,
   onApply,
@@ -410,8 +464,18 @@ export function TaskTemplateControls({
       return;
     }
     setTemplateInputValue(template.name);
-    const hasContent = description.trim() !== "" || goal.trim() !== "";
-    const changesContent = description !== template.description || goal !== template.goal;
+    const currentWorkerCount = parseWorkerCountInput(workerCount);
+    const templateWorkerCount = template.worker_count ?? 0;
+    const hasContent =
+      description.trim() !== "" ||
+      goal.trim() !== "" ||
+      remark.trim() !== "" ||
+      (currentWorkerCount == null ? workerCount.trim() !== "" : currentWorkerCount !== 0);
+    const changesContent =
+      description !== template.description ||
+      goal !== template.goal ||
+      remark !== (template.remark ?? "") ||
+      (currentWorkerCount == null ? workerCount.trim() !== "" : currentWorkerCount !== templateWorkerCount);
     if (hasContent && changesContent) {
       setPendingTemplate(template);
       return;
@@ -455,8 +519,10 @@ export function TaskTemplateControls({
                 openManager({
                   description,
                   goal,
+                  remark,
                   categoryID: categoryID ?? null,
                   interceptRules: interceptRules ?? [],
+                  workerCount,
                 })
               }
             >
@@ -498,7 +564,9 @@ export function TaskTemplateControls({
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
-        <FieldDescription>选择后会复制模板的描述、目标、分类与任务级规则，不与模板保持关联。</FieldDescription>
+        <FieldDescription>
+          选择后会复制模板的描述、目标、备注、Worker 数量、分类与任务级规则，不与模板保持关联。
+        </FieldDescription>
       </Field>
 
       <AlertDialog
@@ -512,7 +580,7 @@ export function TaskTemplateControls({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>使用模板「{pendingTemplate?.name}」？</AlertDialogTitle>
-            <AlertDialogDescription>当前已填写的描述和目标将被模板内容覆盖。</AlertDialogDescription>
+            <AlertDialogDescription>当前已填写的描述、目标、备注和 Worker 数量将被模板内容覆盖。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>

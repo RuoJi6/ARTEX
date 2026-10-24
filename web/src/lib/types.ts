@@ -4,10 +4,27 @@
 export type TaskStatus = "created" | "queued" | "running" | "paused" | "done" | "failed" | "timeout";
 export type EngineMode = "exploring" | "paused" | "stalled" | "idle";
 
+// Keep these limits aligned with db.MaxTaskRemarkRunes and db.MaxTaskWorkerCount.
+export const MAX_TASK_REMARK_RUNES = 2000;
+export const MAX_TASK_WORKER_COUNT = 50;
+
+// Parse the optional worker-count input without silently changing invalid values.
+// An empty field means 0 (use the global default); every other value must be an
+// integer in the backend's accepted range.
+export function parseWorkerCountInput(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed === "") return 0;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return null;
+  if (parsed < 0 || parsed > MAX_TASK_WORKER_COUNT) return null;
+  return parsed;
+}
+
 export interface Task {
   distinct_findings?: FindingDistinctStats;
   id: string;
   remark?: string;
+  worker_count?: number; // 本任务 Worker 数;0/缺省=用全局默认
   name?: string; // 可选任务名称;空/缺省=未命名,展示时回退到描述
   category_id?: number;
   category_name?: string;
@@ -56,8 +73,10 @@ export interface TaskTemplate {
   name: string;
   description: string;
   goal: string;
+  remark?: string; // 预设备注
   category_id?: number | null; // 预设分类；null/缺省=无
   intercept_rules?: AssetInterceptRuleInput[]; // 预设的任务级拦截/允许规则
+  worker_count?: number; // 预设 Worker 数;0/缺省=用全局默认
   created_at: string;
   updated_at: string;
 }

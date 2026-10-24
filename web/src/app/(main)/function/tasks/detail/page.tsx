@@ -404,6 +404,11 @@ function TaskDetailInner() {
           </Button>
         </div>
         <p className="truncate text-xs text-muted-foreground">{task.goal}</p>
+        {task.remark ? (
+          <p className="truncate text-xs text-muted-foreground" title={task.remark}>
+            备注：{task.remark}
+          </p>
+        ) : null}
         {/* Tabs */}
         <div className="no-scrollbar min-w-0 overflow-x-auto">
           <TabsList variant="default" className="min-w-max">

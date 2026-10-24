@@ -10,7 +10,7 @@ import (
 	"github.com/Autumn-27/artex/db"
 )
 
-const maxRemarkRunes = 2000
+const maxRemarkRunes = db.MaxTaskRemarkRunes
 
 func normalizeRemark(value string) (string, error) {
 	value = strings.TrimSpace(value)

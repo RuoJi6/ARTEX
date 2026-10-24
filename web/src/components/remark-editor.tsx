@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { MAX_TASK_REMARK_RUNES } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type EditorProps = {
@@ -17,7 +18,7 @@ type EditorProps = {
 };
 
 export function RemarkEditor(props: EditorProps) {
-  return <InlineTextEditor {...props} multiline fieldName="备注" maxCharacters={2000} emptyLabel="添加备注" />;
+  return <InlineTextEditor {...props} multiline fieldName="备注" maxCharacters={MAX_TASK_REMARK_RUNES} emptyLabel="添加备注" />;
 }
 
 export function ScheduleNameEditor(props: EditorProps) {

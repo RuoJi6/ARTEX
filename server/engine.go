@@ -746,7 +746,7 @@ func (e *Engine) ReadyFor(t *Task) bool {
 // but no-op until an LLM is configured (so a task created while idle picks up
 // automatically once LLM is set from the UI).
 func (e *Engine) Run(ctx context.Context, t *Task) {
-	workers := e.m.Workers()
+	workers := workerCountForTask(t, e.m.Workers())
 	e.deleteMu.RLock()
 	if e.IsDeleting(t.ID) {
 		e.deleteMu.RUnlock()
@@ -774,6 +774,18 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 	if has, _ := t.Store.HasActiveIntent(); !has {
 		t.Notify() // kick the first planning round (acted on once LLM is ready)
 	}
+}
+
+func workerCountForTask(t *Task, global int) int {
+	if t != nil && t.WorkerCount > 0 {
+		// Direct database edits can bypass validation; cap those values so the
+		// engine never starts more than the supported per-task worker count.
+		if t.WorkerCount > db.MaxTaskWorkerCount {
+			return db.MaxTaskWorkerCount
+		}
+		return t.WorkerCount
+	}
+	return global
 }
 
 // plannerHeartbeatInterval 解析任务的 planner 心跳间隔。db.CreateTask 已归一
