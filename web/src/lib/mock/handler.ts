@@ -2249,7 +2249,15 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/traffic") return D.traffic;
   if (path === "/traffic/exchange") return D.trafficDetail;
   if (path === "/settings" && m === "GET") return D.settings;
-  if (path === "/settings" && m === "PUT") return { ...D.settings, ...b };
+  if (path === "/settings" && m === "PUT") {
+    const next = { ...D.settings, ...b };
+    if (!Array.isArray(next.worker_pools)) next.worker_pools = D.settings.worker_pools;
+    if (next.worker_pools.length > 0) {
+      next.workers = next.worker_pools.reduce((sum, pool) => sum + Number(pool.workers), 0);
+    }
+    Object.assign(D.settings, next);
+    return next;
+  }
   if (path === "/settings/basic-auth" && m === "GET") return { enabled: false, username: "", password_set: false };
   if (path === "/settings/basic-auth" && m === "PUT")
     throw new Error("演示模式不支持修改 HTTP Basic Auth，请在实际部署中配置");

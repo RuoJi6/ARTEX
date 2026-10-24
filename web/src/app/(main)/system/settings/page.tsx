@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSendMode } from "@/lib/chat-send-mode";
-import type { Settings } from "@/lib/types";
+import type { LLMProfile, Settings, WorkerPool } from "@/lib/types";
 
 import { BasicAuthCard } from "./_components/basic-auth-card";
 import { UpdateCard } from "./_components/update-card";
@@ -40,11 +40,14 @@ export default function SystemSettingsPage() {
   const [savingGlobalProxy, setSavingGlobalProxy] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
+  const [settingsLoaded, setSettingsLoaded] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [savingKey, setSavingKey] = React.useState(false);
   const [pyInterp, setPyInterp] = React.useState("");
   const [workers, setWorkers] = React.useState("3");
   const [savingWorkers, setSavingWorkers] = React.useState(false);
+  const [workerPools, setWorkerPools] = React.useState<WorkerPool[]>([]);
+  const [llmProfiles, setLlmProfiles] = React.useState<LLMProfile[]>([]);
   // 操作约束注入范围(默认都开)。
   const [injectPlanner, setInjectPlanner] = React.useState(true);
   const [injectWorker, setInjectWorker] = React.useState(true);
@@ -67,20 +70,58 @@ export default function SystemSettingsPage() {
     setGlobalProxyInput(s.global_proxy ?? "");
     setPyInterp(s.python_interpreter ?? "");
     setWorkers(String(s.workers ?? 3));
+    setWorkerPools(s.worker_pools ?? []);
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
   }, []);
 
   const saveWorkers = () => {
+    if (!settingsLoaded) {
+      toast.error("设置加载失败，请刷新后再保存 Worker 配置");
+      return;
+    }
     const n = Number(workers);
+    if (workerPools.length > 0) {
+      const total = workerPools.reduce((sum, pool) => sum + Number(pool.workers), 0);
+      if (workerPools.some((pool) => !pool.profile_id)) {
+        toast.error("请选择每个模型池的 LLM 配置");
+        return;
+      }
+      if (workerPools.some((pool) => !Number.isInteger(Number(pool.workers)) || Number(pool.workers) <= 0)) {
+        toast.error("每个模型池的 Worker 数必须是大于 0 的整数");
+        return;
+      }
+      if (total > 50) {
+        toast.error("Worker 总数不能超过 50");
+        return;
+      }
+      const ids = workerPools.map((pool) => pool.profile_id);
+      if (new Set(ids).size !== ids.length) {
+        toast.error("不能重复选择同一个 LLM 配置");
+        return;
+      }
+      setSavingWorkers(true);
+      api
+        .setSettings({
+          workers: total,
+          worker_pools: workerPools.map((pool) => ({ ...pool, workers: Number(pool.workers) })),
+        })
+        .then((s) => {
+          apply(s);
+          toast.success("已保存多模型 Worker 池（对之后启动的任务生效）");
+        })
+        .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
+        .finally(() => setSavingWorkers(false));
+      return;
+    }
     if (!Number.isInteger(n) || n <= 0) {
       toast.error("并发数必须是大于 0 的整数");
       return;
     }
     setSavingWorkers(true);
     api
-      .setSettings({ workers: n })
+      .setSettings({ workers: n, worker_pools: [] })
       .then((s) => {
         apply(s);
         toast.success("已保存并发工作 agent 数（对之后启动的任务生效）");
@@ -88,6 +129,8 @@ export default function SystemSettingsPage() {
       .catch((e) => toast.error("保存失败：" + (e as Error).message))
       .finally(() => setSavingWorkers(false));
   };
+
+  const addWorkerPool = () => setWorkerPools((pools) => [...pools, { profile_id: "", workers: 1 }]);
 
   const savePython = () => {
     setSaving(true);
@@ -112,10 +155,23 @@ export default function SystemSettingsPage() {
   React.useEffect(() => {
     api
       .settings()
-      .then(apply)
-      .catch(() => undefined)
+      .then((s) => {
+        apply(s);
+        setSettingsLoaded(true);
+      })
+      .catch(() => {
+        setSettingsLoaded(false);
+        toast.error("设置加载失败，Worker 配置已锁定，避免覆盖服务器上的模型池");
+      })
       .finally(() => setLoaded(true));
   }, [apply]);
+
+  React.useEffect(() => {
+    api
+      .llmProfiles()
+      .then(setLlmProfiles)
+      .catch(() => setLlmProfiles([]));
+  }, []);
 
   const toggleTraffic = (v: boolean) => {
     setTrafficCapture(v); // optimistic
@@ -756,6 +812,81 @@ export default function SystemSettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2 rounded-md border p-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm">多模型 Worker 池</Label>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={addWorkerPool}
+                  disabled={!loaded || !settingsLoaded || savingWorkers}
+                >
+                  添加模型池
+                </Button>
+              </div>
+              {workerPools.map((pool, index) => {
+                const selected = llmProfiles.find((profile) => profile.id === pool.profile_id);
+                const placeholder =
+                  selected?.name || (pool.profile_id ? `配置 #${pool.profile_id} 已删除/不可用` : "选择 LLM 配置");
+                return (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: pool rows are edited in place and only deleted.
+                  <div className="flex items-center gap-2" key={`${pool.profile_id}-${index}`}>
+                    <Select
+                      value={pool.profile_id || undefined}
+                      disabled={!settingsLoaded || savingWorkers}
+                      onValueChange={(value) =>
+                        setWorkerPools((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, profile_id: value } : item,
+                          ),
+                        )
+                      }
+                    >
+                      <SelectTrigger className="min-w-0 flex-1">
+                        <SelectValue placeholder={placeholder} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {!selected && pool.profile_id ? (
+                          <SelectItem value={pool.profile_id}>配置 #{pool.profile_id} 已删除/不可用</SelectItem>
+                        ) : null}
+                        {llmProfiles.map((profile) => (
+                          <SelectItem key={profile.id} value={profile.id}>
+                            {profile.name} · {profile.model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      type="number"
+                      min={1}
+                      className="w-24 font-mono text-sm"
+                      value={pool.workers}
+                      disabled={!settingsLoaded || savingWorkers}
+                      onChange={(event) =>
+                        setWorkerPools((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, workers: Number(event.target.value) } : item,
+                          ),
+                        )
+                      }
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={!settingsLoaded || savingWorkers}
+                      onClick={() => setWorkerPools((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                );
+              })}
+              {workerPools.length > 0 ? (
+                <div className="text-muted-foreground text-sm">
+                  当前合计：{workerPools.reduce((sum, pool) => sum + (Number(pool.workers) || 0), 0)} 个 Worker 会话
+                </div>
+              ) : null}
+            </div>
             <div className="flex items-center gap-2">
               <Input
                 type="number"
@@ -763,13 +894,19 @@ export default function SystemSettingsPage() {
                 className="w-32 font-mono text-sm"
                 placeholder="3"
                 value={workers}
-                disabled={!loaded || savingWorkers}
+                disabled={!loaded || !settingsLoaded || savingWorkers || workerPools.length > 0}
                 onChange={(e) => setWorkers(e.target.value)}
               />
-              <Button onClick={saveWorkers} disabled={!loaded || savingWorkers}>
+              {workerPools.length > 0 ? (
+                <span className="text-muted-foreground text-xs">已配置模型池时由各池数量决定并发。</span>
+              ) : null}
+              <Button onClick={saveWorkers} disabled={!loaded || !settingsLoaded || savingWorkers}>
                 保存
               </Button>
             </div>
+            {!settingsLoaded && loaded ? (
+              <p className="text-destructive text-xs">设置加载失败，Worker 配置已锁定；刷新成功后才能编辑或保存。</p>
+            ) : null}
           </CardContent>
         </Card>
 

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"sort"
 )
 
 // Settings is a tiny key-value store for global app config the UI toggles at
@@ -31,6 +32,32 @@ func (d *DB) SetSettingContext(ctx context.Context, key, value string) error {
 INSERT INTO settings(key, value) VALUES ($1, $2)
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, value)
 	return err
+}
+
+// SetSettingsAtomic upserts several settings in one transaction. Keys are
+// sorted so concurrent callers acquire row locks in a deterministic order.
+func (d *DB) SetSettingsAtomic(ctx context.Context, values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // commit makes this a no-op
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO settings(key, value) VALUES ($1, $2)
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, values[key]); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // InsertSettingIfAbsent 只在 key 尚未存在时写入，已存在则原样保留并返回 inserted=false。

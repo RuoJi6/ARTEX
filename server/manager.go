@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -265,6 +266,7 @@ const (
 	// only routes the search backend) and the per-profile LLM proxy.
 	settingGlobalProxy = "global_proxy"
 	settingWorkers     = "workers"
+	settingWorkerPools = "worker_pools"
 	settingLLMRecord   = "llm_record"
 	// LLM 轮询(故障转移)。默认关闭——开启后走「全局激活配置」的 agent 在当前配置
 	// 不可用(余额不足/key 失效/限流/服务异常)时自动切到下一个配置。
@@ -290,6 +292,102 @@ const (
 	// is enabled but no explicit limit was saved.
 	defaultConcurrencyLimit = 5
 )
+
+// WorkerPool binds a number of worker slots to one LLM profile. Profile IDs are
+// encoded as JSON strings to match the frontend LLMProfile API.
+type WorkerPool struct {
+	ProfileID int64 `json:"profile_id,string"`
+	Workers   int   `json:"workers"`
+}
+
+func (p *WorkerPool) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ProfileID json.RawMessage `json:"profile_id"`
+		Workers   int             `json:"workers"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var id int64
+	if err := json.Unmarshal(raw.ProfileID, &id); err != nil {
+		var text string
+		if err := json.Unmarshal(raw.ProfileID, &text); err != nil {
+			return fmt.Errorf("profile_id 必须是整数或数字字符串")
+		}
+		parsed, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+		if err != nil {
+			return fmt.Errorf("profile_id 必须是整数或数字字符串")
+		}
+		id = parsed
+	}
+	p.ProfileID, p.Workers = id, raw.Workers
+	return nil
+}
+
+// WorkerSlot is the concrete routing plan for one task run.
+type WorkerSlot struct {
+	Name      string
+	ProfileID int64 // zero means legacy task-router resolution
+}
+
+// ValidateWorkerPools validates pool shape without requiring a database. Pool
+// entries with duplicate profile IDs are rejected so each profile has one
+// unambiguous slot group in the saved order.
+func ValidateWorkerPools(pools []WorkerPool) error {
+	if len(pools) == 0 {
+		return nil
+	}
+	seen := make(map[int64]bool, len(pools))
+	total := 0
+	for _, pool := range pools {
+		if pool.ProfileID <= 0 {
+			return fmt.Errorf("worker_pools 中 profile_id 必须大于 0")
+		}
+		if pool.Workers <= 0 {
+			return fmt.Errorf("worker_pools 中 workers 必须大于 0")
+		}
+		if seen[pool.ProfileID] {
+			return fmt.Errorf("worker_pools 中 profile_id %d 重复", pool.ProfileID)
+		}
+		seen[pool.ProfileID] = true
+		if total > 50-pool.Workers {
+			return fmt.Errorf("worker_pools 的 Worker 总数必须在 1 到 50 之间")
+		}
+		total += pool.Workers
+	}
+	if total < 1 || total > 50 {
+		return fmt.Errorf("worker_pools 的 Worker 总数必须在 1 到 50 之间")
+	}
+	return nil
+}
+
+// ExpandWorkerSlots expands pools in their saved order; invalid or empty legacy
+// settings use the historical worker count (default 3).
+func ExpandWorkerSlots(pools []WorkerPool, legacy int) ([]WorkerSlot, error) {
+	if err := ValidateWorkerPools(pools); err != nil {
+		return nil, err
+	}
+	if len(pools) == 0 {
+		if legacy <= 0 {
+			legacy = defaultWorkers
+		}
+		slots := make([]WorkerSlot, legacy)
+		for i := range slots {
+			slots[i] = WorkerSlot{Name: fmt.Sprintf("work#%d", i+1)}
+		}
+		return slots, nil
+	}
+	slots := make([]WorkerSlot, 0)
+	for _, pool := range pools {
+		for i := 0; i < pool.Workers; i++ {
+			slots = append(slots, WorkerSlot{ProfileID: pool.ProfileID})
+		}
+	}
+	for i := range slots {
+		slots[i].Name = fmt.Sprintf("work#%d", i+1)
+	}
+	return slots, nil
+}
 
 // ConcurrencyLimit returns whether the simultaneous-running-task cap is enabled and
 // its limit (default 5 when enabled but unset). limit is always >=1 when enabled.
@@ -330,6 +428,64 @@ func (m *Manager) Workers() int {
 		return defaultWorkers
 	}
 	return n
+}
+
+func (m *Manager) WorkerPools() []WorkerPool {
+	v, ok, err := m.pg.GetSetting(settingWorkerPools)
+	if err != nil || !ok || strings.TrimSpace(v) == "" {
+		return []WorkerPool{}
+	}
+	var pools []WorkerPool
+	if json.Unmarshal([]byte(v), &pools) != nil || ValidateWorkerPools(pools) != nil {
+		return []WorkerPool{}
+	}
+	if pools == nil {
+		return []WorkerPool{}
+	}
+	return pools
+}
+
+// SetWorkerPools validates profile references at save time and atomically
+// synchronizes the legacy workers setting with the pool total. An empty slice
+// restores legacy mode; an optional legacy count is used when clearing pools.
+func (m *Manager) SetWorkerPools(pools []WorkerPool, legacyWorkers ...int) error {
+	if pools == nil {
+		pools = []WorkerPool{}
+	}
+	if err := ValidateWorkerPools(pools); err != nil {
+		return err
+	}
+	if len(pools) > 0 {
+		for _, pool := range pools {
+			profile, err := m.pg.ProfileByID(pool.ProfileID)
+			if err != nil {
+				return err
+			}
+			if profile == nil {
+				return fmt.Errorf("worker_pools 中 profile_id %d 不存在", pool.ProfileID)
+			}
+		}
+	}
+	b, err := json.Marshal(pools)
+	if err != nil {
+		return err
+	}
+	workerCount := m.Workers()
+	if len(pools) > 0 {
+		workerCount = 0
+		for _, pool := range pools {
+			workerCount += pool.Workers
+		}
+	} else if len(legacyWorkers) > 0 {
+		if legacyWorkers[0] <= 0 {
+			return fmt.Errorf("workers 必须 >0")
+		}
+		workerCount = legacyWorkers[0]
+	}
+	return m.pg.SetSettingsAtomic(context.Background(), map[string]string{
+		settingWorkerPools: string(b),
+		settingWorkers:     strconv.Itoa(workerCount),
+	})
 }
 
 // SetWorkers persists the concurrent work-agent count. Values <=0 are rejected.
