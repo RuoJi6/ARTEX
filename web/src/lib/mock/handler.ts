@@ -2467,7 +2467,8 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     const from = q.get("from") || "";
     const to = q.get("to") || "";
     if (status && !["pending", "allowed", "denied", "timeout"].includes(status)) throw new Error("无效审批状态");
-    if (decisionSource && !["model", "rule", "manual", "unknown"].includes(decisionSource)) throw new Error("无效判定来源");
+    if (decisionSource && !["model", "rule", "manual", "unknown"].includes(decisionSource))
+      throw new Error("无效判定来源");
     if ([...search].length > 200) throw new Error("搜索关键词不能超过 200 个字符");
     if (search.startsWith("#") && !/^#[1-9]\d*$/.test(search)) throw new Error("审批编号必须为 # 后接正整数");
     for (const value of [from, to]) {

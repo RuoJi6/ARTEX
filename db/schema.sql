@@ -1488,6 +1488,54 @@ CREATE TABLE IF NOT EXISTS finding_case_suggestions (
     UNIQUE(left_id,right_id),
     CHECK(left_id < right_id)
 );
+-- A suggestion is a group.  left_id/right_id remain compatibility anchors for
+-- old clients and are kept at the two smallest surviving member ids.
+ALTER TABLE finding_case_suggestions DROP CONSTRAINT IF EXISTS finding_case_suggestions_left_id_right_id_key;
+CREATE TABLE IF NOT EXISTS finding_case_suggestion_members (
+    suggestion_id BIGINT NOT NULL REFERENCES finding_case_suggestions(id) ON DELETE CASCADE,
+    finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    PRIMARY KEY (suggestion_id, finding_id)
+);
+CREATE INDEX IF NOT EXISTS idx_finding_case_suggestion_members_finding
+    ON finding_case_suggestion_members(finding_id);
+INSERT INTO finding_case_suggestion_members(suggestion_id, finding_id)
+    SELECT id, left_id FROM finding_case_suggestions ON CONFLICT DO NOTHING;
+INSERT INTO finding_case_suggestion_members(suggestion_id, finding_id)
+    SELECT id, right_id FROM finding_case_suggestions ON CONFLICT DO NOTHING;
+-- Anchors have cascading foreign keys.  Re-anchor a group before an anchor
+-- finding is deleted so a 3+ member suggestion survives the cascade.
+CREATE OR REPLACE FUNCTION finding_case_suggestion_reanchor() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    sid BIGINT;
+    new_left BIGINT;
+    new_right BIGINT;
+BEGIN
+    FOR sid IN
+        SELECT id FROM finding_case_suggestions
+        WHERE left_id = OLD.id OR right_id = OLD.id
+    LOOP
+        SELECT min(m.finding_id) INTO new_left
+        FROM finding_case_suggestion_members m
+        JOIN findings f ON f.id = m.finding_id
+        WHERE m.suggestion_id = sid AND m.finding_id <> OLD.id;
+        SELECT min(m.finding_id) INTO new_right
+        FROM finding_case_suggestion_members m
+        JOIN findings f ON f.id = m.finding_id
+        WHERE m.suggestion_id = sid AND m.finding_id <> OLD.id
+          AND m.finding_id > new_left;
+        IF new_left IS NOT NULL AND new_right IS NOT NULL THEN
+            UPDATE finding_case_suggestions
+            SET left_id = new_left, right_id = new_right
+            WHERE id = sid;
+        END IF;
+    END LOOP;
+    RETURN OLD;
+END $$;
+DROP TRIGGER IF EXISTS finding_case_suggestion_reanchor ON findings;
+CREATE TRIGGER finding_case_suggestion_reanchor
+BEFORE DELETE ON findings FOR EACH ROW
+EXECUTE FUNCTION finding_case_suggestion_reanchor();
 -- Rejected/detached pairs are a durable human veto, also checked on group unions.
 CREATE TABLE IF NOT EXISTS finding_case_blocks (
     left_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,

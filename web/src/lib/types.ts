@@ -1734,6 +1734,7 @@ export interface FindingCaseSuggestion {
   task_id: string;
   left_id: string;
   right_id: string;
+  finding_ids: string[];
   title: string;
   reason: string;
   state: string;

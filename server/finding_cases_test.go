@@ -42,6 +42,115 @@ func testCaseServer(t *testing.T) (*Server, int64, []int64) {
 	t.Cleanup(func() { _, _ = pg.Exec(`DELETE FROM findings WHERE task_id=$1`, task.ID); _ = pg.DeleteTask(task.ID) })
 	return &Server{m: &Manager{pg: pg}}, task.ID, ids
 }
+
+func TestFindingCaseToolMigrationPreservesBindings(t *testing.T) {
+	s, _, _ := testCaseServer(t)
+	pg := s.m.pg
+	for _, flag := range []string{"finding_case_tools_v1", "finding_case_tools_v2_review", "finding_case_tools_v3_review"} {
+		value, exists, err := pg.GetSetting(flag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if exists {
+				if err := pg.SetSetting(flag, value); err != nil {
+					t.Error(err)
+				}
+			} else if _, err := pg.Exec(`DELETE FROM settings WHERE key=$1`, flag); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	for _, tool := range s.findingCaseTools() {
+		key := tool.Name()
+		old, err := pg.GetTool(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if old == nil {
+				if _, err := pg.Exec(`DELETE FROM tools WHERE key=$1`, key); err != nil {
+					t.Error(err)
+				}
+				return
+			}
+			bindings, _ := json.Marshal(old.Agents)
+			if err := pg.UpdateTool(key, old.Description, old.Schema, bindings, old.Enabled); err != nil {
+				t.Error(err)
+			}
+		})
+		if err := pg.SeedTool(key, tool.Description(), nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		v1, v2 bool
+	}{
+		{name: "initial"},
+		{name: "v1_to_v3", v1: true},
+		{name: "v2_to_v3", v1: true, v2: true},
+		{name: "v2_without_v1_flag", v2: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for flag, value := range map[string]bool{
+				"finding_case_tools_v1":        tc.v1,
+				"finding_case_tools_v2_review": tc.v2,
+				"finding_case_tools_v3_review": false,
+			} {
+				if value {
+					if err := pg.SetSetting(flag, "true"); err != nil {
+						t.Fatal(err)
+					}
+				} else if _, err := pg.Exec(`DELETE FROM settings WHERE key=$1`, flag); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, tool := range s.findingCaseTools() {
+				if err := pg.UpdateTool(tool.Name(), "old description", json.RawMessage(`{}`), json.RawMessage(`["custom-agent"]`), false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.seedFindingCaseTools()
+			for _, tool := range s.findingCaseTools() {
+				row, err := pg.GetTool(tool.Name())
+				if err != nil || row == nil {
+					t.Fatal("missing tool", tool.Name(), err)
+				}
+				wantReporter := !tc.v1
+				if tool.Name() == "complete_finding_case_review" {
+					wantReporter = !tc.v2
+				}
+				if contains(row.Agents, "reporter") != wantReporter || !contains(row.Agents, "custom-agent") || row.Enabled {
+					t.Fatalf("binding/enabled configuration changed incorrectly: %+v", row)
+				}
+				if row.Description != tool.Description() || len(row.Schema) <= 2 {
+					t.Fatalf("description/schema not refreshed: %+v", row)
+				}
+			}
+			for _, flag := range []string{"finding_case_tools_v2_review", "finding_case_tools_v3_review"} {
+				if value, _, err := pg.GetSetting(flag); err != nil || value != "true" {
+					t.Fatalf("migration flag %s not saved: %q, %v", flag, value, err)
+				}
+			}
+			if err := pg.RemoveAgentFromTool("reporter", "complete_finding_case_review"); err != nil {
+				t.Fatal(err)
+			}
+			// A refresh retry must not replay a completed legacy binding migration.
+			if tc.v1 {
+				if err := pg.SetSetting("finding_case_tools_v3_review", "false"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.seedFindingCaseTools()
+			row, err := pg.GetTool("complete_finding_case_review")
+			if err != nil || row == nil || contains(row.Agents, "reporter") {
+				t.Fatal("refresh restored an operator-removed binding", row, err)
+			}
+		})
+	}
+}
+
 func TestFindingCaseAPIPaginationAndTools(t *testing.T) {
 	s, task, ids := testCaseServer(t)
 	ctx := context.Background()

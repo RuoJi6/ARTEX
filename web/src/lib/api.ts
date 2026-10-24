@@ -645,8 +645,11 @@ export const api = {
     get<FindingCaseSuggestion[]>(
       `/exploration/finding-case-suggestions${task ? `?task_id=${encodeURIComponent(task)}` : ""}`,
     ),
-  resolveFindingCaseSuggestion: (id: string, accept: boolean) =>
-    post<{ case_id: string }>(`/exploration/finding-case-suggestions/${id}`, { accept }),
+  resolveFindingCaseSuggestion: (id: string, accept: boolean, excludeIds?: string[]) =>
+    post<{ case_id: string }>(`/exploration/finding-case-suggestions/${id}`, {
+      accept,
+      ...(excludeIds && excludeIds.length > 0 ? { exclude_ids: excludeIds } : {}),
+    }),
   reviewFindingCases: (ids: string[]) =>
     post<{ runs: { conversation_id: number; task_id: string }[] }>("/exploration/finding-case-review", {
       finding_ids: ids,

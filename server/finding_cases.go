@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Autumn-27/artex/db"
@@ -203,12 +205,22 @@ func (s *Server) caseSuggestions(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) resolveCaseSuggestion(w http.ResponseWriter, r *http.Request) {
 	var a struct {
-		Accept bool `json:"accept"`
+		Accept     bool     `json:"accept"`
+		ExcludeIDs []string `json:"exclude_ids"`
 	}
 	if !decodeCaseRequest(w, r, &a) {
 		return
 	}
-	id, err := s.m.pg.ResolveFindingCaseSuggestion(r.Context(), int64(atoiDefault(r.PathValue("id"), 0)), a.Accept)
+	exclude := make([]int64, 0, len(a.ExcludeIDs))
+	for _, raw := range a.ExcludeIDs {
+		id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || id <= 0 {
+			caseHTTPError(w, errors.New("无效的排除记录编号"))
+			return
+		}
+		exclude = append(exclude, id)
+	}
+	id, err := s.m.pg.ResolveFindingCaseSuggestion(r.Context(), int64(atoiDefault(r.PathValue("id"), 0)), a.Accept, exclude)
 	if err != nil {
 		caseHTTPError(w, err)
 		return
@@ -253,10 +265,10 @@ func (s *Server) findingCaseTools() []actool.CoreTool {
 		name, desc string
 		required   []string
 	}{
-		{"search_finding_duplicates", "只读检索同任务候选，返回摘要与资产；等级不同也可能重复。支持分页，按需读取详情。", []string{"finding_id"}},
+		{"search_finding_duplicates", "只读检索同任务候选摘要与资产，按分数排序并返回 score、tier、hit_reasons：strong=同漏洞类型且资产重叠，weak=未同时具备同漏洞类型和资产重叠，请结合 hit_reasons 核对，仅作参考。等级不同也可能重复。支持分页，按需读取详情。", []string{"finding_id"}},
 		{"get_finding_record", "读取独立漏洞完整原始证据和报告，返回探索节点编号以便追溯执行记录。", []string{"finding_id"}},
 		{"merge_finding_records", "证据明确证明同一缺陷时归并；保留所有原始记录。不跨任务、不改变原评级，不可绕过人工否决。", []string{"task_id", "finding_ids", "title", "reason"}},
-		{"suggest_finding_merge", "证据不足时提交疑似重复建议，待人工确认；不是自动合并。只允许两条同任务记录。", []string{"task_id", "finding_ids", "title", "reason"}},
+		{"suggest_finding_merge", "证据存在具体共同点但缺少关键证据时，提交一个疑似重复分组（2..20 条同任务记录，一次覆盖全部疑似成员，不要拆成两两建议），待人工确认；不是自动合并。仅类型/资产相同不应提交。", []string{"task_id", "finding_ids", "title", "reason"}},
 		{"get_finding_case", "读取归并组和成员分页。先记录version，再读取成员的原报告、证据及流量；版本变化必须重新读取。", []string{"case_id"}},
 		{"update_finding_case_report", "保存统一报告及评级理由，version必须来自实际读取。保留各条原报告，不新建漏洞。", []string{"case_id", "version", "title", "report", "severity", "severity_reason"}},
 	}
@@ -312,8 +324,9 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 		if scope != nil {
 			scopes = append(scopes, scope)
 		}
-		items, total, err := s.m.pg.FindingCaseCandidates(fid, page, 20, scopes...)
-		return map[string]any{"items": items, "total": total, "page": page, "page_size": 20}, err
+		items, total, strongTotal, err := s.m.pg.FindingCaseCandidates(fid, page, 20, scopes...)
+		return map[string]any{"items": items, "total": total, "strong_total": strongTotal, "page": page, "page_size": 20,
+			"note": "按分数排序；weak 表示未同时具备同漏洞类型和资产重叠，请结合 hit_reasons 核对，仅作参考，通常不应据此建议归并"}, err
 	case "get_finding_record":
 		f, err := s.m.pg.GetFinding(fid)
 		if err != nil {
@@ -341,11 +354,11 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 		return map[string]string{"case_id": i64s(id)}, err
 	case "suggest_finding_merge":
 		ids := a.ids()
-		if len(ids) != 2 {
-			return nil, errors.New("疑似重复建议需要两条记录")
+		if len(ids) < 2 || len(ids) > 20 {
+			return nil, errors.New("疑似重复分组需要2至20条记录")
 		}
-		id, err := s.m.pg.SuggestFindingCase(ctx, parseProfileID(a.TaskID), ids[0], ids[1], a.Title, a.Reason)
-		return map[string]string{"suggestion_id": i64s(id)}, err
+		id, err := s.m.pg.SuggestFindingCase(ctx, parseProfileID(a.TaskID), ids, a.Title, a.Reason)
+		return map[string]any{"suggestion_id": i64s(id), "finding_ids": ids}, err
 	case "get_finding_case":
 		c, err := s.m.pg.GetFindingCase(cid)
 		if err != nil {
@@ -378,26 +391,43 @@ func (s *Server) seedFindingCaseTools() {
 	if err != nil || a == nil {
 		return
 	}
-	const flag = "finding_case_tools_v2_review"
+	const flag = "finding_case_tools_v3_review"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
 	names := []string{}
 	previous, _, _ := s.m.pg.GetSetting("finding_case_tools_v1")
+	// v3 refreshes descriptions and schemas without repeating the v2 binding migration.
+	previousReview, _, _ := s.m.pg.GetSetting("finding_case_tools_v2_review")
 	for _, t := range s.findingCaseTools() {
 		schema, _ := json.Marshal(t.InputSchema())
+		if err := s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema); err != nil {
+			log.Printf("[finding-cases] refresh %s schema failed: %v", t.Name(), err)
+		}
 		if err := s.m.pg.SeedTool(t.Name(), t.Description(), schema, json.RawMessage(`["reporter"]`)); err != nil {
 			return
 		}
-		if previous != "true" || t.Name() == "complete_finding_case_review" {
+		needsBinding := previous != "true"
+		if t.Name() == "complete_finding_case_review" {
+			needsBinding = previousReview != "true"
+		}
+		if needsBinding {
 			names = append(names, t.Name())
 		}
 	}
 	if err := s.m.pg.AddAgentToToolBinding("reporter", names); err != nil {
 		return
 	}
+	if previousReview != "true" {
+		if err := s.m.pg.SetSetting("finding_case_tools_v2_review", "true"); err != nil {
+			return
+		}
+	}
 	_ = s.m.pg.SetSetting(flag, "true")
 }
+
+const findingCaseReviewTaskMessage = "人工选择整理（只读原始记录）：本任务所选 finding_ids=%s。逐条读取已有报告，仅判断同一实际根因；根因明确相同则直接归并。只有证据指向相同端点、处理器/后端组件、参数或缺失检查等具体共同点，但缺少确认共同根因的关键证据时，才提交一个覆盖2..20条同任务疑似成员的分组，不要拆成两两建议；仅类型或资产相同不足以建议，没有具体共同点时保持 independent，不要因为不确定就提交建议。证据表明属于不同代码路径时可判 independent。已有或新建组应尽力更新统一报告；统一报告暂缺或待更新不阻塞 complete_finding_case_review，可由后续运行或人工补齐。禁止生成或覆盖原始报告、改评级状态、补绑证据，不归并未选记录，不探测目标，遵守人工否决。结束前调用 complete_finding_case_review 提交逐条判断并通过验收。"
+
 func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 	var a findingCaseRequest
 	if !decodeCaseRequest(w, r, &a) {
@@ -463,7 +493,7 @@ func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 		taskID, fids := reservation.TaskID, reservation.FindingIDs
 		taskContext := taskContexts[taskID]
 		raw, _ := json.Marshal(fids)
-		msg := fmt.Sprintf("人工选择整理（只读原始记录）：本任务所选 finding_ids=%s。逐条读取已有报告，仅判断同一实际根因，明确则归并，不确定提交建议；已有组更新统一报告。禁止生成或覆盖原始报告、改评级状态、补绑证据，不归并未选记录，不探测目标。结束前调用 complete_finding_case_review 提交逐条判断并通过验收。", raw)
+		msg := fmt.Sprintf(findingCaseReviewTaskMessage, raw)
 		item := triggeredRun{agentKey: "reporter", title: "漏洞整理 · task#" + i64s(taskID), message: msg, taskID: taskID, taskDesc: taskContext.taskDesc, taskGoal: taskContext.taskGoal, conversationID: reservation.ConversationID}
 		cfg := s.readTriggerBehavior("reporter")
 		s.queueMu.Lock()

@@ -33,9 +33,9 @@ func (s *Server) toolCompleteFindingCaseReview() actool.CoreTool {
 	decision := objSchema(map[string]any{
 		"finding_id":          idParam("所选独立漏洞记录 ID"),
 		"verdict":             map[string]any{"type": "string", "enum": []string{"independent", "merged", "suggested"}},
-		"reason":              strParam("判断理由，接口或读写影响不同不能单独证明不同根因"),
-		"root_cause_evidence": strParam("原始报告/证据中支持实际共同或不同根因的具体材料；不确定则说明缺失证据及已保存建议")}, "finding_id", "verdict", "reason", "root_cause_evidence")
-	return wrTool("complete_finding_case_review", "历史整理结束前提交每条所选记录的根因判断并验收：必须已读取全部记录，疑似必须已有建议，归并必须已有完整最新统一报告。验收失败不能宣布完成。", objSchema(map[string]any{"summary": strParam("整理结果总结"), "decisions": map[string]any{"type": "array", "items": decision}}, "summary", "decisions"), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
+		"reason":              strParam("判断理由，引用已证据化的共同点或不同代码路径；仅类型、标题或资产相同不足以证明共同根因"),
+		"root_cause_evidence": strParam("原始报告/证据中支持实际共同或不同根因的具体材料；suggested 须说明具体共同点、缺失的关键证据及已保存分组；没有具体共同点应判 independent")}, "finding_id", "verdict", "reason", "root_cause_evidence")
+	return wrTool("complete_finding_case_review", "历史整理结束前提交每条所选记录的根因判断并验收：必须已读取全部记录，疑似必须已有待确认分组建议；归并只需已在活动文件夹中，统一报告可稍后补齐。验收失败不能宣布完成。", objSchema(map[string]any{"summary": strParam("整理结果总结"), "decisions": map[string]any{"type": "array", "items": decision}}, "summary", "decisions"), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
 		var a findingReviewConclusion
 		if err := json.Unmarshal(raw, &a); err != nil {
 			return actool.Errorf(err.Error()), nil
@@ -101,7 +101,9 @@ func (s *Server) saveFindingReviewConclusion(ctx context.Context, conv int64, a 
 				}
 			case "suggested":
 				var pending bool
-				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM finding_case_suggestions WHERE state='pending' AND (left_id=$1 OR right_id=$1))`, id).Scan(&pending); err != nil {
+				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM finding_case_suggestions s
+                    JOIN finding_case_suggestion_members sm ON sm.suggestion_id=s.id
+                    WHERE s.state='pending' AND sm.finding_id=$1)`, id).Scan(&pending); err != nil {
 					return err
 				}
 				if !pending {
@@ -115,17 +117,12 @@ func (s *Server) saveFindingReviewConclusion(ctx context.Context, conv int64, a 
 				return errors.New("无效判断类型")
 			}
 			if cid.Valid {
-				var report string
-				var version, rv int64
 				var active bool
-				if err := tx.QueryRow(`SELECT report,version,report_version,active FROM finding_cases WHERE id=$1 FOR SHARE`, cid.Int64).Scan(&report, &version, &rv, &active); err != nil {
+				if err := tx.QueryRow(`SELECT active FROM finding_cases WHERE id=$1 FOR SHARE`, cid.Int64).Scan(&active); err != nil {
 					return err
 				}
-				if !active || rv != version {
-					return fmt.Errorf("文件夹 #%d 的统一报告待更新，请重新读取后更新", cid.Int64)
-				}
-				if err := validateUnifiedFindingReport(report); err != nil {
-					return err
+				if !active {
+					return fmt.Errorf("文件夹 #%d 已关闭", cid.Int64)
 				}
 			}
 		}

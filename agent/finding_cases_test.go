@@ -46,7 +46,7 @@ func TestHistoricalFindingReviewFiltersMutationAndProbeTools(t *testing.T) {
 			t.Fatal("historical mutation capability", tool.Name())
 		}
 	}
-	if len(out) != 6 || def.FindingGuidance != "" || !strings.Contains(def.CaseGuidance, "历史整理模式") || !strings.Contains(def.CaseGuidance, "接口、路径、后端、读/写影响、评级不同") {
+	if len(out) != 6 || def.FindingGuidance != "" || !strings.Contains(def.CaseGuidance, "历史整理模式") || !strings.Contains(def.CaseGuidance, "端点/路由") || !strings.Contains(def.CaseGuidance, "2..20") {
 		t.Fatal("missing historical isolation", def)
 	}
 	normal, _, cl := AugmentTools(t.Context(), "reporter", tools)

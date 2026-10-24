@@ -4,10 +4,45 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Autumn-27/artex/intercept"
 	"strings"
 	"testing"
+
+	"github.com/Autumn-27/artex/intercept"
 )
+
+func TestFindingCaseReviewTaskMessagePolicy(t *testing.T) {
+	message := fmt.Sprintf(findingCaseReviewTaskMessage, `[101,102,103]`)
+	for _, want := range []string{
+		"finding_ids=[101,102,103]",
+		"根因明确相同则直接归并",
+		"相同端点、处理器/后端组件、参数或缺失检查",
+		"缺少确认共同根因的关键证据",
+		"一个覆盖2..20条同任务疑似成员的分组",
+		"不要拆成两两建议",
+		"仅类型或资产相同不足以建议",
+		"没有具体共同点时保持 independent",
+		"不同代码路径时可判 independent",
+		"尽力更新统一报告",
+		"统一报告暂缺或待更新不阻塞 complete_finding_case_review",
+		"不归并未选记录",
+		"不探测目标",
+		"遵守人工否决",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("task message missing policy: %s", want)
+		}
+	}
+	if strings.Contains(message, "不确定提交建议") {
+		t.Fatal("task message suggests solely because of uncertainty")
+	}
+	schema, err := json.Marshal((&Server{}).toolCompleteFindingCaseReview().InputSchema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(schema), "没有具体共同点应判 independent") || strings.Contains(string(schema), "不确定则说明缺失证据及已保存建议") {
+		t.Fatal("completion schema must not require suggestions solely because of uncertainty")
+	}
+}
 
 const completeFindingReviewReport = `# 同一权限缺陷
 ## 概述
@@ -43,7 +78,7 @@ func TestUnifiedFindingReportRejectsIncompleteAndTruncated(t *testing.T) {
 	}
 }
 
-func TestFindingCaseReviewCompletionRequiresReadsAndFreshReport(t *testing.T) {
+func TestFindingCaseReviewCompletionRequiresReadsNotFreshReport(t *testing.T) {
 	s, task, ids := testCaseServer(t)
 	runs, err := s.m.pg.CreateFindingCaseReviews(t.Context(), map[int64][]int64{task: ids})
 	if err != nil {
@@ -71,13 +106,6 @@ func TestFindingCaseReviewCompletionRequiresReadsAndFreshReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.saveFindingReviewConclusion(ctx, conv, a); err == nil {
-		t.Fatal("missing unified report accepted")
-	}
-	c, _ := s.m.pg.GetFindingCase(cid)
-	if err := s.m.pg.UpdateFindingCaseReport(ctx, cid, c.Version, "orders", completeFindingReviewReport, "high", "verified impact"); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.saveFindingReviewConclusion(ctx, conv, a); err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +118,8 @@ func TestFindingCaseReviewCompletionRequiresReadsAndFreshReport(t *testing.T) {
 	if _, err := s.m.pg.Exec(`UPDATE findings SET evidence='new proof' WHERE id=$1`, ids[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.validateFindingReviewCompletion(conv); err == nil {
-		t.Fatal("stale group reported completed")
+	if err := s.validateFindingReviewCompletion(conv); err != nil {
+		t.Fatalf("stale unified report should not block merged conclusion: %v", err)
 	}
 }
 
@@ -138,7 +166,7 @@ func TestFindingCaseReviewSuggestionNeedsSavedSuggestion(t *testing.T) {
 	if err := s.saveFindingReviewConclusion(ctx, conv, a); err == nil {
 		t.Fatal("unpersisted suggestion accepted")
 	}
-	if _, err := s.m.pg.SuggestFindingCase(ctx, task, ids[0], ids[1], "orders", "common component unknown"); err != nil {
+	if _, err := s.m.pg.SuggestFindingCase(ctx, task, []int64{ids[0], ids[1]}, "orders", "common component unknown"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.saveFindingReviewConclusion(ctx, conv, a); err != nil {

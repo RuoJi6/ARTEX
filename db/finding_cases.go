@@ -41,13 +41,14 @@ type FindingCaseEvent struct {
 	CreatedAt  time.Time       `json:"created_at"`
 }
 type FindingCaseSuggestion struct {
-	ID      int64  `json:"id,string"`
-	TaskID  int64  `json:"task_id,string"`
-	LeftID  int64  `json:"left_id,string"`
-	RightID int64  `json:"right_id,string"`
-	Title   string `json:"title"`
-	Reason  string `json:"reason"`
-	State   string `json:"state"`
+	ID         int64    `json:"id,string"`
+	TaskID     int64    `json:"task_id,string"`
+	LeftID     int64    `json:"left_id,string"`
+	RightID    int64    `json:"right_id,string"`
+	Title      string   `json:"title"`
+	Reason     string   `json:"reason"`
+	State      string   `json:"state"`
+	FindingIDs []string `json:"finding_ids"`
 }
 type FindingCaseRow struct {
 	Case       *FindingCase `json:"case,omitempty"`
@@ -198,9 +199,9 @@ func lockCaseTask(tx *sql.Tx, taskID int64) error {
 	return tx.QueryRow(`SELECT id FROM tasks WHERE id=$1 FOR UPDATE`, taskID).Scan(&id)
 }
 func (d *DB) MergeFindingCase(ctx context.Context, taskID int64, ids []int64, title, reason, actor string) (int64, error) {
-	return d.mergeFindingCase(ctx, taskID, ids, title, reason, actor, 0)
+	return d.mergeFindingCase(ctx, taskID, ids, title, reason, actor, 0, nil)
 }
-func (d *DB) mergeFindingCase(ctx context.Context, taskID int64, ids []int64, title, reason, actor string, suggestionID int64) (int64, error) {
+func (d *DB) mergeFindingCase(ctx context.Context, taskID int64, ids []int64, title, reason, actor string, suggestionID int64, dropped []int64) (int64, error) {
 	ids, err := sortedFindingIDs(ids)
 	if err != nil {
 		return 0, err
@@ -208,6 +209,7 @@ func (d *DB) mergeFindingCase(ctx context.Context, taskID int64, ids []int64, ti
 	if strings.TrimSpace(title) == "" || strings.TrimSpace(reason) == "" {
 		return 0, errors.New("必须提供漏洞名称及基于证据的归并理由")
 	}
+	keptIDs := append([]int64(nil), ids...)
 	var cid int64
 	err = d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
 		if err := lockCaseTask(tx, taskID); err != nil {
@@ -308,10 +310,68 @@ func (d *DB) mergeFindingCase(ctx context.Context, taskID int64, ids []int64, ti
 				return err
 			}
 		}
-		_, err := tx.Exec(`UPDATE finding_case_suggestions SET state='accepted' WHERE state='pending' AND left_id IN(SELECT value::bigint FROM jsonb_array_elements_text($1::jsonb)) AND right_id IN(SELECT value::bigint FROM jsonb_array_elements_text($1::jsonb))`, string(raw))
-		return err
+		for _, excluded := range dropped {
+			if all[excluded] {
+				return fmt.Errorf("排除的记录 #%d 已与所选记录在同一文件夹，请先移出该文件夹后再确认", excluded)
+			}
+			for _, kept := range keptIDs {
+				if _, err := tx.Exec(`INSERT INTO finding_case_blocks(left_id,right_id,reason)
+                    VALUES(LEAST($1::bigint,$2::bigint),GREATEST($1::bigint,$2::bigint),'人工确认分组时排除')
+                    ON CONFLICT DO NOTHING`, excluded, kept); err != nil {
+					return err
+				}
+			}
+		}
+		if suggestionID > 0 {
+			if _, err := tx.Exec(`UPDATE finding_case_suggestions SET state='accepted' WHERE id=$1 AND state='pending'`, suggestionID); err != nil {
+				return err
+			}
+		}
+		return sweepFindingCaseSuggestions(tx, taskID)
 	})
 	return cid, err
+}
+
+// sweepFindingCaseSuggestions reconciles pending cards after a merge or veto.
+// Cross-task member rows are ignored so a malformed legacy row cannot leak into
+// a task's suggestions.
+func sweepFindingCaseSuggestions(tx *sql.Tx, taskID int64) error {
+	if _, err := tx.Exec(`UPDATE finding_case_suggestions s SET state='accepted'
+        WHERE s.task_id=$1 AND s.state='pending'
+          AND (SELECT count(*) FROM finding_case_suggestion_members sm
+               WHERE sm.suggestion_id=s.id
+                 AND EXISTS (SELECT 1 FROM findings f WHERE f.id=sm.finding_id AND f.task_id=s.task_id)) >= 2
+          AND (SELECT count(*) FROM finding_case_suggestion_members sm
+               JOIN findings f ON f.id=sm.finding_id AND f.task_id=s.task_id
+               JOIN finding_case_members cm ON cm.finding_id=sm.finding_id
+               JOIN finding_cases c ON c.id=cm.case_id AND c.active
+               WHERE sm.suggestion_id=s.id) >= 2
+          AND (SELECT count(DISTINCT cm.case_id) FROM finding_case_suggestion_members sm
+               JOIN findings f ON f.id=sm.finding_id AND f.task_id=s.task_id
+               JOIN finding_case_members cm ON cm.finding_id=sm.finding_id
+               JOIN finding_cases c ON c.id=cm.case_id AND c.active
+               WHERE sm.suggestion_id=s.id) = 1
+          AND NOT EXISTS (SELECT 1 FROM finding_case_suggestion_members sm
+                          JOIN findings f ON f.id=sm.finding_id AND f.task_id=s.task_id
+                          LEFT JOIN finding_case_members cm ON cm.finding_id=sm.finding_id
+                          LEFT JOIN finding_cases c ON c.id=cm.case_id AND c.active
+                          WHERE sm.suggestion_id=s.id AND c.id IS NULL)`, taskID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`UPDATE finding_case_suggestions s SET state='obsolete'
+        WHERE s.task_id=$1 AND s.state='pending' AND (
+          (SELECT count(*) FROM finding_case_suggestion_members sm
+           JOIN findings f ON f.id=sm.finding_id AND f.task_id=s.task_id
+           WHERE sm.suggestion_id=s.id) < 2
+          OR EXISTS (SELECT 1
+                    FROM finding_case_suggestion_members a
+                    JOIN finding_case_suggestion_members b
+                      ON b.suggestion_id=a.suggestion_id AND a.finding_id < b.finding_id
+                    JOIN findings fa ON fa.id=a.finding_id AND fa.task_id=s.task_id
+                    JOIN findings fb ON fb.id=b.finding_id AND fb.task_id=s.task_id
+                    JOIN finding_case_blocks bl ON bl.left_id=a.finding_id AND bl.right_id=b.finding_id
+                    WHERE a.suggestion_id=s.id))`, taskID)
+	return err
 }
 func (d *DB) RemoveFindingCaseMember(ctx context.Context, cid, fid int64, reason string) error {
 	c, err := d.GetFindingCase(cid)
@@ -355,8 +415,10 @@ func (d *DB) RemoveFindingCaseMember(ctx context.Context, cid, fid int64, reason
 		if _, err := tx.Exec(`INSERT INTO finding_case_events(case_id,action,actor,reason,finding_ids) VALUES($1,'detach','human',$2,jsonb_build_array($3::bigint))`, cid, reason, fid); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`DELETE FROM finding_case_members WHERE case_id=$1 AND finding_id=$2`, cid, fid)
-		return err
+		if _, err := tx.Exec(`DELETE FROM finding_case_members WHERE case_id=$1 AND finding_id=$2`, cid, fid); err != nil {
+			return err
+		}
+		return sweepFindingCaseSuggestions(tx, origin)
 	})
 }
 func (d *DB) UpdateFindingCaseReport(ctx context.Context, cid, version int64, title, report, severity, reason string) error {
@@ -382,81 +444,345 @@ func (d *DB) UpdateFindingCaseReport(ctx context.Context, cid, version int64, ti
 		return err
 	})
 }
-func (d *DB) SuggestFindingCase(ctx context.Context, taskID, left, right int64, title, reason string) (int64, error) {
+
+type suggestionQuery interface {
+	Query(string, ...any) (*sql.Rows, error)
+}
+
+// suggestionMembers reads only surviving members in the suggestion's task. The
+// anchor fallback keeps rows created by older binaries resolvable if a database
+// was upgraded before the idempotent backfill ran.
+func suggestionMembers(q suggestionQuery, suggestionID, taskID int64) ([]int64, error) {
+	rows, err := q.Query(`SELECT sm.finding_id
+        FROM finding_case_suggestion_members sm
+        JOIN findings f ON f.id=sm.finding_id AND f.task_id=$2
+        WHERE sm.suggestion_id=$1 ORDER BY sm.finding_id`, suggestionID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) > 0 {
+		return ids, nil
+	}
+	rows, err = q.Query(`SELECT x.finding_id FROM (
+            SELECT s.left_id AS finding_id FROM finding_case_suggestions s WHERE s.id=$1
+            UNION SELECT s.right_id FROM finding_case_suggestions s WHERE s.id=$1
+        ) x JOIN findings f ON f.id=x.finding_id AND f.task_id=$2 ORDER BY x.finding_id`, suggestionID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// SuggestFindingCase stores a pending group of 2..20 same-task findings. It
+// refreshes an exact group, reuses a pending superset, and supersedes strict
+// subsets while holding the task advisory lock.
+func (d *DB) SuggestFindingCase(ctx context.Context, taskID int64, findingIDs []int64, title, reason string) (int64, error) {
 	if strings.TrimSpace(title) == "" || strings.TrimSpace(reason) == "" {
 		return 0, errors.New("建议需要名称和具体证据理由")
 	}
-	ids, err := sortedFindingIDs([]int64{left, right})
+	if len(findingIDs) > 20 {
+		return 0, errors.New("疑似重复分组最多20条记录")
+	}
+	seen := make(map[int64]bool, len(findingIDs))
+	for _, fid := range findingIDs {
+		if seen[fid] {
+			return 0, errors.New("疑似重复分组中的记录编号必须唯一")
+		}
+		seen[fid] = true
+	}
+	ids, err := sortedFindingIDs(findingIDs)
 	if err != nil {
 		return 0, err
 	}
-	var id int64
+	var suggestionID int64
 	err = d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
 		if err := lockCaseTask(tx, taskID); err != nil {
 			return err
 		}
+		caseIDs := map[int64]bool{}
+		sameActiveCase := true
+		var firstCase int64
 		for _, fid := range ids {
 			var tid sql.NullInt64
-			if err := tx.QueryRow(`SELECT task_id FROM findings WHERE id=$1`, fid).Scan(&tid); err != nil {
+			var cid int64
+			if err := tx.QueryRow(`SELECT f.task_id,COALESCE(CASE WHEN c.active THEN m.case_id ELSE 0 END,0)
+				FROM findings f LEFT JOIN finding_case_members m ON m.finding_id=f.id
+                LEFT JOIN finding_cases c ON c.id=m.case_id WHERE f.id=$1`, fid).Scan(&tid, &cid); err != nil {
 				return err
 			}
 			if !tid.Valid || tid.Int64 != taskID {
 				return errors.New("只能建议同一任务的归并")
 			}
+			if cid == 0 {
+				sameActiveCase = false
+			} else if firstCase == 0 {
+				firstCase = cid
+				caseIDs[cid] = true
+			} else if firstCase != cid {
+				sameActiveCase = false
+			}
 		}
-		var blocked bool
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM finding_case_blocks WHERE left_id=$1 AND right_id=$2)`, ids[0], ids[1]).Scan(&blocked); err != nil {
+		if sameActiveCase && firstCase > 0 && len(caseIDs) == 1 {
+			return errors.New("已在同一文件夹")
+		}
+
+		raw, _ := json.Marshal(ids)
+		rows, err := tx.Query(`SELECT left_id,right_id FROM finding_case_blocks
+            WHERE left_id IN (SELECT value::bigint FROM jsonb_array_elements_text($1::jsonb))
+              AND right_id IN (SELECT value::bigint FROM jsonb_array_elements_text($1::jsonb))
+            ORDER BY left_id,right_id`, string(raw))
+		if err != nil {
 			return err
 		}
-		if blocked {
-			return errors.New("人工已否决该归并")
+		blocked := []string{}
+		for rows.Next() {
+			var left, right int64
+			if err := rows.Scan(&left, &right); err != nil {
+				rows.Close()
+				return err
+			}
+			blocked = append(blocked, fmt.Sprintf("#%d/#%d", left, right))
 		}
-		return tx.QueryRow(`INSERT INTO finding_case_suggestions(task_id,left_id,right_id,title,reason) VALUES($1,$2,$3,$4,$5) ON CONFLICT(left_id,right_id) DO UPDATE SET reason=EXCLUDED.reason WHERE finding_case_suggestions.state='pending' RETURNING id`, taskID, ids[0], ids[1], title, reason).Scan(&id)
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if len(blocked) > 0 {
+			return fmt.Errorf("人工已否决这些记录的归并：%s；请去掉其中一方后重新提交", strings.Join(blocked, "、"))
+		}
+
+		type pendingGroup struct {
+			id      int64
+			members []int64
+			title   string
+			reason  string
+		}
+		rows, err = tx.Query(`SELECT id,title,reason FROM finding_case_suggestions
+            WHERE task_id=$1 AND state='pending' ORDER BY id`, taskID)
+		if err != nil {
+			return err
+		}
+		groups := []pendingGroup{}
+		for rows.Next() {
+			var g pendingGroup
+			if err := rows.Scan(&g.id, &g.title, &g.reason); err != nil {
+				rows.Close()
+				return err
+			}
+			groups = append(groups, g)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for i := range groups {
+			groups[i].members, err = suggestionMembers(tx, groups[i].id, taskID)
+			if err != nil {
+				return err
+			}
+		}
+		want := map[int64]bool{}
+		for _, fid := range ids {
+			want[fid] = true
+		}
+		contains := func(group []int64, set map[int64]bool) bool {
+			for _, fid := range group {
+				if !set[fid] {
+					return false
+				}
+			}
+			return true
+		}
+		exact, superset := int64(0), int64(0)
+		supersede := []int64{}
+		for _, g := range groups {
+			gm := map[int64]bool{}
+			for _, fid := range g.members {
+				gm[fid] = true
+			}
+			switch {
+			case len(g.members) == len(ids) && contains(ids, gm) && contains(g.members, want):
+				if exact == 0 {
+					exact = g.id
+				} else {
+					supersede = append(supersede, g.id)
+				}
+			case len(g.members) > len(ids) && contains(ids, gm):
+				if superset == 0 {
+					superset = g.id
+				}
+			case len(g.members) < len(ids) && contains(g.members, want):
+				supersede = append(supersede, g.id)
+			}
+		}
+		for _, sid := range supersede {
+			if _, err := tx.Exec(`UPDATE finding_case_suggestions SET state='superseded' WHERE id=$1 AND state='pending'`, sid); err != nil {
+				return err
+			}
+		}
+		if exact > 0 {
+			suggestionID = exact
+			_, err = tx.Exec(`UPDATE finding_case_suggestions SET title=$2,reason=$3 WHERE id=$1`, exact, title, reason)
+			return err
+		}
+		if superset > 0 {
+			suggestionID = superset
+			return nil
+		}
+		if err := tx.QueryRow(`INSERT INTO finding_case_suggestions(task_id,left_id,right_id,title,reason)
+            VALUES($1,$2,$3,$4,$5) RETURNING id`, taskID, ids[0], ids[1], title, reason).Scan(&suggestionID); err != nil {
+			return err
+		}
+		for _, fid := range ids {
+			if _, err := tx.Exec(`INSERT INTO finding_case_suggestion_members(suggestion_id,finding_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, suggestionID, fid); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
-	return id, err
+	return suggestionID, err
 }
+
 func (d *DB) FindingCaseSuggestions(taskID int64) ([]FindingCaseSuggestion, error) {
-	rows, err := d.Query(`SELECT id,task_id,left_id,right_id,title,reason,state FROM finding_case_suggestions WHERE state='pending' AND ($1::bigint=0 OR task_id=$1) ORDER BY id DESC`, taskID)
+	rows, err := d.Query(`SELECT id,task_id,left_id,right_id,title,reason,state
+        FROM finding_case_suggestions WHERE state='pending' AND ($1::bigint=0 OR task_id=$1) ORDER BY id DESC`, taskID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []FindingCaseSuggestion{}
+	items := []FindingCaseSuggestion{}
 	for rows.Next() {
 		var s FindingCaseSuggestion
 		if err := rows.Scan(&s.ID, &s.TaskID, &s.LeftID, &s.RightID, &s.Title, &s.Reason, &s.State); err != nil {
+			rows.Close()
 			return nil, err
+		}
+		items = append(items, s)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	out := []FindingCaseSuggestion{}
+	for _, s := range items {
+		ids, err := suggestionMembers(d, s.ID, s.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) < 2 {
+			continue
+		}
+		s.LeftID, s.RightID = ids[0], ids[1]
+		for _, fid := range ids {
+			s.FindingIDs = append(s.FindingIDs, strconv.FormatInt(fid, 10))
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	return out, nil
 }
-func (d *DB) ResolveFindingCaseSuggestion(ctx context.Context, id int64, accept bool) (int64, error) {
+
+func (d *DB) ResolveFindingCaseSuggestion(ctx context.Context, id int64, accept bool, exclude []int64) (int64, error) {
 	var s FindingCaseSuggestion
-	if err := d.QueryRow(`SELECT task_id,left_id,right_id,title,reason,state FROM finding_case_suggestions WHERE id=$1`, id).Scan(&s.TaskID, &s.LeftID, &s.RightID, &s.Title, &s.Reason, &s.State); err != nil {
+	if err := d.QueryRow(`SELECT task_id,title,reason,state FROM finding_case_suggestions WHERE id=$1`, id).Scan(&s.TaskID, &s.Title, &s.Reason, &s.State); err != nil {
 		return 0, err
 	}
 	if s.State != "pending" {
 		return 0, ErrFindingCaseConflict
 	}
+	members, err := suggestionMembers(d, id, s.TaskID)
+	if err != nil {
+		return 0, err
+	}
+	if len(members) < 2 {
+		return 0, errors.New("疑似重复分组成员不足")
+	}
+	memberSet := map[int64]bool{}
+	for _, fid := range members {
+		memberSet[fid] = true
+	}
+	excludeSet := map[int64]bool{}
+	for _, fid := range exclude {
+		if !memberSet[fid] {
+			return 0, fmt.Errorf("排除记录 #%d 不属于该分组", fid)
+		}
+		excludeSet[fid] = true
+	}
+	kept := []int64{}
+	for _, fid := range members {
+		if !excludeSet[fid] {
+			kept = append(kept, fid)
+		}
+	}
 	if accept {
-		return d.mergeFindingCase(ctx, s.TaskID, []int64{s.LeftID, s.RightID}, s.Title, s.Reason, "human", id)
+		if len(kept) < 2 {
+			return 0, errors.New("至少保留两条记录")
+		}
+		return d.mergeFindingCase(ctx, s.TaskID, kept, s.Title, s.Reason, "human", id, exclude)
+	}
+	if len(exclude) > 0 {
+		return 0, errors.New("否决分组时不能排除记录")
 	}
 	return 0, d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
 		if err := lockCaseTask(tx, s.TaskID); err != nil {
 			return err
 		}
-		res, err := tx.Exec(`UPDATE finding_case_suggestions SET state='rejected' WHERE id=$1 AND state='pending'`, id)
+		var state string
+		if err := tx.QueryRow(`SELECT state FROM finding_case_suggestions WHERE id=$1 FOR UPDATE`, id).Scan(&state); err != nil {
+			return err
+		}
+		if state != "pending" {
+			return ErrFindingCaseConflict
+		}
+		members, err := suggestionMembers(tx, id, s.TaskID)
 		if err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n != 1 {
-			return ErrFindingCaseConflict
+		for i := 0; i < len(members); i++ {
+			for j := i + 1; j < len(members); j++ {
+				var leftCase, rightCase sql.NullInt64
+				if err := tx.QueryRow(`SELECT m.case_id FROM finding_case_members m JOIN finding_cases c ON c.id=m.case_id AND c.active WHERE m.finding_id=$1`, members[i]).Scan(&leftCase); err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				if err := tx.QueryRow(`SELECT m.case_id FROM finding_case_members m JOIN finding_cases c ON c.id=m.case_id AND c.active WHERE m.finding_id=$1`, members[j]).Scan(&rightCase); err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				if leftCase.Valid && rightCase.Valid && leftCase.Int64 == rightCase.Int64 {
+					continue
+				}
+				if _, err := tx.Exec(`INSERT INTO finding_case_blocks(left_id,right_id,reason)
+                    VALUES(LEAST($1::bigint,$2::bigint),GREATEST($1::bigint,$2::bigint),'人工否决') ON CONFLICT DO NOTHING`, members[i], members[j]); err != nil {
+					return err
+				}
+			}
 		}
-		if _, err := tx.Exec(`INSERT INTO finding_case_blocks(left_id,right_id,reason) VALUES($1,$2,'人工否决') ON CONFLICT DO NOTHING`, s.LeftID, s.RightID); err != nil {
+		if _, err := tx.Exec(`UPDATE finding_case_suggestions SET state='rejected' WHERE id=$1`, id); err != nil {
 			return err
 		}
-		return nil
+		return sweepFindingCaseSuggestions(tx, s.TaskID)
 	})
 }
 
@@ -479,13 +805,13 @@ func (d *DB) DistinctFindingStats(taskID string) (*FindingDistinctStats, error) 
 }
 
 // Compact candidate pages exclude PoC/report bodies and do not treat severity as identity.
-func (d *DB) FindingCaseCandidates(fid int64, page, size int, scope ...[]int64) ([]map[string]any, int, error) {
+func (d *DB) FindingCaseCandidates(fid int64, page, size int, scope ...[]int64) ([]map[string]any, int, int, error) {
 	f, err := d.FindingCaseSummary(fid)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	if f == nil || f.TaskID == nil {
-		return nil, 0, errors.New("漏洞任务不可用")
+		return nil, 0, 0, errors.New("漏洞任务不可用")
 	}
 	if page < 1 {
 		page = 1
@@ -505,32 +831,58 @@ func (d *DB) FindingCaseCandidates(fid int64, page, size int, scope ...[]int64) 
 	if len(scope) > 0 {
 		raw, err := json.Marshal(scope[0])
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		where += ` AND f.id IN (SELECT jsonb_array_elements_text($6::jsonb)::bigint)`
 		args = append(args, string(raw))
 	}
-	var total int
-	if err := d.QueryRow(`SELECT count(*) FROM findings f`+where, args...).Scan(&total); err != nil {
-		return nil, 0, err
+	classHit := `(trim(f.vulnclass)<>'' AND lower(f.vulnclass)=lower($3))`
+	assetHit := `EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(f.asset_ids,'null'::jsonb),'[]'::jsonb)) a WHERE a.value IN (SELECT value FROM jsonb_array_elements($5::jsonb)))`
+	nameHit := `(trim(f.name)<>'' AND lower(f.name)=lower($4))`
+	scoreExpr := fmt.Sprintf(`(CASE WHEN %s THEN 2 ELSE 0 END + CASE WHEN %s THEN 2 ELSE 0 END + CASE WHEN %s THEN 1 ELSE 0 END + CASE WHEN (%s AND %s) THEN 3 ELSE 0 END)`, classHit, assetHit, nameHit, classHit, assetHit)
+	strongExpr := fmt.Sprintf(`(%s AND %s)`, classHit, assetHit)
+	base := `WITH candidates AS (SELECT f.id,f.name,f.vulnclass,f.severity,left(f.summary,400) AS summary,f.asset_ids,
+        COALESCE(m.case_id,0) AS case_id,
+        ` + scoreExpr + ` AS score,
+        ` + strongExpr + ` AS strong,
+        ARRAY_REMOVE(ARRAY[
+            CASE WHEN ` + classHit + ` THEN '同漏洞类型' END,
+            CASE WHEN ` + assetHit + ` THEN '资产重叠' END,
+            CASE WHEN ` + nameHit + ` THEN '同名称' END
+        ]::text[], NULL) AS hit_reasons
+        FROM findings f LEFT JOIN finding_case_members m ON m.finding_id=f.id` + where + `)`
+	var total, strongTotal int
+	if err := d.QueryRow(base+` SELECT count(*),count(*) FILTER(WHERE strong) FROM candidates`, args...).Scan(&total, &strongTotal); err != nil {
+		return nil, 0, 0, err
 	}
 	args = append(args, size, (page-1)*size)
-	rows, err := d.Query(`SELECT f.id,f.name,f.vulnclass,f.severity,left(f.summary,400),f.asset_ids,COALESCE(m.case_id,0) FROM findings f LEFT JOIN finding_case_members m ON m.finding_id=f.id`+where+fmt.Sprintf(` ORDER BY f.id DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
+	rows, err := d.Query(base+fmt.Sprintf(` SELECT id,name,vulnclass,severity,summary,asset_ids,case_id,score,strong,to_json(hit_reasons)
+        FROM candidates ORDER BY score DESC,id DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, cid int64
+		var id, cid, score int64
 		var name, class, severity, summary string
 		var assetIDs json.RawMessage
-		if err := rows.Scan(&id, &name, &class, &severity, &summary, &assetIDs, &cid); err != nil {
-			return nil, 0, err
+		var strong bool
+		var hitReasonsRaw json.RawMessage
+		if err := rows.Scan(&id, &name, &class, &severity, &summary, &assetIDs, &cid, &score, &strong, &hitReasonsRaw); err != nil {
+			return nil, 0, 0, err
 		}
-		out = append(out, map[string]any{"finding_id": strconv.FormatInt(id, 10), "name": name, "vulnclass": class, "severity": severity, "summary": summary, "asset_ids": assetIDs, "case_id": strconv.FormatInt(cid, 10)})
+		var hitReasons []string
+		if err := json.Unmarshal(hitReasonsRaw, &hitReasons); err != nil {
+			return nil, 0, 0, err
+		}
+		tier := "weak"
+		if strong {
+			tier = "strong"
+		}
+		out = append(out, map[string]any{"finding_id": strconv.FormatInt(id, 10), "name": name, "vulnclass": class, "severity": severity, "summary": summary, "asset_ids": assetIDs, "case_id": strconv.FormatInt(cid, 10), "score": int(score), "hit_reasons": hitReasons, "tier": tier})
 	}
-	return out, total, rows.Err()
+	return out, total, strongTotal, rows.Err()
 }
 
 // Batch task-list counters avoid an additional database round trip per task.
