@@ -20,6 +20,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Autumn-27/artex/traffic"
@@ -36,21 +37,19 @@ var defaultEgressProbes = []string{
 // 这个接口要登录，但仍要挡：agent 可能被目标页面诱导去调它，而"本机"在容器里就是 ARTEX
 // 自己（管理端口、云元数据 169.254.169.254）。**私网地址是刻意放行的**——自定义探测服务
 // 的主用途就是内网回显，挡掉 192.168/10/172.16 等于废掉这个功能。
-//
-// 判定复用 repeater 的规则（repeaterCheckURL），保证"什么算本机/链路本地"全项目一处定义。
 func validateProbeURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", errors.New("probe_url 不是合法 URL")
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
 		return "", errors.New("probe_url 只支持 http / https")
 	}
-	if u.Host == "" {
+	if u.Host == "" || u.Hostname() == "" {
 		return "", errors.New("probe_url 缺少主机名")
 	}
-	if err := repeaterCheckURL(u); err != nil {
+	if err := probeCheckURL(u); err != nil {
 		return "", err
 	}
 	return raw, nil
@@ -61,7 +60,59 @@ func probeCheckRedirect(next *http.Request, via []*http.Request) error {
 	if len(via) >= 3 {
 		return errors.New("重定向次数过多")
 	}
-	return repeaterCheckURL(next.URL)
+	if len(via) > 0 && next.URL.Host != via[0].URL.Host {
+		return fmt.Errorf("拒绝跨主机重定向（%s → %s）", via[0].URL.Host, next.URL.Host)
+	}
+	return probeCheckURL(next.URL)
+}
+
+// probeCheckURL rejects only loopback, link-local, unspecified, and multicast
+// destinations. RFC1918 addresses remain valid for intranet echo services.
+func probeCheckURL(u *url.URL) error {
+	host := strings.TrimSuffix(strings.TrimSpace(u.Hostname()), ".")
+	if zone := strings.IndexByte(host, '%'); zone >= 0 {
+		host = host[:zone]
+	}
+	ip := net.ParseIP(host)
+	if ip == nil && repeaterLooksNumericHost(host) {
+		var ok bool
+		ip, ok = repeaterParseLegacyIPv4(host)
+		if !ok {
+			return fmt.Errorf("拒绝无法解析的数字主机地址 %q", host)
+		}
+	}
+	if strings.EqualFold(host, "localhost") || (ip != nil && probeIsBlockedDialIP(ip)) {
+		return errors.New("拒绝访问本机/链路本地地址")
+	}
+	return nil
+}
+
+func probeIsBlockedDialIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+}
+
+// probeBlockSensitiveDial is always enabled for direct probes. Unlike the
+// repeater, probe_url has no local-target escape hatch.
+func probeBlockSensitiveDial(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("无法解析目标地址 %q", host)
+	}
+	if probeIsBlockedDialIP(ip) {
+		return fmt.Errorf("拒绝访问本机/链路本地地址 %s", ip)
+	}
+	return nil
 }
 
 // userinfoRe 匹配 URL 里的 user:pass@。
@@ -122,7 +173,7 @@ func probeEgress(ctx context.Context, proxyRaw, caPEMPath string, probes []strin
 		if err != nil {
 			return egressProbeResult{
 				OK:        false,
-				Error:     err.Error(),
+				Error:     maskSecrets(err.Error()),
 				LatencyMS: time.Since(start).Milliseconds(),
 				// 空数组不是 nil：nil 会序列化成 JSON null，前端按数组处理会炸。
 				Probes: []egressAttempt{},
@@ -147,7 +198,7 @@ func probeEgress(ctx context.Context, proxyRaw, caPEMPath string, probes []strin
 		ip, err := probeOne(reqCtx, client, target)
 		cancel()
 
-		a := egressAttempt{URL: target, LatencyMS: time.Since(t0).Milliseconds()}
+		a := egressAttempt{URL: maskSecrets(target), LatencyMS: time.Since(t0).Milliseconds()}
 		if err != nil {
 			a.Error = maskSecrets(err.Error())
 			// 只在证书类错误上补一句，否则连不上代理也会挂上不相干的 CA 说明。
@@ -211,7 +262,7 @@ func buildProbeTransport(proxyURL *url.URL, caPEMPath string) (*http.Transport, 
 	} else {
 		// 直连时在拨号阶段再查一次：挡住"域名解析后才变成 127.0.0.1"（DNS rebinding）。
 		// 走代理时不装——那时拨的是代理地址，用户配 127.0.0.1 的本地代理是允许的。
-		tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, Control: repeaterBlockSensitiveDial}).DialContext
+		tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, Control: probeBlockSensitiveDial}).DialContext
 	}
 	// CA 不可用不 panic，把原因带回去拼进失败原因——否则只会看到 x509，看不出真实原因。
 	if path := strings.TrimSpace(caPEMPath); path != "" {
@@ -323,9 +374,10 @@ func (s *Server) testEgressProxy(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 
+	configuredProxy := strings.TrimSpace(req.GlobalProxy)
 	rep := egressReport{
 		Capture:    capture,
-		Configured: maskSecrets(strings.TrimSpace(req.GlobalProxy)),
+		Configured: maskSecrets(configuredProxy),
 		AgentProxy: maskSecrets(agentProxy),
 	}
 
@@ -335,8 +387,8 @@ func (s *Server) testEgressProxy(w http.ResponseWriter, r *http.Request) {
 		Result: probeEgress(ctx, "", "", probes, 10*time.Second),
 	})
 
-	if cfg := rep.Configured; cfg != "" {
-		probeAddr, probeCA, viaMITM := egressTarget(cfg, capture, pending, agentProxy, agentCA)
+	if configuredProxy != "" {
+		probeAddr, probeCA, viaMITM := egressTarget(configuredProxy, capture, pending, agentProxy, agentCA)
 		timeout := 10 * time.Second
 		if viaMITM {
 			timeout = 15 * time.Second // 多了一跳 TLS 解密 + 重签
@@ -391,17 +443,18 @@ func judgeEgress(rep egressReport) bool {
 // egressWarnings 生成"看数字容易忽略"的提醒。
 func egressWarnings(rep egressReport, pending bool, savedProxy string) []string {
 	var out []string
+	safeSavedProxy := maskSecrets(savedProxy)
 
 	// W1 agent 走的是已保存配置，不说清会被当成"测通了=配好了"。
 	if pending {
 		switch {
 		case rep.Configured == "":
-			out = append(out, "此地址尚未保存，Agent 当前仍使用 "+savedProxy+"。保存后即改为直连。")
+			out = append(out, "此地址尚未保存，Agent 当前仍使用 "+safeSavedProxy+"。保存后即改为直连。")
 		case savedProxy == "":
 			out = append(out, "此地址尚未保存，Agent 当前仍为直连。"+
 				"上方结果对应输入框中的值，保存后生效。")
 		default:
-			out = append(out, "此地址尚未保存，Agent 当前仍使用 "+savedProxy+
+			out = append(out, "此地址尚未保存，Agent 当前仍使用 "+safeSavedProxy+
 				"。上方结果对应输入框中的值，保存后生效。")
 		}
 	}

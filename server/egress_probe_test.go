@@ -6,6 +6,9 @@ package server
 import (
 	"context"
 	"encoding/pem"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,19 +27,9 @@ func fakeIPServer(ip string) *httptest.Server {
 	}))
 }
 
-// allowLoopbackProbe 放开"拒绝回环"的拨号守卫。
-//
-// httptest 起的服务都在 127.0.0.1 上，而直连探测在拨号阶段会拒绝回环/链路本地地址
-// （防 SSRF / DNS rebinding）。测试里必须显式放开，否则测的是守卫而不是探测逻辑。
-// 守卫本身由 TestProbeEgressBlocksLoopback 单独验证。
-func allowLoopbackProbe(t *testing.T) {
-	t.Setenv(repeaterAllowLocalEnv, "1")
-}
-
 // TestProbeEgress 覆盖 probeEgress 的输入/响应形态：成功、非法协议、死代理、坏响应、回落。
 // 每条用例自带服务端与断言，失败时 t.Run 的名字直接指出是哪一条。
 func TestProbeEgress(t *testing.T) {
-	allowLoopbackProbe(t)
 	okSrv := fakeIPServer("203.0.113.7")
 	defer okSrv.Close()
 	htmlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +42,21 @@ func TestProbeEgress(t *testing.T) {
 	defer deniedSrv.Close()
 	fallbackSrv := fakeIPServer("203.0.113.42")
 	defer fallbackSrv.Close()
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Host {
+		case strings.TrimPrefix(okSrv.URL, "http://"):
+			_, _ = w.Write([]byte(`{"ip":"203.0.113.7"}`))
+		case strings.TrimPrefix(htmlSrv.URL, "http://"):
+			_, _ = w.Write([]byte("<html><body>access denied</body></html>"))
+		case strings.TrimPrefix(deniedSrv.URL, "http://"):
+			http.Error(w, "nope", http.StatusForbidden)
+		case strings.TrimPrefix(fallbackSrv.URL, "http://"):
+			_, _ = w.Write([]byte(`{"ip":"203.0.113.42"}`))
+		default:
+			http.Error(w, "unknown target", http.StatusBadGateway)
+		}
+	}))
+	defer proxy.Close()
 
 	cases := []struct {
 		name    string
@@ -58,10 +66,10 @@ func TestProbeEgress(t *testing.T) {
 		check   func(t *testing.T, res egressProbeResult)
 	}{
 		{
-			name: "直连拿到 IP", proxy: "", probes: []string{okSrv.URL}, timeout: 5 * time.Second,
+			name: "经代理拿到 IP", proxy: proxy.URL, probes: []string{okSrv.URL}, timeout: 5 * time.Second,
 			check: func(t *testing.T, res egressProbeResult) {
-				if !res.OK || res.ExitIP != "203.0.113.7" || res.Via != "direct" {
-					t.Fatalf("得到 %+v，期望成功且 via=direct、IP=203.0.113.7", res)
+				if !res.OK || res.ExitIP != "203.0.113.7" || res.Via != "http" {
+					t.Fatalf("得到 %+v，期望成功且 via=http、IP=203.0.113.7", res)
 				}
 			},
 		},
@@ -95,7 +103,7 @@ func TestProbeEgress(t *testing.T) {
 			},
 		},
 		{
-			name: "HTML 不被当成 IP", proxy: "", probes: []string{htmlSrv.URL}, timeout: 5 * time.Second,
+			name: "HTML 不被当成 IP", proxy: proxy.URL, probes: []string{htmlSrv.URL}, timeout: 5 * time.Second,
 			check: func(t *testing.T, res egressProbeResult) {
 				if res.OK {
 					t.Fatalf("反爬页/错误页不该被当成 IP，实际 exit_ip=%q", res.ExitIP)
@@ -103,7 +111,7 @@ func TestProbeEgress(t *testing.T) {
 			},
 		},
 		{
-			name: "第一个地址失败自动换下一个", proxy: "",
+			name: "第一个地址失败自动换下一个", proxy: proxy.URL,
 			probes: []string{deniedSrv.URL, fallbackSrv.URL}, timeout: 5 * time.Second,
 			check: func(t *testing.T, res egressProbeResult) {
 				if !res.OK || res.ExitIP != "203.0.113.42" {
@@ -154,7 +162,6 @@ func TestProbeEgressThroughProxy(t *testing.T) {
 // TestProbeEgressTrustsCustomCA 模拟"经 MITM"的关键路径：
 // 不传 CA 必须失败（证明信任这一步是必需的），传了才成功。
 func TestProbeEgressTrustsCustomCA(t *testing.T) {
-	allowLoopbackProbe(t)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ip":"192.0.2.5"}`))
 	}))
@@ -169,7 +176,32 @@ func TestProbeEgressTrustsCustomCA(t *testing.T) {
 	if res := probeEgress(context.Background(), "", "", []string{srv.URL}, 5*time.Second); res.OK {
 		t.Fatal("不信任自签 CA 时不该成功")
 	}
-	res := probeEgress(context.Background(), "", caPath, []string{srv.URL}, 5*time.Second)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
+			return
+		}
+		upstream, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		client, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			_ = upstream.Close()
+			return
+		}
+		_, _ = fmt.Fprint(rw, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		_ = rw.Flush()
+		go func() {
+			_, _ = io.Copy(upstream, client)
+			_ = upstream.Close()
+		}()
+		_, _ = io.Copy(client, upstream)
+		_ = client.Close()
+	}))
+	defer proxy.Close()
+	res := probeEgress(context.Background(), proxy.URL, caPath, []string{srv.URL}, 5*time.Second)
 	if !res.OK || res.ExitIP != "192.0.2.5" {
 		t.Fatalf("信任 CA 后应拿到 IP，得到 %+v / %+v", res.Error, res.Probes)
 	}
@@ -375,12 +407,14 @@ func hasSubstr(list []string, sub string) bool {
 
 // TestValidateProbeURL 锁住 probe_url 的放行边界：私网放行、本机与链路本地拒绝。
 func TestValidateProbeURL(t *testing.T) {
-	t.Setenv(repeaterAllowLocalEnv, "") // 不放开守卫，否则什么都通过
+	t.Setenv(repeaterAllowLocalEnv, "1") // probe_url 不得受 repeater 的 escape hatch 影响
 
 	ok := []string{
 		"http://192.168.132.130:19000/", // 自定义探测服务的主用途
 		"https://api.ipify.org?format=json",
 		"http://10.0.0.5:8080/",
+		"https://172.16.10.20/",
+		"http://example.com/",
 	}
 	for _, raw := range ok {
 		if _, err := validateProbeURL(raw); err != nil {
@@ -390,6 +424,7 @@ func TestValidateProbeURL(t *testing.T) {
 
 	bad := map[string]string{
 		"ftp://example.com/":             "只支持 http / https",
+		"file:///etc/passwd":             "只支持 http / https",
 		"/relative/path":                 "只支持 http / https",
 		"http:///nohost":                 "缺少主机名",
 		"http://127.0.0.1:8080/":         "拒绝访问本机",
@@ -408,13 +443,16 @@ func TestValidateProbeURL(t *testing.T) {
 	}
 }
 
-// TestProbeCheckRedirect 确认重定向逐跳校验：跳到本机就断，跳太多也断。
+// TestProbeCheckRedirect 确认重定向逐跳校验：跨主机、本机和过多跳数都断。
 func TestProbeCheckRedirect(t *testing.T) {
 	t.Setenv(repeaterAllowLocalEnv, "")
 
 	via := []*http.Request{httptest.NewRequest(http.MethodGet, "https://api.ipify.org", nil)}
-	if err := probeCheckRedirect(httptest.NewRequest(http.MethodGet, "https://ifconfig.me/ip", nil), via); err != nil {
-		t.Fatalf("跨公网主机的重定向应放行，实际 %v", err)
+	if err := probeCheckRedirect(httptest.NewRequest(http.MethodGet, "https://api.ipify.org/ip", nil), via); err != nil {
+		t.Fatalf("同主机重定向应放行，实际 %v", err)
+	}
+	if err := probeCheckRedirect(httptest.NewRequest(http.MethodGet, "https://ifconfig.me/ip", nil), via); err == nil {
+		t.Fatal("跨公网主机的重定向必须拒绝")
 	}
 	if err := probeCheckRedirect(httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8787/api/settings", nil), via); err == nil {
 		t.Fatal("重定向到本机必须拒绝")
@@ -423,12 +461,23 @@ func TestProbeCheckRedirect(t *testing.T) {
 		[]*http.Request{via[0], via[0], via[0]}); err == nil {
 		t.Fatal("超过 3 跳必须拒绝")
 	}
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ip":"203.0.113.9"}`))
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.RedirectHandler(target.URL, http.StatusFound))
+	defer redirector.Close()
+	_, err := (&http.Client{CheckRedirect: probeCheckRedirect}).Get(redirector.URL)
+	if err == nil || !strings.Contains(err.Error(), "拒绝跨主机重定向") {
+		t.Fatalf("httptest 跨主机 302 应失败，得到 %v", err)
+	}
 }
 
 // TestProbeEgressBlocksLoopback 确认拨号阶段真的挡住了本机地址（URL 校验之外的兜底，
 // 防的是"域名解析后才变成 127.0.0.1"）。
 func TestProbeEgressBlocksLoopback(t *testing.T) {
-	t.Setenv(repeaterAllowLocalEnv, "")
+	t.Setenv(repeaterAllowLocalEnv, "1")
 	srv := fakeIPServer("203.0.113.7")
 	defer srv.Close()
 
@@ -438,6 +487,9 @@ func TestProbeEgressBlocksLoopback(t *testing.T) {
 	}
 	if len(res.Probes) != 1 || !strings.Contains(res.Probes[0].Error, "拒绝访问本机") {
 		t.Fatalf("错误应说明是本机地址被拒，实际 %+v", res.Probes)
+	}
+	if strings.Contains(res.Probes[0].Error, repeaterAllowLocalEnv) {
+		t.Fatalf("probe 错误不应提示 repeater local escape hatch，实际 %+v", res.Probes[0])
 	}
 }
 
