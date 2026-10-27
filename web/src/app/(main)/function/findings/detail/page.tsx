@@ -63,6 +63,7 @@ function FindingDetailInner() {
   const [finding, setFinding] = React.useState<Finding | null>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [tab, setTab] = React.useState("overview");
+  const [trafficReload, setTrafficReload] = React.useState(0);
 
   const load = React.useCallback(() => {
     if (!id) {
@@ -76,6 +77,11 @@ function FindingDetailInner() {
       .finally(() => setLoaded(true));
   }, [contextTaskId, id]);
   React.useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleTrafficChanged = React.useCallback(() => {
+    setTrafficReload((value) => value + 1);
     load();
   }, [load]);
 
@@ -191,7 +197,8 @@ function FindingDetailInner() {
                   reproduction={finding.reproduction}
                   contextTask={contextTaskId || undefined}
                   readOnly={finding.inherited}
-                  onChanged={load}
+                  onChanged={handleTrafficChanged}
+                  trafficReload={trafficReload}
                 />
               ) : null}
               <details open={!structuredReproduction} className="group">
@@ -215,7 +222,8 @@ function FindingDetailInner() {
                 readOnly={finding.inherited}
                 stepIndex={structuredReproduction ? 0 : undefined}
                 title={structuredReproduction ? "未归入步骤的流量" : undefined}
-                onChanged={load}
+                onChanged={handleTrafficChanged}
+                trafficReload={trafficReload}
               />
               {/* 证据下方：详细报告(Markdown 渲染) */}
               <Card>

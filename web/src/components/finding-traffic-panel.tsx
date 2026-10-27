@@ -46,6 +46,7 @@ export function FindingTrafficPanel({
   onChanged,
   stepIndex: filterStepIndex,
   title,
+  trafficReload = 0,
 }: {
   findingId: string;
   contextTask?: string;
@@ -53,6 +54,7 @@ export function FindingTrafficPanel({
   onChanged: () => void;
   stepIndex?: number;
   title?: string;
+  trafficReload?: number;
 }) {
   const [data, setData] = React.useState<FindingTraffic | null>(null);
   const [error, setError] = React.useState("");
@@ -84,7 +86,7 @@ export function FindingTrafficPanel({
     return () => {
       active = false;
     };
-  }, [findingId, contextTask, reload, filterStepIndex]);
+  }, [findingId, contextTask, reload, filterStepIndex, trafficReload]);
 
   async function mutate(action: () => Promise<FindingTraffic>) {
     setBusy(true);

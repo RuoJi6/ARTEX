@@ -43,12 +43,14 @@ export function FindingReproductionSection({
   contextTask,
   readOnly,
   onChanged,
+  trafficReload = 0,
 }: {
   findingId: string;
   reproduction: Reproduction;
   contextTask?: string;
   readOnly?: boolean;
   onChanged?: () => void;
+  trafficReload?: number;
 }) {
   const [traffic, setTraffic] = React.useState<FindingTraffic | null>(null);
   const [pickerStep, setPickerStep] = React.useState<number | null>(null);
@@ -59,14 +61,20 @@ export function FindingReproductionSection({
   const [editingStepIndex, setEditingStepIndex] = React.useState("0");
   const [busy, setBusy] = React.useState(false);
   const [reload, setReload] = React.useState(0);
-  const load = React.useCallback(() => {
+  React.useEffect(() => {
+    let active = true;
     api
       .findingTraffic(findingId, contextTask)
-      .then(setTraffic)
-      .catch(() => setTraffic(null));
-  }, [findingId, contextTask]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: retry token intentionally refreshes this request.
-  React.useEffect(() => load(), [load, reload]);
+      .then((value) => {
+        if (active) setTraffic(value);
+      })
+      .catch(() => {
+        if (active) setTraffic(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [findingId, contextTask, reload, trafficReload]);
 
   const steps = reproduction.steps ?? [];
   const allBindings = traffic?.bindings ?? [];
