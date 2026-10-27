@@ -115,12 +115,44 @@ func probeBlockSensitiveDial(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-// userinfoRe 匹配 URL 里的 user:pass@。
-var userinfoRe = regexp.MustCompile(`://[^/@\s]+@`)
+// urlTokenRe 按空白切分：错误信息里地址和别的词混在一起，整串处理会误伤。
+var urlTokenRe = regexp.MustCompile(`\S+`)
 
-// maskSecrets 去掉 URL 里的用户名密码。它们会进 Configured / Path / probes[].error，
-// 而这三处都会被界面渲染或写进日志。
-func maskSecrets(s string) string { return userinfoRe.ReplaceAllString(s, "://***@") }
+// invalidPortRe 匹配 Go 报错里的 `invalid port ":xxx"`。它是独立一段（不含 `://`），
+// 而 `http://u:s3cr3t/p4ss@h` 的这段正是密码前半部分。
+var invalidPortRe = regexp.MustCompile(`invalid port ":[^"]*"`)
+
+// maskSecrets 把地址里的密码换成 `***`（这些文本会进 Configured / Path / probes[].error，
+// 都会被界面显示）。不用 `://[^/@\s]+@` 这种正则：密码里可能有 `@` 或 `/`，换不干净。
+func maskSecrets(s string) string {
+	out := urlTokenRe.ReplaceAllStringFunc(s, maskToken)
+	// 只有确实换过密码才连端口报错一起换：没有 `***@` 就是端口写错，换掉就看不出错在哪。
+	if strings.Contains(out, "***@") {
+		out = invalidPortRe.ReplaceAllString(out, `invalid port ":***"`)
+	}
+	return out
+}
+
+func maskToken(tok string) string {
+	u, err := url.Parse(tok)
+	if err != nil {
+		// 解析失败时分不清 `@` 在路径里还是密码里，只要 `://` 后面还有 `@` 就换掉。
+		i, at := strings.Index(tok, "://"), strings.LastIndex(tok, "@")
+		if i < 0 || at <= i+3 {
+			return tok
+		}
+		return tok[:i+3] + "***" + tok[at:]
+	}
+	if u.User == nil {
+		return tok // `@` 在路径/查询参数里，不是密码
+	}
+	u.User = nil // 不能用 url.User("***")，它会把 `*` 转义成 %2A
+	plain := u.String()
+	if i := strings.Index(plain, "://"); i >= 0 {
+		return plain[:i+3] + "***@" + plain[i+3:]
+	}
+	return tok
+}
 
 // egressAttempt 保留每个地址的失败原因，才能区分"连不上代理"和"代理通但出不了网"。
 type egressAttempt struct {
