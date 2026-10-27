@@ -164,7 +164,8 @@ func (s *Server) bindFindingTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Refs []db.TrafficRef `json:"traffic_refs"`
+		Refs      []db.TrafficRef `json:"traffic_refs"`
+		StepIndex *int            `json:"step_index"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		writeErr(w, 400, "invalid body")
@@ -173,6 +174,15 @@ func (s *Server) bindFindingTraffic(w http.ResponseWriter, r *http.Request) {
 	if len(body.Refs) == 0 {
 		writeErr(w, 400, "请选择流量")
 		return
+	}
+	if body.StepIndex != nil {
+		if *body.StepIndex < 0 {
+			writeErr(w, 400, "step_index 不能为负数")
+			return
+		}
+		for i := range body.Refs {
+			body.Refs[i].StepIndex = *body.StepIndex
+		}
 	}
 	out, err := s.evidenceStore().Bind(r.Context(), id, body.Refs)
 	if err != nil {
@@ -188,13 +198,18 @@ func (s *Server) editFindingTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Version *int64   `json:"version"`
-		Role    *string  `json:"role"`
-		Note    *string  `json:"note"`
-		Order   []string `json:"binding_ids"`
+		Version   *int64   `json:"version"`
+		Role      *string  `json:"role"`
+		Note      *string  `json:"note"`
+		Order     []string `json:"binding_ids"`
+		StepIndex *int     `json:"step_index"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil || body.Version == nil {
 		writeErr(w, 400, "version 和有效请求体必填")
+		return
+	}
+	if body.StepIndex != nil && *body.StepIndex < 0 {
+		writeErr(w, 400, "step_index 不能为负数")
 		return
 	}
 	var order []int64
@@ -221,7 +236,7 @@ func (s *Server) editFindingTraffic(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	err := s.m.pg.EditFindingTraffic(r.Context(), id, bindingID, *body.Version, body.Role, body.Note, r.Method == http.MethodDelete, order)
+	err := s.m.pg.EditFindingTrafficStep(r.Context(), id, bindingID, *body.Version, body.Role, body.Note, body.StepIndex, r.Method == http.MethodDelete, order)
 	if err != nil {
 		evidenceError(w, err)
 		return

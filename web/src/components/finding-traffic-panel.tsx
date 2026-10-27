@@ -28,6 +28,7 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import type { FindingTraffic, FindingTrafficBinding, TrafficEvidenceRole } from "@/lib/types";
 
@@ -43,11 +44,15 @@ export function FindingTrafficPanel({
   contextTask,
   readOnly,
   onChanged,
+  stepIndex: filterStepIndex,
+  title,
 }: {
   findingId: string;
   contextTask?: string;
   readOnly?: boolean;
   onChanged: () => void;
+  stepIndex?: number;
+  title?: string;
 }) {
   const [data, setData] = React.useState<FindingTraffic | null>(null);
   const [error, setError] = React.useState("");
@@ -58,6 +63,7 @@ export function FindingTrafficPanel({
   const [editing, setEditing] = React.useState<FindingTrafficBinding | null>(null);
   const [role, setRole] = React.useState<TrafficEvidenceRole>("supporting");
   const [note, setNote] = React.useState("");
+  const [selectedStepIndex, setSelectedStepIndex] = React.useState("0");
   const [busy, setBusy] = React.useState(false);
   const [reload, setReload] = React.useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry token intentionally refreshes this request.
@@ -68,7 +74,13 @@ export function FindingTrafficPanel({
     api
       .findingTraffic(findingId, contextTask)
       .then((value) => {
-        if (active) setData(value);
+        if (active) {
+          setData(
+            filterStepIndex === undefined
+              ? value
+              : { ...value, bindings: value.bindings.filter((b) => (b.step_index ?? 0) === filterStepIndex) },
+          );
+        }
       })
       .catch((e: Error) => {
         if (active) setError(e.message);
@@ -76,7 +88,7 @@ export function FindingTrafficPanel({
     return () => {
       active = false;
     };
-  }, [findingId, contextTask, reload]);
+  }, [findingId, contextTask, reload, filterStepIndex]);
 
   async function mutate(action: () => Promise<FindingTraffic>) {
     setBusy(true);
@@ -131,7 +143,7 @@ export function FindingTrafficPanel({
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle>关联流量 {data ? `(${data.bindings.length})` : ""}</CardTitle>
+            <CardTitle>{title ?? "关联流量"} {data ? `(${data.bindings.length})` : ""}</CardTitle>
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
@@ -216,6 +228,7 @@ export function FindingTrafficPanel({
                             setEditing(b);
                             setRole(b.role);
                             setNote(b.note);
+                            setSelectedStepIndex(String(b.step_index ?? 0));
                           }}
                         >
                           编辑说明
@@ -262,6 +275,7 @@ export function FindingTrafficPanel({
           findingId={findingId}
           contextTask={contextTask}
           bound={data.bindings}
+          stepIndex={Math.max(0, Number.parseInt(selectedStepIndex, 10) || 0)}
           onClose={() => setAdding(false)}
           onBound={() => {
             setReload((n) => n + 1);
@@ -308,6 +322,17 @@ export function FindingTrafficPanel({
               <FieldLabel htmlFor="evidence-note">证据说明</FieldLabel>
               <Textarea id="evidence-note" value={note} onChange={(e) => setNote(e.target.value)} />
             </Field>
+            <Field>
+              <FieldLabel htmlFor="evidence-step">复现步骤序号</FieldLabel>
+              <Input
+                id="evidence-step"
+                type="number"
+                min={0}
+                step={1}
+                value={selectedStepIndex}
+                onChange={(e) => setSelectedStepIndex(e.target.value)}
+              />
+            </Field>
           </FieldGroup>
           <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setEditing(null)}>
@@ -318,7 +343,13 @@ export function FindingTrafficPanel({
               onClick={() => {
                 if (editing && data)
                   void mutate(() =>
-                    api.editFindingTraffic(findingId, editing.id, data.version, { role, note }, contextTask),
+                    api.editFindingTraffic(
+                      findingId,
+                      editing.id,
+                      data.version,
+                      { role, note, step_index: Math.max(0, Number.parseInt(selectedStepIndex, 10) || 0) },
+                      contextTask,
+                    ),
                   );
               }}
             >

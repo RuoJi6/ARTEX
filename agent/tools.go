@@ -1222,13 +1222,24 @@ func (t *ToolSet) goalMet() actool.CoreTool {
 // --- worker write tools ---
 
 func (t *ToolSet) addFinding() actool.CoreTool {
-	return writeTool("report_finding", "记录确认的漏洞，用 evidence 提供命令输出、日志等可验证证据。任务上下文传当前 intent_id。返回的 finding_id 是独立漏洞记录 ID，finding_node_id 是探索节点 ID（第一行保留该节点编号）。", obj(map[string]any{
+	return writeTool("report_finding", "记录确认的漏洞，用 evidence 提供命令输出、日志等可验证证据。请务必填写结构化 reproduction：entry_point、prerequisites，以及每一步真实发出的 HTTP request/可选 response、expected、proves；不要改写请求原文。任务上下文传当前 intent_id。返回的 finding_id 是独立漏洞记录 ID，finding_node_id 是探索节点 ID（第一行保留该节点编号）。", obj(map[string]any{
 		"vulnclass": str("漏洞类别"), "name": str("漏洞名称"), "severity": str("critical|high|medium|low"), "summary": str("发现摘要"),
 		"intent_id": idp("当前任务的意图 id"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "受影响资产 id"},
 		"evidence":         str("证据/PoC 文本"),
 		"evidence_hint_id": idp("可选：本任务中对应此漏洞的提示节点 ID，自动携带其结构化 traffic_refs；不能引用继承提示或其他漏洞的提示"),
 		"traffic_refs": map[string]any{"type": "array", "description": "可选；HTTP/HTTPS 漏洞先检索并逐条核实请求/响应确实支持漏洞结论，再按复现顺序填写真实 ID。TCP 等非 HTTP 漏洞、未采集或找不到确切记录时省略或传 []，不阻止上报；可在 evidence 说明原因并提供其他可验证证据。不要猜测 ID、按域名/时间推定关联或仅为补包重复探测。用途 baseline 正常对照 / proof 漏洞证明 / verification 补充验证 / supporting 辅助证据。",
 			"items": obj(map[string]any{"traffic_id": str("traffic_search 返回的真实流量 ID"), "role": map[string]any{"type": "string", "enum": []string{"baseline", "proof", "verification", "supporting"}}, "note": str("该流量如何支持漏洞结论")}, "traffic_id")},
+		"reproduction": map[string]any{"type": "object", "description": "结构化、可从零复现的真实过程；有 HTTP 时每一步都填原始请求，响应填关键证明片段。",
+			"properties": map[string]any{
+				"entry_point":   str("入口接口，例如 POST /upload.php"),
+				"prerequisites": map[string]any{"type": "array", "items": str("前置条件，例如匿名访问或测试账号注册方式")},
+				"steps": map[string]any{"type": "array", "items": obj(map[string]any{
+					"request": str("真实发出的标准 HTTP 请求原文，逐字保留"), "response": str("可选：真实 HTTP 响应原文或关键证明片段"), "expected": str("该步预期结果"), "proves": str("该步证明了什么"),
+					"traffic_ids": map[string]any{"type": "array", "items": str("可选：traffic_search 返回且已核实的真实流量 ID")},
+				}, "request", "expected", "proves")},
+				"provenance": str("攻击链来源或发现该漏洞的意图"),
+			},
+		},
 	}, "vulnclass", "severity", "summary"), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 		var a struct {
 			VulnClass, Name, Severity, Summary, Evidence string
@@ -1236,6 +1247,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			AssetIDs                                     []json.RawMessage `json:"asset_ids"`
 			TrafficRefs                                  []db.TrafficRef   `json:"traffic_refs"`
 			EvidenceHintID                               json.RawMessage   `json:"evidence_hint_id"`
+			Reproduction                                 json.RawMessage   `json:"reproduction"`
 		}
 		if err := json.Unmarshal(in, &a); err != nil {
 			return actool.Errorf(err.Error()), nil
@@ -1258,7 +1270,32 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		input := db.RecordFindingInput{TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs)}
+		// Step traffic_ids are resolved at report time. Explicit traffic_refs that
+		// are not listed by a step remain overview bindings (step_index=0).
+		if findingTrafficBindingEnabled() && len(a.Reproduction) > 0 && string(a.Reproduction) != "null" {
+			var recipe struct {
+				Steps []struct {
+					TrafficIDs []string `json:"traffic_ids"`
+				} `json:"steps"`
+			}
+			if err := json.Unmarshal(a.Reproduction, &recipe); err != nil {
+				return actool.Errorf(fmt.Sprintf("reproduction JSON 无效: %v", err)), nil
+			}
+			seen := map[string]bool{}
+			stepRefs := make([]db.TrafficRef, 0)
+			for i, step := range recipe.Steps {
+				for _, id := range step.TrafficIDs {
+					id = strings.TrimSpace(id)
+					if id == "" || seen[id] {
+						continue
+					}
+					seen[id] = true
+					stepRefs = append(stepRefs, db.TrafficRef{TrafficID: id, Role: "supporting", StepIndex: i + 1})
+				}
+			}
+			refs = append(stepRefs, refs...)
+		}
+		input := db.RecordFindingInput{TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs), Reproduction: a.Reproduction}
 		var recorded *db.RecordedFinding
 		if t.findingRecorder != nil {
 			recorded, err = t.findingRecorder.Record(ctx, input, refs)

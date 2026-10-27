@@ -714,16 +714,16 @@ export const api = {
     get<FindingTraffic>(
       `/exploration/findings/${id}/traffic${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
     ),
-  bindFindingTraffic: (id: string, traffic_refs: TrafficEvidenceRef[], contextTask?: string) =>
+  bindFindingTraffic: (id: string, traffic_refs: TrafficEvidenceRef[], contextTask?: string, step_index?: number) =>
     post<FindingTraffic>(
       `/exploration/findings/${id}/traffic${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
-      { traffic_refs },
+      { traffic_refs, ...(step_index !== undefined ? { step_index } : {}) },
     ),
   editFindingTraffic: (
     id: string,
     bindingId: string,
     version: number,
-    fields: { role: TrafficEvidenceRole; note: string },
+    fields: { role: TrafficEvidenceRole; note: string; step_index?: number },
     contextTask?: string,
   ) =>
     patch<FindingTraffic>(

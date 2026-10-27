@@ -43,6 +43,7 @@ type TrafficRef struct {
 	TrafficID string `json:"traffic_id"`
 	Role      string `json:"role"`
 	Note      string `json:"note"`
+	StepIndex int    `json:"step_index,omitempty"`
 }
 
 func NormalizeTrafficRefs(refs []TrafficRef) ([]TrafficRef, error) {
@@ -55,6 +56,9 @@ func NormalizeTrafficRefs(refs []TrafficRef) ([]TrafficRef, error) {
 		}
 		if ref.Role == "" {
 			ref.Role = "supporting"
+		}
+		if ref.StepIndex < 0 {
+			return nil, errors.New("step_index 不能为负数")
 		}
 		if !ValidTrafficRole(ref.Role) {
 			return nil, fmt.Errorf("无效的流量用途 %q", ref.Role)
@@ -95,6 +99,7 @@ type FindingTrafficBinding struct {
 	Role       string                  `json:"role"`
 	Note       string                  `json:"note"`
 	Position   int                     `json:"position"`
+	StepIndex  int                     `json:"step_index"`
 	CreatedAt  time.Time               `json:"created_at"`
 	Snapshot   TrafficEvidenceSnapshot `json:"snapshot"`
 }
@@ -215,8 +220,8 @@ func AddFindingTrafficTx(tx *sql.Tx, findingID int64, prepared []PreparedTraffic
 		if _, err := tx.Exec(`UPDATE traffic_evidence_snapshots SET unreferenced_at=NULL WHERE id=$1`, item.Snapshot.ID); err != nil {
 			return err
 		}
-		res, err := tx.Exec(`INSERT INTO finding_traffic_bindings(finding_id,snapshot_id,role,note,position)
-VALUES($1,$2,$3,$4,$5) ON CONFLICT(finding_id,snapshot_id) DO NOTHING`, findingID, item.Snapshot.ID, item.Ref.Role, item.Ref.Note, position)
+		res, err := tx.Exec(`INSERT INTO finding_traffic_bindings(finding_id,snapshot_id,role,note,position,step_index)
+VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(finding_id,snapshot_id) DO NOTHING`, findingID, item.Snapshot.ID, item.Ref.Role, item.Ref.Note, position, item.Ref.StepIndex)
 		if err != nil {
 			return err
 		}
@@ -248,7 +253,7 @@ func FindingTrafficTx(tx *sql.Tx, findingID int64) (*FindingTraffic, error) {
 		}
 		return nil, err
 	}
-	rows, err := tx.Query(`SELECT b.id,b.finding_id,b.snapshot_id,b.role,b.note,b.position,b.created_at,to_jsonb(s)
+	rows, err := tx.Query(`SELECT b.id,b.finding_id,b.snapshot_id,b.role,b.note,b.position,b.step_index,b.created_at,to_jsonb(s)
 FROM finding_traffic_bindings b JOIN traffic_evidence_snapshots s ON s.id=b.snapshot_id WHERE b.finding_id=$1 ORDER BY b.position,b.id`, findingID)
 	if err != nil {
 		return nil, err
@@ -257,7 +262,7 @@ FROM finding_traffic_bindings b JOIN traffic_evidence_snapshots s ON s.id=b.snap
 	for rows.Next() {
 		var b FindingTrafficBinding
 		var raw []byte
-		if err := rows.Scan(&b.ID, &b.FindingID, &b.SnapshotID, &b.Role, &b.Note, &b.Position, &b.CreatedAt, &raw); err != nil {
+		if err := rows.Scan(&b.ID, &b.FindingID, &b.SnapshotID, &b.Role, &b.Note, &b.Position, &b.StepIndex, &b.CreatedAt, &raw); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(raw, &b.Snapshot); err != nil {
@@ -274,8 +279,15 @@ func (d *DB) GetFindingTraffic(ctx context.Context, findingID int64) (out *Findi
 }
 
 func (d *DB) EditFindingTraffic(ctx context.Context, findingID, bindingID, version int64, role, note *string, remove bool, order []int64) error {
+	return d.EditFindingTrafficStep(ctx, findingID, bindingID, version, role, note, nil, remove, order)
+}
+
+func (d *DB) EditFindingTrafficStep(ctx context.Context, findingID, bindingID, version int64, role, note *string, stepIndex *int, remove bool, order []int64) error {
 	if role != nil && !ValidTrafficRole(*role) {
 		return errors.New("无效的流量用途")
+	}
+	if stepIndex != nil && *stepIndex < 0 {
+		return errors.New("step_index 不能为负数")
 	}
 	return d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
 		if err := LockFindingEvidenceTx(tx, findingID, &version); err != nil {
@@ -308,7 +320,7 @@ func (d *DB) EditFindingTraffic(ctx context.Context, findingID, bindingID, versi
 			if remove {
 				res, err = tx.Exec(`DELETE FROM finding_traffic_bindings WHERE finding_id=$1 AND id=$2`, findingID, bindingID)
 			} else {
-				res, err = tx.Exec(`UPDATE finding_traffic_bindings SET role=COALESCE($3,role),note=COALESCE($4,note) WHERE finding_id=$1 AND id=$2`, findingID, bindingID, role, note)
+				res, err = tx.Exec(`UPDATE finding_traffic_bindings SET role=COALESCE($3,role),note=COALESCE($4,note),step_index=COALESCE($5,step_index) WHERE finding_id=$1 AND id=$2`, findingID, bindingID, role, note, stepIndex)
 			}
 			if err != nil {
 				return err
@@ -329,6 +341,7 @@ type RecordFindingInput struct {
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
 	AssetIDs                                             []int64
+	Reproduction                                         json.RawMessage
 }
 
 type RecordedFinding struct {
@@ -361,7 +374,15 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 			return nil, errors.New("intent_id 必须是本任务的意图（关联任务意图只读）")
 		}
 	}
-	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}})
+	payloadMap := map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}}
+	if len(in.Reproduction) > 0 && string(in.Reproduction) != "null" {
+		var reproduction any
+		if err := json.Unmarshal(in.Reproduction, &reproduction); err != nil {
+			return nil, fmt.Errorf("reproduction JSON 无效: %w", err)
+		}
+		payloadMap["reproduction"] = reproduction
+	}
+	payload, _ := json.Marshal(payloadMap)
 	out := &RecordedFinding{}
 	if err := tx.QueryRow(`INSERT INTO exploration_nodes(exploration_id,kind,payload,priority,state,origin)
 VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string(payload), in.Worker).Scan(&out.NodeID); err != nil {
@@ -382,8 +403,12 @@ VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string
 		assets = []int64{}
 	}
 	raw, _ := json.Marshal(assets)
-	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids)
-VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw)).Scan(&out.FindingID); err != nil {
+	var repro any
+	if len(in.Reproduction) > 0 && string(in.Reproduction) != "null" {
+		repro = string(in.Reproduction)
+	}
+	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids,reproduction)
+VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw), repro).Scan(&out.FindingID); err != nil {
 		return nil, err
 	}
 	// 在**同一事务**里登记一条推送事件：提交即保证「漏洞落库」与「推送任务存在」

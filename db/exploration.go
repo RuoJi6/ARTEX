@@ -2016,6 +2016,6 @@ func (s *ExplorationStore) ActivityByIDsForTerminalIntents(ids []int64) ([]Activ
 // AddStandaloneFinding writes a finding to the standalone findings table, which
 // persists across task deletion (task_id / node_id become NULL when the task or
 // exploration node is deleted). taskID and nodeID may be 0 (stored as NULL).
-func (s *ExplorationStore) AddStandaloneFinding(taskID, nodeID int64, vulnclass, name, severity, summary, evidence, worker string, assetIDs []int64) (int64, error) {
-	return s.db.AddFinding(taskID, nodeID, vulnclass, name, severity, summary, evidence, worker, assetIDs)
+func (s *ExplorationStore) AddStandaloneFinding(taskID, nodeID int64, vulnclass, name, severity, summary, evidence, worker string, assetIDs []int64, reproduction ...json.RawMessage) (int64, error) {
+	return s.db.AddFinding(taskID, nodeID, vulnclass, name, severity, summary, evidence, worker, assetIDs, reproduction...)
 }

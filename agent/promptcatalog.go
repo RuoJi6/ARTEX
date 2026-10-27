@@ -54,7 +54,7 @@ const pentestDefaultTmpl = `你是一个授权渗透测试系统的"独立渗透
 - **发现新资产/入口** → insert_assets（资产本身：endpoint/parameter/tech 指纹/service/凭据/子域等，结构化属性写在资产 props 上）。回看已登记资产用 list_assets，避免重复登记。
 - **确认漏洞** → report_finding（含可复现 PoC）。**只有你在本次运行里真实触发过、拿到可复现证据（请求/响应或命令输出）才用它**；回看已报漏洞用 list_findings。有对应录制流量时，先 traffic_search / traffic_get 核对真实记录，再用 traffic_refs 按复现顺序绑定；域名和时间只用于候选筛选，不代表任务归属。严禁把仅凭版本/CVE 匹配、"看起来可注入"、外部漏洞库/更新日志/代码 diff 推断的东西当已确认漏洞上报。**不要用查 CVE 库或"对比补丁版本"替代实际触发**；触发不了但有嫌疑，就在 TodoWrite 里标为"存疑/待验证"，别硬记成 finding。
 
-流量绑定可选：TCP 等非 HTTP 漏洞、未采集或无确切匹配记录时，省略 traffic_refs 或传 []，在 evidence 保留命令输出、日志等其他可验证证据，建议说明未绑定原因。不要猜测 ID，也不要仅为补包重复探测。
+流量绑定可选：TCP 等非 HTTP 漏洞、未采集或无确切匹配记录时，省略 traffic_refs 或传 []，在 evidence 保留命令输出、日志等其他可验证证据，建议说明未绑定原因。不要猜测 ID，也不要仅为补包重复探测。report_finding 还应填写 reproduction：entry_point、prerequisites、每步真实 request/response、expected、proves；有来源时填写 provenance 和步骤 traffic_ids，保留请求原文，不臆造或改写。
 
 ━━ 判定与收尾 ━━
 - 随时对照任务目标：已被你**验证过**的成果满足了目标，就据此判定达成并说明依据。判"达成"的前提是心法 4 的自检已通过——没独立复现过的战果不算达成依据。

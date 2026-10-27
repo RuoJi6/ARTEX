@@ -324,6 +324,7 @@ type FindingDTO struct {
 	ReportEvidenceVersion int64                      `json:"report_evidence_version"`
 	ReportStale           bool                       `json:"report_stale"`
 	TrafficBindings       []db.FindingTrafficBinding `json:"traffic_bindings,omitempty"`
+	Reproduction          json.RawMessage            `json:"reproduction"`
 
 	ID        string `json:"id"`
 	FindingID string `json:"finding_id,omitempty"` // standalone findings-table id — the handle for status updates
@@ -386,25 +387,27 @@ func assetLabel(a *db.Asset) string {
 // findingPayload mirrors the JSON written by the worker's report_finding tool
 // (agent/tools.go addFinding): {vulnclass, severity, summary, evidence:{by,poc}}.
 type findingPayload struct {
-	VulnClass string          `json:"vulnclass"`
-	Name      string          `json:"name"`
-	Severity  string          `json:"severity"`
-	Summary   string          `json:"summary"`
-	Evidence  json.RawMessage `json:"evidence"`
+	VulnClass    string          `json:"vulnclass"`
+	Name         string          `json:"name"`
+	Severity     string          `json:"severity"`
+	Summary      string          `json:"summary"`
+	Evidence     json.RawMessage `json:"evidence"`
+	Reproduction json.RawMessage `json:"reproduction"`
 }
 
 func findingDTO(n *db.Node) FindingDTO {
 	var p findingPayload
 	_ = json.Unmarshal(n.Payload, &p)
 	d := FindingDTO{
-		ID:        i64s(n.ID),
-		VulnClass: p.VulnClass,
-		Name:      p.Name,
-		Severity:  p.Severity,
-		Status:    db.FindingPending,
-		Summary:   p.Summary,
-		Evidence:  rawString(p.Evidence),
-		TS:        rfc3339(n.CreatedAt),
+		ID:           i64s(n.ID),
+		VulnClass:    p.VulnClass,
+		Name:         p.Name,
+		Severity:     p.Severity,
+		Status:       db.FindingPending,
+		Summary:      p.Summary,
+		Evidence:     rawString(p.Evidence),
+		Reproduction: p.Reproduction,
+		TS:           rfc3339(n.CreatedAt),
 	}
 	if n.SourceTaskID > 0 {
 		d.SourceTaskID = i64s(n.SourceTaskID)
@@ -464,14 +467,15 @@ func findingFromDB(f *db.DBFinding, assets map[int64]*db.Asset) FindingDTO {
 		FindingID:    i64s(f.ID),
 		TrafficCount: f.TrafficCount, EvidenceVersion: f.EvidenceVersion, ReportEvidenceVersion: f.ReportEvidenceVersion,
 		ReportStale: f.Report != "" && f.EvidenceVersion != f.ReportEvidenceVersion, TrafficBindings: f.TrafficBindings,
-		VulnClass: f.VulnClass,
-		Name:      f.Name,
-		Severity:  f.Severity,
-		Status:    status,
-		Summary:   f.Summary,
-		Evidence:  f.Evidence,
-		Report:    f.Report,
-		TS:        rfc3339(f.CreatedAt),
+		Reproduction: f.Reproduction,
+		VulnClass:    f.VulnClass,
+		Name:         f.Name,
+		Severity:     f.Severity,
+		Status:       status,
+		Summary:      f.Summary,
+		Evidence:     f.Evidence,
+		Report:       f.Report,
+		TS:           rfc3339(f.CreatedAt),
 	}
 	if f.ExportCaseID > 0 {
 		d.ID = "case:" + i64s(f.ExportCaseID)

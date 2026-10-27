@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -45,6 +46,17 @@ func TestInheritedDTOProvenance(t *testing.T) {
 	})
 	if !assetRef.Inherited || assetRef.SourceTaskID != "7" {
 		t.Fatalf("asset ref provenance lost: %+v", assetRef)
+	}
+}
+
+func TestFindingDTONilReproductionIsSafe(t *testing.T) {
+	dto := findingFromDB(&db.DBFinding{ID: 9, VulnClass: "legacy", Severity: db.SeverityLow, Status: db.FindingPending}, nil)
+	raw, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(dto.Reproduction) != "" || !bytes.Contains(raw, []byte(`"reproduction":null`)) {
+		t.Fatalf("legacy reproduction should remain null: dto=%+v json=%s", dto, raw)
 	}
 }
 

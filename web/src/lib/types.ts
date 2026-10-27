@@ -512,6 +512,21 @@ export interface FindingAsset {
   label: string;
 }
 
+export interface ReproStep {
+  request: string;
+  response?: string;
+  expected?: string;
+  proves?: string;
+  traffic_ids?: string[];
+}
+
+export interface Reproduction {
+  entry_point?: string;
+  prerequisites?: string[];
+  steps?: ReproStep[];
+  provenance?: string;
+}
+
 export interface Finding {
   case_id?: string;
   traffic_count?: number;
@@ -527,6 +542,7 @@ export interface Finding {
   summary: string;
   evidence: string;
   report?: string; // 详细报告(Markdown);仅详情接口返回,列表为空
+	reproduction?: Reproduction | null;
   intent_id?: string;
   param_id?: string;
   task_id?: string;
@@ -1604,6 +1620,7 @@ export interface TrafficEvidenceRef {
   traffic_id: string;
   role?: TrafficEvidenceRole;
   note?: string;
+  step_index?: number;
 }
 export interface TrafficEvidenceSnapshot {
   id: string;
@@ -1627,6 +1644,7 @@ export interface FindingTrafficBinding {
   role: TrafficEvidenceRole;
   note: string;
   position: number;
+  step_index?: number;
   created_at: string;
   snapshot: TrafficEvidenceSnapshot;
 }

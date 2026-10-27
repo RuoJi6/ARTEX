@@ -51,6 +51,12 @@ func restoreFindingTrafficTx(tx *sql.Tx, snapshot *TaskArchiveSnapshot) error {
 		if !allowed[sid] || !ValidTrafficRole(role) {
 			return errors.New("invalid archived evidence binding")
 		}
+		if rawStep, exists := row["step_index"]; exists && rawStep != nil {
+			step, ok := jsonInt64(rawStep)
+			if !ok || step < 0 {
+				return errors.New("invalid archived evidence step index")
+			}
+		}
 		var owned bool
 		if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM findings WHERE id=$1 AND task_id=$2)`, fid, snapshot.TaskID).Scan(&owned); err != nil {
 			return err
@@ -61,7 +67,10 @@ func restoreFindingTrafficTx(tx *sql.Tx, snapshot *TaskArchiveSnapshot) error {
 	}
 	if len(rows) > 0 {
 		raw, _ := json.Marshal(rows)
-		if _, err = tx.Exec(`INSERT INTO finding_traffic_bindings SELECT * FROM json_populate_recordset(NULL::finding_traffic_bindings,$1::json)`, string(raw)); err != nil {
+		if _, err = tx.Exec(`INSERT INTO finding_traffic_bindings
+			(id,finding_id,snapshot_id,role,note,position,created_at,step_index)
+			SELECT id,finding_id,snapshot_id,role,note,position,created_at,COALESCE(step_index,0)
+			FROM json_to_recordset($1::json) AS x(id bigint,finding_id bigint,snapshot_id text,role text,note text,position integer,created_at timestamptz,step_index integer)`, string(raw)); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`UPDATE traffic_evidence_snapshots s SET unreferenced_at=NULL WHERE EXISTS(SELECT 1 FROM finding_traffic_bindings b WHERE b.snapshot_id=s.id)`)

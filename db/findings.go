@@ -34,9 +34,28 @@ type DBFinding struct {
 	Worker          string
 	AssetIDs        []int64
 	Status          string
-	Report          string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
+	Report          string          // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
+	Reproduction    json.RawMessage // 结构化复现过程; NULL 表示未提供
 	CreatedAt       time.Time
 	TaskDescription string // populated via LEFT JOIN on tasks
+}
+
+// Reproduction is the structured reproduction recipe captured by report_finding.
+// It is kept as JSON in the findings table so older rows remain nullable while
+// callers that need the shape can decode it without inventing steps from prose.
+type Reproduction struct {
+	EntryPoint    string      `json:"entry_point,omitempty"`
+	Prerequisites []string    `json:"prerequisites,omitempty"`
+	Steps         []ReproStep `json:"steps,omitempty"`
+	Provenance    string      `json:"provenance,omitempty"`
+}
+
+type ReproStep struct {
+	Request    string   `json:"request"`
+	Response   string   `json:"response,omitempty"`
+	Expected   string   `json:"expected,omitempty"`
+	Proves     string   `json:"proves,omitempty"`
+	TrafficIDs []string `json:"traffic_ids,omitempty"`
 }
 
 // Finding triage states (findings.status).
@@ -82,7 +101,7 @@ func ValidSeverity(s string) bool {
 // AddFinding inserts a finding into the standalone findings table. taskID and
 // nodeID may be 0 (stored as NULL). name may be "" (frontend falls back to
 // vulnclass). Returns the new finding id.
-func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary, evidence, worker string, assetIDs []int64) (int64, error) {
+func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary, evidence, worker string, assetIDs []int64, reproduction ...json.RawMessage) (int64, error) {
 	aidsJSON, _ := json.Marshal(assetIDs)
 	if assetIDs == nil {
 		aidsJSON = []byte("[]")
@@ -94,11 +113,15 @@ func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary
 	if nodeID > 0 {
 		nid = &nodeID
 	}
+	var repro any
+	if len(reproduction) > 0 && len(reproduction[0]) > 0 && string(reproduction[0]) != "null" {
+		repro = string(reproduction[0])
+	}
 	var id int64
 	err := d.QueryRow(
-		`INSERT INTO findings (task_id, node_id, vulnclass, name, severity, summary, evidence, worker, asset_ids)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-		tid, nid, vulnclass, name, severity, summary, evidence, worker, string(aidsJSON),
+		`INSERT INTO findings (task_id, node_id, vulnclass, name, severity, summary, evidence, worker, asset_ids, reproduction)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+		tid, nid, vulnclass, name, severity, summary, evidence, worker, string(aidsJSON), repro,
 	).Scan(&id)
 	return id, err
 }
@@ -646,14 +669,14 @@ func (d *DB) FindingStats() (*FindingStats, error) {
 // it also selects `report` — that column is only needed on the detail page.
 func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 	f := &DBFinding{}
-	var aidsJSON string
-	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, '')
+	var aidsJSON, reproduction string
+	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, ''), COALESCE(f.reproduction::text, '')
 		FROM findings f
 		LEFT JOIN tasks t ON f.task_id = t.id
 		WHERE f.id = $1`, id).Scan(
 		&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 		&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
-		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report)
+		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report, &reproduction)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -661,6 +684,9 @@ func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 		return nil, err
 	}
 	_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
+	if reproduction != "" {
+		f.Reproduction = json.RawMessage(reproduction)
+	}
 	return f, nil
 }
 

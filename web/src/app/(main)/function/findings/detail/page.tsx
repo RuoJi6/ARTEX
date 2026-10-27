@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { CopyButton } from "@/components/copy-button";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
+import { FindingReproductionSection, hasStructuredReproduction } from "@/components/finding-reproduction-section";
 import { Markdown } from "@/components/markdown";
 import { StatusBadge } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -128,6 +129,7 @@ function FindingDetailInner() {
   }
 
   const title = finding.name || finding.vulnclass || "未分类";
+  const structuredReproduction = hasStructuredReproduction(finding.reproduction);
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col gap-0">
@@ -183,25 +185,36 @@ function FindingDetailInner() {
                 </CardContent>
               </Card>
               <FindingRetestPanel key={`retest:${id}`} findingId={id} readOnly={finding.inherited} onCompleted={load} />
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm">证据 / PoC</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {finding.evidence ? (
-                    <pre className="max-h-[46vh] overflow-auto rounded-md bg-muted px-3 py-2 font-mono text-xs whitespace-pre-wrap">
-                      {finding.evidence}
-                    </pre>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">（无证据）</p>
-                  )}
-                </CardContent>
-              </Card>
+              {structuredReproduction && finding.reproduction ? (
+                <FindingReproductionSection
+                  findingId={id}
+                  reproduction={finding.reproduction}
+                  contextTask={contextTaskId || undefined}
+                  readOnly={finding.inherited}
+                  onChanged={load}
+                />
+              ) : null}
+              <details open={!structuredReproduction} className="group">
+                <summary className="cursor-pointer list-none">
+                  <Card>
+                    <CardHeader><CardTitle className="text-sm">证据 / PoC</CardTitle></CardHeader>
+                  </Card>
+                </summary>
+                <Card className="mt-2">
+                  <CardContent className="pt-4">
+                    {finding.evidence ? (
+                      <pre className="max-h-[46vh] overflow-auto rounded-md bg-muted px-3 py-2 font-mono text-xs whitespace-pre-wrap">{finding.evidence}</pre>
+                    ) : <p className="text-sm text-muted-foreground">（无证据）</p>}
+                  </CardContent>
+                </Card>
+              </details>
               <FindingTrafficPanel
                 key={`traffic:${id}`}
                 findingId={id}
                 contextTask={contextTaskId || undefined}
                 readOnly={finding.inherited}
+                stepIndex={structuredReproduction ? 0 : undefined}
+                title={structuredReproduction ? "未归入步骤的流量" : undefined}
                 onChanged={load}
               />
               {/* 证据下方：详细报告(Markdown 渲染) */}

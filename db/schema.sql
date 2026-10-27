@@ -1167,6 +1167,7 @@ CREATE TABLE IF NOT EXISTS findings (
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS name   TEXT NOT NULL DEFAULT '';
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS report TEXT NOT NULL DEFAULT '';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS reproduction JSONB;
 CREATE INDEX IF NOT EXISTS idx_findings_task ON findings(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_time ON findings(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status, created_at DESC);
@@ -1231,11 +1232,14 @@ CREATE TABLE IF NOT EXISTS finding_traffic_bindings (
     snapshot_id TEXT NOT NULL REFERENCES traffic_evidence_snapshots(id),
     role TEXT NOT NULL DEFAULT 'supporting',
     note TEXT NOT NULL DEFAULT '',
+    step_index INTEGER NOT NULL DEFAULT 0,
     position INTEGER NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(finding_id, snapshot_id)
 );
+ALTER TABLE finding_traffic_bindings ADD COLUMN IF NOT EXISTS step_index INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_finding_traffic_order ON finding_traffic_bindings(finding_id, position, id);
+CREATE INDEX IF NOT EXISTS idx_finding_traffic_step ON finding_traffic_bindings(finding_id, step_index, position, id);
 CREATE INDEX IF NOT EXISTS idx_finding_traffic_snapshot ON finding_traffic_bindings(snapshot_id);
 
 -- =====================================================================

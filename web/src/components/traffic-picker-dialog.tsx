@@ -30,12 +30,14 @@ export function TrafficPickerDialog({
   findingId,
   contextTask,
   bound,
+  stepIndex,
   onClose,
   onBound,
 }: {
   findingId: string;
   contextTask?: string;
   bound: FindingTrafficBinding[];
+  stepIndex?: number;
   onClose: () => void;
   onBound: () => void;
 }) {
@@ -91,6 +93,7 @@ export function TrafficPickerDialog({
         findingId,
         [...selected].map((traffic_id) => ({ traffic_id })),
         contextTask,
+        stepIndex,
       );
       toast.success(`已绑定 ${selected.size} 条流量`);
       onBound();

@@ -50,6 +50,35 @@ func TestReportFindingOptionalTrafficWithoutCapture(t *testing.T) {
 	}
 }
 
+func TestReportFindingPersistsStructuredReproduction(t *testing.T) {
+	d := testDB(t)
+	defer d.Close()
+	task, err := d.CreateTask("structured reproduction", "fixture", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	ts := NewToolSet(d.Exploration(task.ExplorationID), "fixture")
+	ts.taskID = task.ID
+	ts.SetFindingRecorder(evidence.New(d, nil, t.TempDir()))
+	reproduction := `{"entry_point":"POST /upload.php","prerequisites":["anonymous access"],"steps":[{"request":"POST /upload.php HTTP/1.1","response":"HTTP/1.1 201 Created","expected":"201 Created","proves":"upload accepted","traffic_ids":[]}]}`
+	result, err := ts.addFinding().Call(t.Context(), json.RawMessage(`{"vulnclass":"upload","severity":"high","summary":"structured fixture","evidence":"proof","reproduction":`+reproduction+`}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded db.RecordedFinding
+	if err := json.Unmarshal([]byte(strings.SplitN(result.Flatten(), "\n", 2)[1]), &recorded); err != nil {
+		t.Fatal(err)
+	}
+	finding, err := d.GetFinding(recorded.FindingID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding == nil || string(finding.Reproduction) != reproduction {
+		t.Fatalf("reproduction was not persisted: %#v", finding)
+	}
+}
+
 func TestReportFindingAtomicContract(t *testing.T) {
 	old := FindingTrafficBindingEnabled
 	FindingTrafficBindingEnabled = func() bool { return true }
