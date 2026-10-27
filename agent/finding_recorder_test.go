@@ -19,6 +19,15 @@ func (failingFindingRecorder) Record(context.Context, db.RecordFindingInput, []d
 	return nil, errors.New("fixture persistence failed")
 }
 
+type capturingFindingRecorder struct {
+	refs []db.TrafficRef
+}
+
+func (r *capturingFindingRecorder) Record(_ context.Context, _ db.RecordFindingInput, refs []db.TrafficRef) (*db.RecordedFinding, error) {
+	r.refs = append([]db.TrafficRef(nil), refs...)
+	return &db.RecordedFinding{Traffic: &db.FindingTraffic{}}, nil
+}
+
 func TestReportFindingOptionalTrafficWithoutCapture(t *testing.T) {
 	d := testDB(t)
 	defer d.Close()
@@ -87,6 +96,45 @@ func TestReportFindingPersistsStructuredReproduction(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotReproduction, wantReproduction) {
 		t.Fatalf("reproduction was not persisted: %#v", finding)
+	}
+}
+
+func TestReportFindingStepTrafficPreservesExplicitReferenceMetadata(t *testing.T) {
+	old := FindingTrafficBindingEnabled
+	FindingTrafficBindingEnabled = func() bool { return true }
+	t.Cleanup(func() { FindingTrafficBindingEnabled = old })
+	d := testDB(t)
+	defer d.Close()
+	task, err := d.CreateTask("step traffic merge", "fixture", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	recorder := &capturingFindingRecorder{}
+	ts := NewToolSet(d.Exploration(task.ExplorationID), "fixture")
+	ts.taskID = task.ID
+	ts.SetFindingRecorder(recorder)
+	reproduction := `{"steps":[{"traffic_ids":["shared"]},{"traffic_ids":["new-step"]}]}`
+	input := `{"vulnclass":"TEST","severity":"low","summary":"step merge","traffic_refs":[{"traffic_id":"shared","role":"proof","note":"preserve this note"},{"traffic_id":"overview","role":"baseline","note":"overview note"}],"reproduction":` + reproduction + `}`
+	result, err := ts.addFinding().Call(t.Context(), json.RawMessage(input), nil)
+	if err != nil || result.IsError {
+		t.Fatalf("report failed: %v %s", err, result.Flatten())
+	}
+	if len(recorder.refs) != 3 {
+		t.Fatalf("unexpected refs: %#v", recorder.refs)
+	}
+	byID := make(map[string]db.TrafficRef, len(recorder.refs))
+	for _, ref := range recorder.refs {
+		byID[ref.TrafficID] = ref
+	}
+	if got := byID["shared"]; got.Role != "proof" || got.Note != "preserve this note" || got.StepIndex != 1 {
+		t.Fatalf("overlapping ref metadata changed: %#v", got)
+	}
+	if got := byID["overview"]; got.Role != "baseline" || got.Note != "overview note" || got.StepIndex != 0 {
+		t.Fatalf("overview ref changed: %#v", got)
+	}
+	if got := byID["new-step"]; got.Role != "supporting" || got.Note != "" || got.StepIndex != 2 {
+		t.Fatalf("new step ref not defaulted: %#v", got)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 )
 
 func (s *Server) seedFindingWorkflowTools() {
+	s.migrateFindingWorkflowSchemas()
 	const hostSearchDescriptionFlag = "finding_workflow_tools_v3_host_search_description"
 	if value, _, _ := s.m.pg.GetSetting(hostSearchDescriptionFlag); value != "true" {
 		// Only replace the original built-in text. A user-edited description is
@@ -102,6 +103,51 @@ func (s *Server) seedFindingWorkflowTools() {
 	}
 	if err := s.m.pg.AddAgentToToolBinding("reporter", []string{"bind_finding_traffic"}); err != nil {
 		return
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// migrateFindingWorkflowSchemas adds schema fields introduced after the
+// original finding workflow seed. It patches only missing properties so a
+// user's description, agent bindings, enabled state, and other schema edits
+// remain untouched.
+func (s *Server) migrateFindingWorkflowSchemas() {
+	const flag = "finding_workflow_tools_v3_reproduction_step_index"
+	if value, _, _ := s.m.pg.GetSetting(flag); value == "true" {
+		return
+	}
+	properties := map[string]json.RawMessage{}
+	for _, seed := range agent.BuiltinToolSeeds() {
+		if seed.Key != "report_finding" {
+			continue
+		}
+		if raw, err := json.Marshal(objectProperty(seed.Schema, "properties")["reproduction"]); err == nil && string(raw) != "null" {
+			properties["report_finding"] = raw
+		}
+		break
+	}
+	for _, tool := range s.orchestrationTools() {
+		if tool.Name() != "bind_finding_traffic" {
+			continue
+		}
+		schema := tool.InputSchema()
+		if raw, err := json.Marshal(objectProperty(schema, "properties")["step_index"]); err == nil && string(raw) != "null" {
+			properties["bind_finding_traffic"] = raw
+		}
+		break
+	}
+	for key, property := range map[string]string{"report_finding": "reproduction", "bind_finding_traffic": "step_index"} {
+		raw := properties[key]
+		if len(raw) == 0 {
+			log.Printf("[evidence] missing code schema property %s.%s", key, property)
+			continue
+		}
+		if _, err := s.m.pg.Exec(`UPDATE tools
+SET schema=jsonb_set(COALESCE(schema,'{}'::jsonb),ARRAY['properties',$2::text],$3::jsonb,true),updated_at=now()
+WHERE key=$1 AND system AND NOT(COALESCE(schema->'properties','{}'::jsonb) ? $2)`, key, property, string(raw)); err != nil {
+			log.Printf("[evidence] upgrade %s.%s: %v", key, property, err)
+			return
+		}
 	}
 	_ = s.m.pg.SetSetting(flag, "true")
 }

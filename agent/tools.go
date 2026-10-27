@@ -1270,8 +1270,9 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		// Step traffic_ids are resolved at report time. Explicit traffic_refs that
-		// are not listed by a step remain overview bindings (step_index=0).
+		// Step traffic_ids are resolved at report time. Keep metadata supplied by
+		// traffic_refs when an id is mentioned by a reproduction step; only ids
+		// that are absent from traffic_refs get the supporting default.
 		if findingTrafficBindingEnabled() && len(a.Reproduction) > 0 && string(a.Reproduction) != "null" {
 			var recipe struct {
 				Steps []struct {
@@ -1281,19 +1282,30 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			if err := json.Unmarshal(a.Reproduction, &recipe); err != nil {
 				return actool.Errorf(fmt.Sprintf("reproduction JSON 无效: %v", err)), nil
 			}
-			seen := map[string]bool{}
-			stepRefs := make([]db.TrafficRef, 0)
+			refIndex := make(map[string]int, len(refs))
+			for i := range refs {
+				id := strings.TrimSpace(refs[i].TrafficID)
+				if id != "" {
+					refs[i].TrafficID = id
+					if _, exists := refIndex[id]; !exists {
+						refIndex[id] = i
+					}
+				}
+			}
 			for i, step := range recipe.Steps {
 				for _, id := range step.TrafficIDs {
 					id = strings.TrimSpace(id)
-					if id == "" || seen[id] {
+					if id == "" {
 						continue
 					}
-					seen[id] = true
-					stepRefs = append(stepRefs, db.TrafficRef{TrafficID: id, Role: "supporting", StepIndex: i + 1})
+					if ref, exists := refIndex[id]; exists {
+						refs[ref].StepIndex = i + 1
+						continue
+					}
+					refIndex[id] = len(refs)
+					refs = append(refs, db.TrafficRef{TrafficID: id, Role: "supporting", StepIndex: i + 1})
 				}
 			}
-			refs = append(stepRefs, refs...)
 		}
 		input := db.RecordFindingInput{TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs), Reproduction: a.Reproduction}
 		var recorded *db.RecordedFinding

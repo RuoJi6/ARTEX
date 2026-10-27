@@ -227,6 +227,9 @@ func TestFindingWorkflowMigrationPreservesUserConfiguration(t *testing.T) {
 	if err := pg.SetSetting("finding_workflow_tools_v2_reporter", "false"); err != nil {
 		t.Fatal(err)
 	}
+	if err := pg.SetSetting("finding_workflow_tools_v3_reproduction_step_index", "false"); err != nil {
+		t.Fatal(err)
+	}
 	s.seedFindingWorkflowTools()
 	for _, key := range []string{"report_finding", "add_hint", "add_task_hint"} {
 		row, _ := pg.GetTool(key)
@@ -243,6 +246,13 @@ func TestFindingWorkflowMigrationPreservesUserConfiguration(t *testing.T) {
 		if !strings.Contains(string(row.Schema), field) {
 			t.Fatal("missing optional field", key)
 		}
+		if key == "report_finding" && !strings.Contains(string(row.Schema), "reproduction") {
+			t.Fatal("missing reproduction schema migration")
+		}
+	}
+	bindSchema, _ := pg.GetTool("bind_finding_traffic")
+	if !strings.Contains(string(bindSchema.Schema), "step_index") {
+		t.Fatal("missing bind_finding_traffic step_index migration")
 	}
 	search, _ := pg.GetTool("traffic_search")
 	get, _ := pg.GetTool("traffic_get")
