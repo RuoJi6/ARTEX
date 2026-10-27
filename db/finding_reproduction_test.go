@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -19,8 +20,18 @@ func TestFindingReproductionAndTrafficStepIndex(t *testing.T) {
 	}
 	defer d.DeleteFinding(fid)
 	f, err := d.GetFinding(fid)
-	if err != nil || string(f.Reproduction) != string(repro) {
+	if err != nil {
 		t.Fatalf("reproduction round trip: %#v, %v", f, err)
+	}
+	var wantRepro, gotRepro map[string]any
+	if err := json.Unmarshal(repro, &wantRepro); err != nil {
+		t.Fatalf("unmarshal input reproduction: %v", err)
+	}
+	if err := json.Unmarshal(f.Reproduction, &gotRepro); err != nil {
+		t.Fatalf("unmarshal round-trip reproduction: %v", err)
+	}
+	if !reflect.DeepEqual(gotRepro, wantRepro) {
+		t.Fatalf("reproduction round trip: got %#v, want %#v", gotRepro, wantRepro)
 	}
 	snapshot := TrafficEvidenceSnapshot{SourceTrafficID: "source-1", CapturedAt: 1, URL: "https://example.test/upload.php", Method: "POST", Status: 201, ReqHash: "req", RespHash: "resp"}
 	snapshot.ID = TrafficSnapshotID(snapshot)
