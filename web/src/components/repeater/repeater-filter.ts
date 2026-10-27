@@ -1,8 +1,16 @@
 import { buildRawResponse } from "./repeater-http";
-import type { RepeaterTab } from "./repeater-state";
+import type { RepeaterGroup, RepeaterTab } from "./repeater-state";
 
 export type RepeaterFilters = { query: string; method: string; path: string; response: string; status: string };
 export const DEFAULT_FILTERS: RepeaterFilters = { query: "", method: "all", path: "", response: "", status: "all" };
+
+export function filterRepeaterTabs(tabs: RepeaterTab[], filters: RepeaterFilters, groupId = "all"): RepeaterTab[] {
+  return tabs.filter((tab) => (groupId === "all" || tab.groupId === groupId) && matchesRepeaterFilters(tab, filters));
+}
+
+export function groupRepeaterTabs(tabs: RepeaterTab[], groups: RepeaterGroup[]) {
+  return groups.map((group) => ({ group, tabs: tabs.filter((tab) => tab.groupId === group.id) }));
+}
 
 export function matchesRepeaterFilters(tab: RepeaterTab, filters: RepeaterFilters): boolean {
   const includes = (text: string, query: string) => text.toLowerCase().includes(query.trim().toLowerCase());

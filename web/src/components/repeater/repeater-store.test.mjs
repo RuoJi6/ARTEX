@@ -33,7 +33,12 @@ const {
   parseHeadersText,
   setHostHeader,
 } = require("./repeater-http.ts");
-const { DEFAULT_FILTERS, matchesRepeaterFilters } = require("./repeater-filter.ts");
+const {
+  DEFAULT_FILTERS,
+  filterRepeaterTabs,
+  groupRepeaterTabs,
+  matchesRepeaterFilters,
+} = require("./repeater-filter.ts");
 const { flush, useRepeaterStore } = require("./repeater-store.ts");
 const { toast } = require("sonner");
 
@@ -469,6 +474,52 @@ test("global replay filters combine title, request, response, method, path and s
       { ...tab, response: { ...response(), status: 0, error: "connection refused" } },
       { ...DEFAULT_FILTERS, status: "error", response: "refused" },
     ),
+    true,
+  );
+});
+
+test("top tab helpers filter by group and preserve workspace group order", () => {
+  let workspace = defaultWorkspace();
+  workspace.groups.push({ id: "other", name: "验证" });
+  const first = workspace.tabs[0];
+  first.title = "默认请求";
+  workspace = addTab(workspace, { method: "POST", url: "https://example.test/verify" }, { groupId: "other" });
+  const visible = filterRepeaterTabs(workspace.tabs, { ...DEFAULT_FILTERS, query: "请求" });
+  assert.deepEqual(
+    visible.map((tab) => tab.title),
+    ["默认请求"],
+  );
+  assert.deepEqual(
+    filterRepeaterTabs(workspace.tabs, DEFAULT_FILTERS, "other").map((tab) => tab.groupId),
+    ["other"],
+  );
+  const grouped = groupRepeaterTabs(workspace.tabs, workspace.groups);
+  assert.deepEqual(
+    grouped.map(({ group, tabs }) => [group.id, tabs.length]),
+    [
+      ["default", 1],
+      ["other", 1],
+    ],
+  );
+});
+
+test("deleting a group keeps its tabs in the default group", (t) => {
+  const { store } = setupStore(t);
+  store.createGroup("临时组");
+  const groupId = useRepeaterStore.getState().workspace.groups[1].id;
+  const tabId = store.createTab({ title: "临时请求" }, { groupId });
+  store.toggleGroupCollapsed("default");
+  store.deleteGroup(groupId);
+  const workspace = useRepeaterStore.getState().workspace;
+  assert.equal(
+    workspace.groups.some((group) => group.id === groupId),
+    false,
+  );
+  assert.equal(workspace.groups.find((group) => group.id === "default").collapsed, false);
+  assert.equal(workspace.tabs.find((tab) => tab.id === tabId).groupId, "default");
+  store.deleteGroup("default");
+  assert.equal(
+    useRepeaterStore.getState().workspace.groups.some((group) => group.id === "default"),
     true,
   );
 });

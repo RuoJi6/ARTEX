@@ -30,7 +30,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { RepeaterEditor } from "./repeater-editor";
-import { RepeaterNavigator } from "./repeater-navigator";
+import { RepeaterTopBar } from "./repeater-navigator";
 import { useRepeaterStore } from "./repeater-store";
 
 export function RepeaterWorkspace() {
@@ -84,8 +84,8 @@ export function RepeaterWorkspace() {
           </AlertDialog>
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
-        <RepeaterNavigator workspace={workspace} onRename={setRename} />
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <RepeaterTopBar workspace={workspace} onRename={setRename} />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
           {active ? (
             <>

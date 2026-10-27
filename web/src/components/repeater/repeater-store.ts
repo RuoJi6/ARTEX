@@ -47,6 +47,7 @@ type Store = {
   recordSend: (id: string, entry: RepeaterHistoryEntry) => void;
   createGroup: (name?: string) => void;
   renameGroup: (id: string, name: string) => void;
+  deleteGroup: (id: string) => void;
   setTabGroup: (tabId: string, groupId: string) => void;
   toggleGroupCollapsed: (id: string) => void;
   clearWorkspace: () => void;
@@ -186,6 +187,23 @@ export const useRepeaterStore = create<Store>((set, get) => {
         ...workspace,
         groups: workspace.groups.map((group) => (group.id === id ? { ...group, name: name.trim() } : group)),
       });
+    },
+    deleteGroup: (id) => {
+      if (id === DEFAULT_GROUP_ID) return;
+      const workspace = current();
+      if (!workspace.groups.some((group) => group.id === id)) return;
+      const now = new Date().toISOString();
+      const movesTabs = workspace.tabs.some((tab) => tab.groupId === id);
+      change({
+        ...workspace,
+        groups: workspace.groups
+          .filter((group) => group.id !== id)
+          .map((group) => (movesTabs && group.id === DEFAULT_GROUP_ID ? { ...group, collapsed: false } : group)),
+        tabs: workspace.tabs.map((tab) =>
+          tab.groupId === id ? { ...tab, groupId: DEFAULT_GROUP_ID, updatedAt: now } : tab,
+        ),
+      });
+      flush();
     },
     setTabGroup: (tabId, groupId) => get().setTabsGroup([tabId], groupId),
     setTabsGroup: (ids, groupId) => {
