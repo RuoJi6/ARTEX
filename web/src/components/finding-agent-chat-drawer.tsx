@@ -15,11 +15,11 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { Textarea } from "@/components/ui/textarea";
 import { api, openSSE } from "@/lib/api";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
+import { MOCK } from "@/lib/mock/enabled";
 import type { Activity, Finding } from "@/lib/types";
 
 import {
   buildFindingAgentContextMessage,
-  canAskFindingAgent,
   findingAgentUnavailableReason,
   findingDisplayTitle,
 } from "./finding-agent-chat";
@@ -76,130 +76,267 @@ export function FindingAgentChatDrawer({ finding }: FindingAgentChatDrawerProps)
   const eventSourceRef = React.useRef<EventSource | null>(null);
   const snapshotRef = React.useRef(0);
   const aliveRef = React.useRef(false);
+  const requestGenerationRef = React.useRef(0);
   const sentContextRef = React.useRef(false);
+  const currentSegmentRef = React.useRef(0);
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
+  const atBottomRef = React.useRef(true);
+  const findingIdRef = React.useRef(finding.id);
+  findingIdRef.current = finding.id;
+
+  const findingId = finding.id;
+  const inherited = Boolean(finding.inherited);
+  const canAsk = Boolean(taskId && !inherited);
 
   const closeStream = React.useCallback(() => {
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
   }, []);
 
-  const refreshStatus = React.useCallback(() => {
-    if (!taskId || !canAskFindingAgent(finding)) return Promise.resolve();
-    return api
-      .chatStatus(taskId)
-      .then(({ running: nextRunning }) => setRunning(nextRunning))
-      .catch(() => undefined);
-  }, [finding, taskId]);
+  const refreshStatus = React.useCallback(
+    (generation = requestGenerationRef.current) => {
+      if (!taskId || !canAsk) return Promise.resolve();
+      return api
+        .chatStatus(taskId)
+        .then(({ running: nextRunning }) => {
+          if (aliveRef.current && requestGenerationRef.current === generation) setRunning(nextRunning);
+        })
+        .catch(() => undefined);
+    },
+    [canAsk, taskId],
+  );
 
   React.useEffect(() => {
-    if (!open) {
-      aliveRef.current = false;
-      closeStream();
-      return;
-    }
+    const generation = ++requestGenerationRef.current;
+    const isCurrent = () =>
+      aliveRef.current && requestGenerationRef.current === generation && findingIdRef.current === findingId;
 
-    aliveRef.current = true;
+    closeStream();
+    aliveRef.current = open;
+    if (!open) return;
+
     sentContextRef.current = false;
     setInput("");
     setActivities([]);
     setTaskAvailable(null);
-    setUnavailableReason(findingAgentUnavailableReason(finding));
+    setUnavailableReason(findingAgentUnavailableReason({ task_id: taskId, inherited }));
     setRunning(false);
     setLoading(false);
+    setSending(false);
+    setStopping(false);
     snapshotRef.current = 0;
+    currentSegmentRef.current = 0;
+    atBottomRef.current = true;
 
-    if (!canAskFindingAgent(finding))
+    if (!canAsk) {
       return () => {
         aliveRef.current = false;
+        requestGenerationRef.current += 1;
         closeStream();
       };
+    }
 
     setLoading(true);
-    api
-      .task(taskId)
-      .then(() => api.mainSessions(taskId))
-      .then((sessions) => {
-        if (!aliveRef.current) return null;
-        const currentSegment = sessions.current ?? 0;
-        return api.activityHistory(taskId, `main:${currentSegment}`, 0, MAIN_HISTORY_LIMIT).then((history) => ({
-          currentSegment,
-          history,
-        }));
-      })
-      .then((result) => {
-        if (!result || !aliveRef.current) return;
-        const { currentSegment, history } = result;
-        setTaskAvailable(true);
-        setActivities((current) => mergeActivities(current, history.items, currentSegment));
-        snapshotRef.current = history.snapshotCursor;
-        const stream = openSSE(
-          `/api/exploration/activity/stream?task=${encodeURIComponent(taskId)}&since=${snapshotRef.current}`,
-        );
-        eventSourceRef.current = stream;
-        stream.onmessage = (event) => {
-          if (!aliveRef.current) return;
-          try {
-            const activity = JSON.parse(event.data) as Activity;
-            setActivities((current) => mergeActivities(current, [activity], currentSegment));
-          } catch {
-            // Ignore malformed frames; the next history refresh still repairs the view.
-          }
-        };
-        stream.onerror = () => undefined; // EventSource reconnects automatically.
-      })
-      .catch(() => {
-        if (!aliveRef.current) return;
-        setTaskAvailable(false);
-        setUnavailableReason("任务不存在或已删除，无法连接到主 Agent。");
-      })
-      .finally(() => {
-        if (aliveRef.current) setLoading(false);
-      });
 
-    void refreshStatus();
-    const statusTimer = window.setInterval(() => void refreshStatus(), 2000);
+    if (MOCK) {
+      api
+        .activity(taskId)
+        .then(({ items, cursor }) => {
+          if (!isCurrent()) return;
+          setTaskAvailable(true);
+          setActivities(mergeActivities([], items, currentSegmentRef.current));
+          snapshotRef.current = cursor;
+        })
+        .catch(() => {
+          if (!isCurrent()) return;
+          setTaskAvailable(false);
+          setUnavailableReason("任务不存在或已删除，无法连接到主 Agent。");
+        })
+        .finally(() => {
+          if (isCurrent()) setLoading(false);
+        });
+    } else {
+      api
+        .task(taskId)
+        .then(() => api.mainSessions(taskId))
+        .then((sessions) => {
+          if (!isCurrent()) return null;
+          const currentSegment = sessions.current ?? 0;
+          currentSegmentRef.current = currentSegment;
+          return api.activityHistory(taskId, `main:${currentSegment}`, 0, MAIN_HISTORY_LIMIT).then((history) => ({
+            currentSegment,
+            history,
+          }));
+        })
+        .then((result) => {
+          if (!result || !isCurrent()) return;
+          const { currentSegment, history } = result;
+          setTaskAvailable(true);
+          setActivities((current) => mergeActivities(current, history.items, currentSegment));
+          snapshotRef.current = history.snapshotCursor;
+
+          closeStream();
+          const stream = openSSE(
+            `/api/exploration/activity/stream?task=${encodeURIComponent(taskId)}&since=${snapshotRef.current}`,
+          );
+          if (!isCurrent()) {
+            stream.close();
+            return;
+          }
+          eventSourceRef.current = stream;
+          stream.onmessage = (event) => {
+            if (!isCurrent()) return;
+            try {
+              const activity = JSON.parse(event.data) as Activity;
+              setActivities((current) => mergeActivities(current, [activity], currentSegment));
+            } catch {
+              // Ignore malformed frames; the next history refresh still repairs the view.
+            }
+          };
+          stream.onerror = () => undefined; // EventSource reconnects automatically.
+        })
+        .catch(() => {
+          if (!isCurrent()) return;
+          setTaskAvailable(false);
+          setUnavailableReason("任务不存在或已删除，无法连接到主 Agent。");
+        })
+        .finally(() => {
+          if (isCurrent()) setLoading(false);
+        });
+    }
+
+    void refreshStatus(generation);
+    const statusTimer = window.setInterval(() => void refreshStatus(generation), 2000);
     return () => {
       aliveRef.current = false;
+      requestGenerationRef.current += 1;
       window.clearInterval(statusTimer);
       closeStream();
     };
-  }, [closeStream, finding, open, refreshStatus, taskId]);
+  }, [canAsk, closeStream, findingId, inherited, open, refreshStatus, taskId]);
+
+  const viewport = React.useCallback(
+    () => (contentRef.current?.closest('[data-slot="scroll-area-viewport"]') as HTMLElement | null) ?? null,
+    [],
+  );
+
+  React.useEffect(() => {
+    if (!open) return;
+    const vp = viewport();
+    if (!vp) return;
+    const onScroll = () => {
+      atBottomRef.current = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 60;
+    };
+    vp.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => vp.removeEventListener("scroll", onScroll);
+  }, [open, viewport]);
+
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    const vp = viewport();
+    if (vp) {
+      vp.scrollTop = vp.scrollHeight;
+      atBottomRef.current = true;
+    }
+  }, [open, viewport]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activity growth intentionally drives live-edge scrolling.
+  React.useLayoutEffect(() => {
+    if (!open || !atBottomRef.current) return;
+    const vp = viewport();
+    if (vp) vp.scrollTop = vp.scrollHeight;
+  }, [activities, open, running, viewport]);
+
+  React.useEffect(() => {
+    if (!open || typeof ResizeObserver === "undefined") return;
+    const el = contentRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (!atBottomRef.current) return;
+      const vp = viewport();
+      if (vp) vp.scrollTop = vp.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open, viewport]);
 
   const send = React.useCallback(async () => {
     const message = input.trim();
-    if (!message || sending || running || !taskId || taskAvailable !== true || !canAskFindingAgent(finding)) return;
+    if (!message || sending || running || !taskId || taskAvailable !== true || !canAsk) return;
+    const generation = requestGenerationRef.current;
     setSending(true);
     const payload = sentContextRef.current
       ? message
       : `${buildFindingAgentContextMessage(finding)}\n\n用户问题：${message}`;
     try {
-      await api.chat(payload, taskId);
+      const result = await api.chat(payload, taskId);
+      if (!aliveRef.current || requestGenerationRef.current !== generation || findingIdRef.current !== findingId)
+        return;
+      if (MOCK) {
+        const ts = new Date().toISOString();
+        const reply = result.reply?.trim() || "（demo）主 Agent 暂无回复。";
+        setActivities((current) =>
+          mergeActivities(
+            current,
+            [
+              {
+                seq: current.reduce((max, item) => Math.max(max, item.seq), 0) + 1,
+                worker: "mainagent",
+                ts,
+                kind: "user",
+                summary: message,
+                main_seg: currentSegmentRef.current,
+              },
+              {
+                seq: current.reduce((max, item) => Math.max(max, item.seq), 0) + 2,
+                worker: "mainagent",
+                ts,
+                kind: "text",
+                summary: reply,
+                main_seg: currentSegmentRef.current,
+              },
+            ],
+            currentSegmentRef.current,
+          ),
+        );
+      }
       sentContextRef.current = true;
       setInput("");
-      void refreshStatus();
+      if (!MOCK) void refreshStatus(generation);
     } catch (error) {
-      toast.error(`发送失败：${(error as Error).message || "请稍后重试"}`);
+      if (aliveRef.current && requestGenerationRef.current === generation && findingIdRef.current === findingId) {
+        toast.error(`发送失败：${(error as Error).message || "请稍后重试"}`);
+      }
     } finally {
-      setSending(false);
+      if (aliveRef.current && requestGenerationRef.current === generation && findingIdRef.current === findingId) {
+        setSending(false);
+      }
     }
-  }, [finding, input, refreshStatus, running, sending, taskAvailable, taskId]);
+  }, [canAsk, finding, findingId, input, refreshStatus, running, sending, taskAvailable, taskId]);
 
   const stop = React.useCallback(async () => {
     if (!taskId || stopping) return;
+    const generation = requestGenerationRef.current;
     setStopping(true);
     try {
       await api.stopChat(taskId);
-      await refreshStatus();
+      if (aliveRef.current && requestGenerationRef.current === generation && findingIdRef.current === findingId) {
+        await refreshStatus(generation);
+      }
     } catch (error) {
-      toast.error(`停止失败：${(error as Error).message || "请稍后重试"}`);
+      if (aliveRef.current && requestGenerationRef.current === generation && findingIdRef.current === findingId) {
+        toast.error(`停止失败：${(error as Error).message || "请稍后重试"}`);
+      }
     } finally {
-      setStopping(false);
+      if (aliveRef.current && requestGenerationRef.current === generation && findingIdRef.current === findingId) {
+        setStopping(false);
+      }
     }
-  }, [refreshStatus, stopping, taskId]);
+  }, [findingId, refreshStatus, stopping, taskId]);
 
   const title = findingDisplayTitle(finding);
-  const canSend =
-    canAskFindingAgent(finding) && taskAvailable === true && !running && !sending && Boolean(input.trim());
+  const canSend = canAsk && taskAvailable === true && !running && !sending && Boolean(input.trim());
   let footerStatus = "Enter 发送，Shift+Enter 换行。";
   if (sending) footerStatus = "正在发送…";
   else if (running) footerStatus = "主 Agent 运行中，可停止当前执行。";
@@ -231,7 +368,7 @@ export function FindingAgentChatDrawer({ finding }: FindingAgentChatDrawerProps)
         ) : null}
 
         <ScrollArea className="min-h-0 flex-1">
-          <div className="min-h-full p-4">
+          <div ref={contentRef} className="min-h-full p-4">
             {loading ? <LoadingActivity /> : null}
             {!loading && activities.length ? (
               <Transcript
@@ -256,7 +393,7 @@ export function FindingAgentChatDrawer({ finding }: FindingAgentChatDrawerProps)
                 event.preventDefault();
                 void send();
               }}
-              disabled={!canAskFindingAgent(finding) || taskAvailable !== true || sending || running}
+              disabled={!canAsk || taskAvailable !== true || sending || running}
               placeholder={running ? "主 Agent 正在运行…" : "描述复现现象或继续提问…"}
               aria-label="向漏洞所属任务的主 Agent 提问"
               className="max-h-32 min-h-10 resize-none"
