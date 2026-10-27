@@ -229,7 +229,7 @@ export function RepeaterTopBar({
         </Button>
       </div>
 
-      <div className="flex items-center gap-2 border-t px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
         <Checkbox
           id="repeater-select-visible"
           aria-label="全选筛选结果"
@@ -253,7 +253,7 @@ export function RepeaterTopBar({
           已选 {selectedIds.length} 条{hiddenSelected ? `（隐藏 ${hiddenSelected}）` : ""}
         </span>
         {selectedIds.length ? (
-          <>
+          <div className="flex min-w-0 basis-full items-center gap-2">
             <Select
               value=""
               onValueChange={(groupId) => {
@@ -262,7 +262,7 @@ export function RepeaterTopBar({
                 setSelected(new Set());
               }}
             >
-              <SelectTrigger aria-label="批量移动到分组" className="ml-auto w-40">
+              <SelectTrigger aria-label="批量移动到分组" className="min-w-0 flex-1 w-40">
                 <SelectValue placeholder="移动到分组…" />
               </SelectTrigger>
               <SelectContent>
@@ -281,7 +281,7 @@ export function RepeaterTopBar({
             <Button variant="ghost" size="icon-sm" aria-label="清空勾选" onClick={() => setSelected(new Set())}>
               <X />
             </Button>
-          </>
+          </div>
         ) : null}
       </div>
 
