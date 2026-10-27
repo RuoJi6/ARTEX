@@ -1,10 +1,19 @@
 const assert = require("node:assert/strict");
+const { createRequire } = require("node:module");
 const test = require("node:test");
+
+// Keep the tests runnable on Node 20, which does not load TypeScript natively.
+const requireFromTest = createRequire(__filename);
+requireFromTest("ts-node").register({
+  transpileOnly: true,
+  compilerOptions: { module: "CommonJS", moduleResolution: "Node10" },
+});
+
 const {
   buildFindingAgentContextMessage,
   canAskFindingAgent,
   findingAgentUnavailableReason,
-} = require("../components/finding-agent-chat.ts");
+} = requireFromTest("../components/finding-agent-chat.ts");
 
 const finding = (overrides = {}) => ({
   id: "42",

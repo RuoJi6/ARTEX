@@ -1,5 +1,5 @@
-import { mentionToken } from "@/lib/chat-mentions";
-import type { Finding } from "@/lib/types";
+import { mentionToken } from "../lib/chat-mentions";
+import type { Finding } from "../lib/types";
 
 type FindingContextFields = Finding & {
   url?: string;

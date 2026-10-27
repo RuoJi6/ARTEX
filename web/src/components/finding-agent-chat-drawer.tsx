@@ -14,6 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { api, openSSE } from "@/lib/api";
+import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import type { Activity, Finding } from "@/lib/types";
 
 import {
@@ -69,6 +70,7 @@ export function FindingAgentChatDrawer({ finding }: FindingAgentChatDrawerProps)
   const [sending, setSending] = React.useState(false);
   const [running, setRunning] = React.useState(false);
   const [stopping, setStopping] = React.useState(false);
+  const sendMode = useChatSendMode();
   const [taskAvailable, setTaskAvailable] = React.useState<boolean | null>(null);
   const [unavailableReason, setUnavailableReason] = React.useState("");
   const eventSourceRef = React.useRef<EventSource | null>(null);
@@ -250,10 +252,9 @@ export function FindingAgentChatDrawer({ finding }: FindingAgentChatDrawerProps)
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void send();
-                }
+                if (!shouldSubmitOnKey(event, sendMode)) return;
+                event.preventDefault();
+                void send();
               }}
               disabled={!canAskFindingAgent(finding) || taskAvailable !== true || sending || running}
               placeholder={running ? "主 Agent 正在运行…" : "描述复现现象或继续提问…"}
