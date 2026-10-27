@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -74,7 +75,17 @@ func TestReportFindingPersistsStructuredReproduction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if finding == nil || string(finding.Reproduction) != reproduction {
+	var wantReproduction, gotReproduction map[string]any
+	if err := json.Unmarshal([]byte(reproduction), &wantReproduction); err != nil {
+		t.Fatal(err)
+	}
+	if finding == nil {
+		t.Fatalf("reproduction was not persisted: %#v", finding)
+	}
+	if err := json.Unmarshal(finding.Reproduction, &gotReproduction); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotReproduction, wantReproduction) {
 		t.Fatalf("reproduction was not persisted: %#v", finding)
 	}
 }
