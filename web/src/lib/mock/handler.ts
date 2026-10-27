@@ -2374,6 +2374,28 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/settings/basic-auth" && m === "PUT")
     throw new Error("演示模式不支持修改 HTTP Basic Auth，请在实际部署中配置");
   if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };
+  if (path === "/settings/proxy/test")
+    return {
+      ok: true,
+      capture: false,
+      configured: "",
+      agent_proxy: "",
+      checks: [
+        {
+          key: "direct",
+          label: "① 直连 IP（不经过代理）",
+          result: { ok: true, exit_ip: "203.0.113.7", via: "direct", via_label: "直连", latency_ms: 12, probes: [] },
+        },
+        {
+          key: "global",
+          label: "② 经全局代理的出口 IP",
+          skipped: true,
+          skip_reason: "输入框为空，未配置代理",
+          result: { ok: false, latency_ms: 0, probes: [] },
+        },
+      ],
+      warnings: [],
+    };
   if (path === "/settings/python/detect") return { python_interpreter: "/usr/bin/python3" };
   if (path === "/chat")
     return { reply: "（demo）我已把该建议注入为一条高优意图，work agent 会尽快执行。", mode: "hint" };

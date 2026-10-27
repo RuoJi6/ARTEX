@@ -41,6 +41,14 @@ export default function SystemSettingsPage() {
   // 出口探测：测一次真实请求，拿到"直连 / 经全局代理"两条出口 IP。
   const [egressTesting, setEgressTesting] = React.useState(false);
   const [egressReport, setEgressReport] = React.useState<EgressReport | null>(null);
+  // 请求序号：改了输入/保存/切捕获之后，在途请求回来时序号已经变了，直接丢弃。
+  // 不这么做会出现"结果刚被清空，又被上一次的响应填回来"。
+  const egressSeq = React.useRef(0);
+  // 清空结果并作废在途请求。
+  const clearEgressReport = () => {
+    egressSeq.current += 1;
+    setEgressReport(null);
+  };
   // 探测地址：留空用公网回显；隔离网填内网回显服务。
   const [egressProbeUrl, setEgressProbeUrl] = React.useState("");
   const [testing, setTesting] = React.useState(false);
@@ -186,7 +194,7 @@ export default function SystemSettingsPage() {
       .then((s) => {
         apply(s);
         // 捕获开关一变，② 的链路就变了，旧结果不能留。
-        setEgressReport(null);
+        clearEgressReport();
       })
       .catch(() => setTrafficCapture(!v)) // revert on failure
       .finally(() => setSaving(false));
@@ -302,7 +310,7 @@ export default function SystemSettingsPage() {
       .then((s) => {
         apply(s);
         // 保存后链路变了，旧结果（尤其"尚未保存"）立刻失效。
-        setEgressReport(null);
+        clearEgressReport();
         toast.success(globalProxyInput.trim() ? "已保存全局代理" : "已清除全局代理（改为直连）");
       })
       .catch((e) => toast.error("保存失败：" + (e as Error).message))
@@ -311,6 +319,7 @@ export default function SystemSettingsPage() {
 
   // 测表单里当前的值，不要求先保存；后端返回直连 / 经代理两条。
   const testEgress = () => {
+    const seq = ++egressSeq.current;
     setEgressTesting(true);
     setEgressReport(null);
     api
@@ -320,6 +329,7 @@ export default function SystemSettingsPage() {
         ...(egressProbeUrl.trim() ? { probe_url: egressProbeUrl.trim() } : {}),
       })
       .then((rep) => {
+        if (seq !== egressSeq.current) return; // 期间改过配置，这份结果已经过期
         setEgressReport(rep);
         if (rep.ok) {
           // 先取 ②：直连那行永远成功，先命中它会把直连 IP 当成出口报出去。
@@ -331,8 +341,12 @@ export default function SystemSettingsPage() {
           toast.error("出口探测失败");
         }
       })
-      .catch((e) => toast.error("探测失败：" + (e as Error).message))
-      .finally(() => setEgressTesting(false));
+      .catch((e) => {
+        if (seq === egressSeq.current) toast.error("探测失败：" + (e as Error).message);
+      })
+      .finally(() => {
+        if (seq === egressSeq.current) setEgressTesting(false);
+      });
   };
 
   // Run a real "test" search ("test") against the CURRENT form values (backend +
@@ -472,8 +486,8 @@ export default function SystemSettingsPage() {
                 disabled={!loaded || savingGlobalProxy}
                 onChange={(e) => {
                   setGlobalProxyInput(e.target.value);
-
-                  setEgressReport(null);
+                  // 旧结果对应的是上一次的地址，留着会让人以为新值已经测过。
+                  clearEgressReport();
                 }}
               />
               <Button type="button" onClick={saveGlobalProxy} disabled={!loaded || savingGlobalProxy}>
@@ -510,7 +524,7 @@ export default function SystemSettingsPage() {
                   value={egressProbeUrl}
                   onChange={(e) => {
                     setEgressProbeUrl(e.target.value);
-                    setEgressReport(null);
+                    clearEgressReport();
                   }}
                 />
                 <span className="text-muted-foreground leading-relaxed">
