@@ -51,10 +51,10 @@ func plannerOverviewText(data map[string]any) string {
 	ovRows(&b, "人工提示 hints", ovMaps(data["hints"]), "text", 600, 50)
 	ovRows(&b, "开放意图 open_intents", ovMaps(data["open_intents"]), "summary", 340, 30)
 	ovRows(&b, "执行中 running_intents", ovMaps(data["running_intents"]), "summary", 340, 300)
-	ovRows(&b, "近期完成/中断 recent_done_intents", ovMaps(data["recent_done_intents"]), "summary", 340, 12)
 	ovRows(&b, "近期发现 finding_list", ovMaps(data["finding_list"]), "summary", 340, 10)
 	ovRows(&b, "近期事实 recent_facts", ovMaps(data["recent_facts"]), "summary", 340, 20)
 	ovDigests(&b, ovMaps(data["cold_digests"]), data["cold_digests_more"], 11000, 1800)
+	ovRows(&b, "近期完成/中断 recent_done_intents", ovMaps(data["recent_done_intents"]), "summary", 340, 12)
 
 	sources := ovMaps(data["related_tasks"])
 	if len(sources) > 0 {

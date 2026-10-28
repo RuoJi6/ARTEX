@@ -114,3 +114,44 @@ func TestPlannerOverviewPreservesHintTrafficRefs(t *testing.T) {
 		}
 	}
 }
+
+func TestPlannerOverviewTruncationKeepsCriticalHistoryAndRecovery(t *testing.T) {
+	completed := make([]map[string]any, 200)
+	for i := range completed {
+		completed[i] = map[string]any{"id": i, "state": "done", "summary": strings.Repeat("次要完成历史", 100)}
+	}
+	related := make([]map[string]any, 20)
+	for i := range related {
+		digests := make([]map[string]any, 6)
+		for j := range digests {
+			digests[j] = map[string]any{"id": int64(1000 + j), "body": strings.Repeat("关联历史", 250), "member_count": 2}
+		}
+		related[i] = map[string]any{
+			"source_task_id": int64(12 + i), "task": map[string]any{"description": "secondary related history"},
+			"cold_digests": digests,
+		}
+	}
+	got := plannerOverviewText(map[string]any{
+		"task":            map[string]any{"description": "critical task", "goal": "critical goal"},
+		"goals":           []map[string]any{{"id": 1, "state": "open", "text": "critical goal"}},
+		"hints":           []map[string]any{{"id": 2, "text": "critical hint"}},
+		"running_intents": []map[string]any{{"id": 3, "state": "running", "summary": "critical running work"}},
+		"cold_digests": []map[string]any{{
+			"id": int64(42), "member_count": 1, "body": "CRITICAL DIGEST HISTORY",
+			"unresolved": []map[string]any{{"intent_id": int64(9), "state": "blocked", "reason": "critical unresolved boundary"}},
+		}},
+		"recent_done_intents": completed,
+		"related_tasks":       related,
+	})
+	for _, want := range []string{
+		"critical goal", "critical hint", "critical running work", "CRITICAL DIGEST HISTORY",
+		"critical unresolved boundary", "【全局视图截断】", "graph_overview", "expand_digest(id)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("critical content %q missing after truncation:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "CRITICAL DIGEST HISTORY") > strings.Index(got, "近期完成/中断") {
+		t.Fatal("secondary completed history was emitted before critical digest history")
+	}
+}

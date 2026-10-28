@@ -36,34 +36,62 @@ func (t *ToolSet) digestMemberEntry(store *db.ExplorationStore, id int64) map[st
 }
 
 type lineageDigestView struct {
+	digests []*db.Node
 	members map[int64][]int64
 	nodes   map[int64]*db.Node
 	parents map[int64][]int64
 	yields  map[int64][]int64
+	covered map[int64]int64
+	hot     map[int64]bool
 }
 
-func loadLineageDigestView(store *db.ExplorationStore, digests []*db.Node) *lineageDigestView {
+func (v *lineageDigestView) hidden(id int64) bool {
+	_, covered := v.covered[id]
+	return covered && !v.hot[id]
+}
+
+func loadLineageDigestView(store *db.ExplorationStore, digests []*db.Node, fullGraph bool) *lineageDigestView {
 	view := &lineageDigestView{
-		members: map[int64][]int64{}, nodes: map[int64]*db.Node{},
+		digests: digests, members: map[int64][]int64{}, nodes: map[int64]*db.Node{},
 		parents: map[int64][]int64{}, yields: map[int64][]int64{},
+		covered: map[int64]int64{}, hot: map[int64]bool{},
 	}
-	_, nodes, err := loadColdGraph(store)
-	if err == nil {
-		view.nodes = nodes
+	if len(digests) == 0 {
+		return view
 	}
+	digestIDs := make([]int64, 0, len(digests))
+	for _, digest := range digests {
+		digestIDs = append(digestIDs, digest.ID)
+	}
+	membersByDigest, _ := store.DigestMembersFor(digestIDs)
 	allMembers := map[int64]bool{}
 	for _, digest := range digests {
-		members, _ := store.DigestMembers(digest.ID)
+		members := membersByDigest[digest.ID]
 		view.members[digest.ID] = members
 		for _, id := range members {
 			allMembers[id] = true
+			if _, exists := view.covered[id]; !exists {
+				view.covered[id] = digest.ID
+			}
 		}
 	}
 	memberIDs := make([]int64, 0, len(allMembers))
 	for id := range allMembers {
 		memberIDs = append(memberIDs, id)
 	}
-	edges, _ := store.EdgesTouching(memberIDs)
+	var edges []db.Edge
+	if fullGraph {
+		g, nodes, graphEdges, err := loadColdGraphParts(store)
+		if err == nil {
+			view.nodes = nodes
+			view.hot = g.hotSet()
+			edges = graphEdges
+		}
+	} else {
+		nodes, _ := store.NodesByIDs(memberIDs)
+		view.nodes = indexColdNodes(nodes)
+		edges, _ = store.EdgesTouching(memberIDs)
+	}
 	for _, edge := range edges {
 		switch edge.Rel {
 		case db.RelDerivedFrom, db.RelSpawns:
@@ -168,36 +196,40 @@ func coldDigestsRecent(store *db.ExplorationStore, cap int) (shown []map[string]
 	if err != nil || len(ads) == 0 {
 		return nil, nil
 	}
-	view := loadLineageDigestView(store, ads)
+	return coldDigestsRecentView(loadLineageDigestView(store, ads, false), cap)
+}
+
+func coldDigestsRecentView(view *lineageDigestView, cap int) (shown []map[string]any, moreIDs []int64) {
 	type dg struct {
-		id        int64
-		entry     map[string]any
-		freshness int64 // max member id (ids are monotonic ≈ creation time)
+		digest    *db.Node
+		freshness int64
 	}
-	items := make([]dg, 0, len(ads))
-	for _, d := range ads {
-		var p struct {
-			Body string `json:"body"`
-		}
-		_ = json.Unmarshal(d.Payload, &p)
-		ms := view.members[d.ID] // sorted asc → last = freshest
+	items := make([]dg, 0, len(view.digests))
+	for _, d := range view.digests {
+		ms := view.members[d.ID]
 		var fresh int64
 		if len(ms) > 0 {
 			fresh = ms[len(ms)-1]
 		}
+		items = append(items, dg{digest: d, freshness: fresh})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].freshness > items[j].freshness })
+	for i, it := range items {
+		d := it.digest
+		if i >= cap {
+			moreIDs = append(moreIDs, d.ID)
+			continue
+		}
+		var p struct {
+			Body string `json:"body"`
+		}
+		_ = json.Unmarshal(d.Payload, &p)
+		ms := view.members[d.ID]
 		entry := map[string]any{"id": d.ID, "body": p.Body, "member_count": len(ms)}
 		for key, value := range digestDecisionFields(view, d, false) {
 			entry[key] = value
 		}
-		items = append(items, dg{id: d.ID, entry: entry, freshness: fresh})
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].freshness > items[j].freshness })
-	for i, it := range items {
-		if i < cap {
-			shown = append(shown, it.entry)
-		} else {
-			moreIDs = append(moreIDs, it.id)
-		}
+		shown = append(shown, entry)
 	}
 	return shown, moreIDs
 }
@@ -209,15 +241,8 @@ func coldDigestsRecent(store *db.ExplorationStore, cap int) (shown []map[string]
 // hidden (§6 render-time revival check). Returns a never-hidden predicate when the
 // store has no digests.
 func hiddenMembersFor(store *db.ExplorationStore) func(int64) bool {
-	covered, err := store.CoveredMembers()
-	if err != nil || len(covered) == 0 {
-		return func(int64) bool { return false }
-	}
-	var hot map[int64]bool
-	if cg, _, err := loadColdGraph(store); err == nil {
-		hot = cg.hotSet()
-	}
-	return func(id int64) bool { _, c := covered[id]; return c && !hot[id] }
+	ads, _ := store.ActiveDigests()
+	return loadLineageDigestView(store, ads, true).hidden
 }
 
 // resolveDigest finds a digest node by id in the current task, else in a direct
@@ -279,7 +304,7 @@ func (t *ToolSet) expandDigest() actool.CoreTool {
 				"members": list,
 			}
 			if n.State == db.StateDigestActive {
-				view := loadLineageDigestView(store, []*db.Node{n})
+				view := loadLineageDigestView(store, []*db.Node{n}, false)
 				for key, value := range digestDecisionFields(view, n, true) {
 					out[key] = value
 				}

@@ -12,12 +12,13 @@ package agent
 //	           the whole grouping from source and merges fragments (§5.1/§5.2),
 //	           reusing bodies whose signature is unchanged (§5.3).
 //
-// Concurrency: one compaction per task at a time (mutex), ≥cooldown between runs,
-// and a commit-time liveness recheck drops any member that revived while the body
-// was being generated so a digest never covers a hot node.
+// Concurrency: one compaction per task at a time (mutex), ≥cooldown between runs.
+// The final graph, input and version check shares a serializable transaction with
+// the digest write; conflicting writes abort the digest for a later retry.
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -282,7 +283,8 @@ func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *c
 		signature := blockSignature(final, freshVersions)
 		if signature == blockSignature(current, currentVersions) {
 			payload := digestPayload(body, final, freshNodes, generation, signature)
-			if _, err := ts.AddDigest(payload, members); err != nil {
+			input := buildCompressionInput(currentGraph, current, currentNodes)
+			if _, err := addLineageDigestChecked(ctx, ts, payload, final, signature, input); err != nil {
 				log.Printf("[compaction] add digest exp=%d: %v", ts.ID(), err)
 			}
 			return
@@ -290,6 +292,33 @@ func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *c
 		currentGraph, current, currentNodes, currentVersions = fresh, final, freshNodes, freshVersions
 	}
 	log.Printf("[compaction] skip unstable block exp=%d members=%v", ts.ID(), current.Members)
+}
+
+func lineageDigestSnapshotCheck(ts *db.ExplorationStore, b block, signature, input string) db.LineageDigestCheck {
+	return func(tx *sql.Tx) error {
+		g, nodes, err := loadColdGraphTx(ts, tx)
+		if err != nil {
+			return err
+		}
+		hot := g.hotSet()
+		for _, id := range b.Members {
+			if hot[id] {
+				return db.ErrLineageDigestSnapshotChanged
+			}
+		}
+		versions, err := ts.ContentVersionsTx(tx)
+		if err != nil {
+			return err
+		}
+		if blockSignature(b, versions) != signature || buildCompressionInput(g, b, nodes) != input {
+			return db.ErrLineageDigestSnapshotChanged
+		}
+		return nil
+	}
+}
+
+func addLineageDigestChecked(ctx context.Context, ts *db.ExplorationStore, payload map[string]any, b block, signature, input string) (int64, error) {
+	return ts.AddLineageDigestChecked(ctx, payload, b.Members, lineageDigestSnapshotCheck(ts, b, signature, input))
 }
 
 // generationFor computes a digest's重摘代次 (§1): 1 for a fresh fold; for a major
@@ -344,28 +373,51 @@ func (c *Compactor) finish(expID int64) {
 // loadColdGraph reads the exploration's nodes + edges and builds the cold-graph
 // view plus an id→node index (for summaries/payload during compression).
 func loadColdGraph(ts *db.ExplorationStore) (*coldGraph, map[int64]*db.Node, error) {
+	g, nodes, _, err := loadColdGraphParts(ts)
+	return g, nodes, err
+}
+
+func loadColdGraphParts(ts *db.ExplorationStore) (*coldGraph, map[int64]*db.Node, []db.Edge, error) {
 	// Compaction must see the WHOLE graph, not the default row caps — pass a very
 	// high limit so the LIMIT clause is effectively unbounded for real task sizes.
 	const allRows = 1 << 30
 	nodes, err := ts.Nodes(allRows)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	edges, err := ts.Edges(allRows)
 	if err != nil {
+		return nil, nil, nil, err
+	}
+	return buildColdGraph(nodes, edges), indexColdNodes(nodes), edges, nil
+}
+
+func loadColdGraphTx(ts *db.ExplorationStore, tx *sql.Tx) (*coldGraph, map[int64]*db.Node, error) {
+	nodes, edges, err := ts.ReadGraphTx(tx)
+	if err != nil {
 		return nil, nil, err
 	}
-	cgNodes := make([]cgNode, 0, len(nodes))
+	return buildColdGraph(nodes, edges), indexColdNodes(nodes), nil
+}
+
+func indexColdNodes(nodes []*db.Node) map[int64]*db.Node {
 	byID := make(map[int64]*db.Node, len(nodes))
 	for _, n := range nodes {
-		cgNodes = append(cgNodes, cgNode{ID: n.ID, Kind: n.Kind, State: n.State})
 		byID[n.ID] = n
+	}
+	return byID
+}
+
+func buildColdGraph(nodes []*db.Node, edges []db.Edge) *coldGraph {
+	cgNodes := make([]cgNode, 0, len(nodes))
+	for _, n := range nodes {
+		cgNodes = append(cgNodes, cgNode{ID: n.ID, Kind: n.Kind, State: n.State})
 	}
 	cgEdges := make([]cgEdge, 0, len(edges))
 	for _, e := range edges {
 		cgEdges = append(cgEdges, cgEdge{From: e.From, Rel: e.Rel, To: e.To})
 	}
-	return newColdGraph(cgNodes, cgEdges), byID, nil
+	return newColdGraph(cgNodes, cgEdges)
 }
 
 func toDBStampOps(ops []stampOp) []db.StampOp {
