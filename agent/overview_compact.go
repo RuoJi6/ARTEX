@@ -4,6 +4,7 @@ package agent
 // structured JSON; this view renders the same data without changing graph state.
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -123,6 +124,11 @@ func ovRows(b *overviewWriter, title string, rows []map[string]any, field string
 		for _, attr := range []string{"confidence", "from_intent", "source_task_id", "result_summary"} {
 			if v := ovText(item[attr], 300); v != "" {
 				fmt.Fprintf(b, " %s=%s", attr, v)
+			}
+		}
+		if refs := item["traffic_refs"]; refs != nil {
+			if encoded, err := json.Marshal(refs); err == nil {
+				fmt.Fprintf(b, " traffic_refs=%s", encoded)
 			}
 		}
 		b.WriteByte('\n')

@@ -103,3 +103,14 @@ func TestPlannerOverviewGlobalLimitKeepsRecoveryPath(t *testing.T) {
 		}
 	}
 }
+
+func TestPlannerOverviewPreservesHintTrafficRefs(t *testing.T) {
+	got := plannerOverviewText(map[string]any{
+		"hints": []map[string]any{{"id": 12, "text": "proof", "traffic_refs": []map[string]any{{"traffic_id": "packet-42", "role": "proof"}}}},
+	})
+	for _, want := range []string{`traffic_refs=`, `"traffic_id":"packet-42"`, `"role":"proof"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in overview: %s", want, got)
+		}
+	}
+}
