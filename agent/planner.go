@@ -279,17 +279,14 @@ func truncOutput(s string, n int) string {
 	return string(r[:n]) + " …（已截断，完整见 get_worker_output）"
 }
 
-// renderGraphOverview folds the pre-computed graph_overview snapshot into the
-// wake-up prompt so the planner starts each round with the full situation in
-// hand — saving the round-trip it would otherwise spend calling the tool. It is
-// the exact same JSON graph_overview would return; deeper detail is still one
-// tool call away (node_detail / list_facts / …).
+// renderGraphOverview formats graph_overview data as a compact Planner-only
+// view. The graph_overview tool retains the complete structured JSON.
 func renderGraphOverview(data map[string]any) string {
-	b, err := json.Marshal(data)
-	if err != nil {
-		return "" // fall back to the model calling graph_overview itself
+	view := plannerOverviewText(data)
+	if view == "" {
+		return ""
 	}
-	return "\n\n【本轮态势（graph_overview 预取，等同你调用该工具的返回；需要细节再按需调 node_detail/list_facts 等）】：\n" + string(b)
+	return "\n\n【本轮态势（graph_overview 同源压缩视图；保留 Digest 正文、决策字段与回源入口）】：\n" + view
 }
 
 // plannerDefaultTmpl is the built-in EDITABLE body (段 [A]) of the planner prompt,
@@ -306,7 +303,7 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 
 **每次唤醒的决策流程**：
 
-1. **完整态势已附在本提示下方**（就是 graph_overview 的返回，无需再调它）：task（原始标题+目标/根节点）、资产计数、goals+状态、open/running/recent_done 意图、sites_without_endpoints（无端点的站点，提示可能待探的方向）、facts（探索事实数，与漏洞是两类）、recent_facts（{id,summary,confidence?}）。
+1. **本轮态势已附在本提示下方**（与 graph_overview 同源的只读压缩视图）：task、资产计数、goals+状态、open/running/recent_done 意图、facts/findings 统计、recent_facts，以及历史 Digest 正文、工作状态、关键结果、未完成原因和来源 ID。需要完整结构化快照时调 graph_overview；折叠历史用 expand_digest(id)，完整证据用 node_detail(id)。未直接显示不等于未测试。
    - **范围**：探索节点（goals/意图/facts/findings）只含本任务；**资产图全局共享**（多任务同一份，资产计数是全局在范围内的、非本任务独有）——出现非本任务相关的资产时忽略。
    - **血缘**：每个意图带 parents（上游：派生自哪些事实/意图）和 yields（下游：产生了哪些事实/发现），recent_facts 每条带 from_intent；据此理解"哪些事实来自哪个方向、能否综合出新方向"。
    - **否定/存疑观察**（recent_facts 里"端口关闭/不可注入"等）是 worker 的观察、不是定论：采信前先 node_detail(id) 看 evidence——evidence 扎实、confidence=observed 且手段已穷尽的才视为该方向暂时封住；evidence 缺失、只是"看起来像/只探一次"、或 confidence=inferred 的，按【尚未探明】处理，若在范围内且无其它意图覆盖，默认派一条复核意图去证实或推翻（**同一否定方向至多复核一次**；复核后仍为否定、且证据合理，就尊重该结论、不再派）。

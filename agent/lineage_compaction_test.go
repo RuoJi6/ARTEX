@@ -77,6 +77,15 @@ func TestLineageDigestCardKeepsDecisionFields(t *testing.T) {
 	if len(expanded["members"].([]any)) != 4 || len(expanded["key_results"].([]any)) != 2 {
 		t.Fatalf("expanded=%+v", expanded)
 	}
+	rendered := plannerOverviewText(overview)
+	for _, want := range []string{
+		"简略正文", "tenant A order is readable by tenant B", "tenant C order was not readable",
+		"conditions=tested only with an expired token", "未完成:", "only two tenant fixtures were available",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("compact Planner view lost %q:\n%s", want, rendered)
+		}
+	}
 }
 
 func TestLineageCompressionInputIncludesDecisionBoundaries(t *testing.T) {
