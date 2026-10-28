@@ -561,14 +561,14 @@ func truncateUTF8(value string, maxBytes int) string {
 
 func (s *ExplorationStore) SetIntentBlockedReason(id int64, reason string) error {
 	_, err := s.db.Exec(`UPDATE exploration_nodes
-SET state='blocked', blocked_reason=NULLIF($1,''), completed_at=now()
+SET state='blocked', blocked_reason=NULLIF($1,''), completed_at=now(), content_version=content_version+1
 WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, reason, id, s.expID)
 	return err
 }
 
 func (s *ExplorationStore) ReopenIntentsByBlockedReason(reason string) (int64, error) {
 	res, err := s.db.Exec(`UPDATE exploration_nodes
-SET state='open', blocked_reason=NULL, completed_at=NULL
+SET state='open', blocked_reason=NULL, completed_at=NULL, content_version=content_version+1
 WHERE exploration_id=$1 AND kind='intent' AND state='blocked' AND blocked_reason=$2`, s.expID, reason)
 	if err != nil {
 		return 0, err

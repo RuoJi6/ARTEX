@@ -249,36 +249,47 @@ func (c *Compactor) major(ctx context.Context, ts *db.ExplorationStore) {
 	}
 }
 
-// foldBlock compresses one block and writes its digest — with a commit-time
-// liveness recheck (§ concurrency): between grouping and write the graph may have
-// changed, so any member that has since gone hot (revived) is dropped from the
-// covers set. If the block dissolves below K it is skipped.
+// foldBlock regenerates the body if members or their versions change during
+// compression. It commits only when the body and final block describe the same
+// stable snapshot; a continuously changing block is left for a later run.
 func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *coldGraph, b block, nodeByID map[int64]*db.Node, cvers map[int64]int, generation int) {
-	body, err := c.compress(ctx, g, b, nodeByID)
-	if err != nil {
-		log.Printf("[compaction] compress exp=%d block=%v: %v", ts.ID(), b.Members, err)
-		return
-	}
-	// Re-read fresh state and drop any member that revived while we compressed.
-	fresh, _, err := loadColdGraph(ts)
-	if err != nil {
-		return
-	}
-	freshHot := fresh.hotSet()
-	members := make([]int64, 0, len(b.Members))
-	for _, mID := range b.Members {
-		if !freshHot[mID] {
-			members = append(members, mID)
+	currentGraph, current, currentNodes, currentVersions := g, b, nodeByID, cvers
+	for attempt := 0; attempt < 2; attempt++ {
+		body, err := c.compress(ctx, currentGraph, current, currentNodes)
+		if err != nil {
+			log.Printf("[compaction] compress exp=%d block=%v: %v", ts.ID(), current.Members, err)
+			return
 		}
+		fresh, freshNodes, err := loadColdGraph(ts)
+		if err != nil {
+			return
+		}
+		freshVersions, err := ts.ContentVersions()
+		if err != nil {
+			return
+		}
+		freshHot := fresh.hotSet()
+		members := make([]int64, 0, len(current.Members))
+		for _, mID := range current.Members {
+			if !freshHot[mID] {
+				members = append(members, mID)
+			}
+		}
+		if len(members) < c.params.K {
+			return
+		}
+		final := block{Members: members, Anchors: current.Anchors}
+		signature := blockSignature(final, freshVersions)
+		if signature == blockSignature(current, currentVersions) {
+			payload := digestPayload(body, final, freshNodes, generation, signature)
+			if _, err := ts.AddDigest(payload, members); err != nil {
+				log.Printf("[compaction] add digest exp=%d: %v", ts.ID(), err)
+			}
+			return
+		}
+		currentGraph, current, currentNodes, currentVersions = fresh, final, freshNodes, freshVersions
 	}
-	if len(members) < c.params.K {
-		return // block revived out from under us — leave those nodes hot, don't fold
-	}
-	final := block{Members: members, Anchors: b.Anchors}
-	payload := digestPayload(body, final, nodeByID, generation, blockSignature(final, cvers))
-	if _, err := ts.AddDigest(payload, members); err != nil {
-		log.Printf("[compaction] add digest exp=%d: %v", ts.ID(), err)
-	}
+	log.Printf("[compaction] skip unstable block exp=%d members=%v", ts.ID(), current.Members)
 }
 
 // generationFor computes a digest's重摘代次 (§1): 1 for a fresh fold; for a major
@@ -452,10 +463,21 @@ func nodeConfidence(n *db.Node) string {
 	return ""
 }
 
-// buildCompressionInput renders the connected sub-graph for the §4 prompt:
-// member nodes (summary + id + kind + state + confidence), the internal blood
-// edges among members, and — for a §3.1 shared-parent group — the anchor parents
-// as context ("共同父 #p"), which are NOT members.
+func nodeConditions(n *db.Node) string {
+	if n == nil {
+		return ""
+	}
+	var p map[string]any
+	if json.Unmarshal(n.Payload, &p) == nil {
+		if conditions, ok := p["conditions"].(string); ok {
+			return conditions
+		}
+	}
+	return ""
+}
+
+// buildCompressionInput renders member summaries, evidence boundaries and
+// lineage. Anchors provide context but are not compression members.
 func buildCompressionInput(g *coldGraph, b block, nodeByID map[int64]*db.Node) string {
 	memberSet := make(map[int64]bool, len(b.Members))
 	for _, m := range b.Members {
@@ -476,6 +498,12 @@ func buildCompressionInput(g *coldGraph, b block, nodeByID map[int64]*db.Node) s
 		line := fmt.Sprintf("- #%d [%s/%s] %s", m, kind, state, nodeSummary(n))
 		if conf := nodeConfidence(n); conf != "" {
 			line += fmt.Sprintf(" (confidence=%s)", conf)
+		}
+		if conditions := nodeConditions(n); conditions != "" {
+			line += fmt.Sprintf(" (conditions=%s)", conditions)
+		}
+		if n != nil && n.BlockedReason != "" {
+			line += fmt.Sprintf(" (blocked_reason=%s)", n.BlockedReason)
 		}
 		sb.WriteString(line)
 		sb.WriteByte('\n')
@@ -530,19 +558,14 @@ func (c *Compactor) compress(ctx context.Context, g *coldGraph, b block, nodeByI
 }
 
 // compressionSystemPrompt is the §4 body prompt.
-const compressionSystemPrompt = `你在压缩一组【彼此关联】的探索节点，产出一段综合结论(body)，供规划者快速掌握"这一片已经探明了什么"。
+const compressionSystemPrompt = `你在压缩一组【彼此关联】的探索节点，产出综合结论(body)，供规划者快速判断这片历史做过什么、发现什么、还有什么不能视为完成。
 
-输入是一个连通子图：
-- 节点：每条是一个意图或事实的 summary（一句话），带 id、类型(intent/fact)、state、confidence(若有)。
-- 关系：节点之间的血缘边（A 派生自 B / A 产出 B），说明它们如何串联。
-- 若节点间没有直接血缘边、但同属一个上游意图（会另给出该上游意图作为"共同父 #p"），则按"这个意图（#p）探到了什么"来综合它们——共同父只是上下文锚、不是要压缩的成员。
+输入包括节点的 id、类型、summary、state，以及可能存在的 confidence、conditions、blocked_reason 和血缘边。共同父只是上下文，不是压缩成员。系统会另行展示全部 Fact 摘要、Intent 真实状态和来源引用，不要在 body 复制这些清单。
 
-据此写一段 body：
-1. 综合、不罗列：顺着关系把因果串起来（哪个事实催生哪个意图、哪条意图产出了哪个结论），讲成"这一片探索得出了什么"，不要把每条 summary 抄一遍。
-2. 保留区分度：彼此不同的结论分别说清，别揉成一句笼统的话。
-3. 保留证据强度：带 confidence 的结论标出 observed / inferred；inferred 的否定/存疑结论要点明它只是推断、可复核，别写成定论。
-4. 带上 id：每条结论后标注来源节点 id（如"…（#12,#28）"），让规划者能按 id 还原原节点。
-5. 正向陈述、只写输入里有的：不脑补、不引入输入中没有的判断。
-6. 长度随内容自适应：结论少就短，多且互不相同就写够——但整体显著短于所有输入 summary 的总和。
+body 只写 2–4 句导航摘要，不分节、不列点：
+1. 概括共同方向、最关键的正向发现、否定或冲突，以及最重要的未完成边界；相同主题合并，不逐节点复述。
+2. 否定只适用于输入给出的范围和 conditions；observed / inferred 必须区分。blocked、exhausted、stopped 只点明关键状态和原因。
+3. 用代表来源 id 支持结论（如“…（#12,#28）”），不要编造事实。
+4. 通常 80–220 字，最多 300 字。不要罗列接口、参数、payload、账号、路径或执行步骤；具体事实、状态和完整细节由结构化字段及原节点回源展示。
 
 只输出 body 正文本身。`
