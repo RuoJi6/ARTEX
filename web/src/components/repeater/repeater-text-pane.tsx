@@ -97,7 +97,7 @@ export function RepeaterTextPane({
               ? " bg-transparent text-transparent caret-foreground selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground"
               : "")
           }
-        />}
+        />
         {syntaxHighlight ? (
           <div
             ref={syntax}
