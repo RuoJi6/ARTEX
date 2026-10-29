@@ -107,9 +107,6 @@ function statusBg(code: number): string {
 
 function SystemResourceStatus({ metrics }: { metrics: SystemMetrics | null }) {
   if (!metrics) return null;
-  if (!metrics.supported) {
-    return <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground" role="status">资源状态：暂不支持</div>;
-  }
   const items = [
     [CpuIcon, "CPU", metrics.cpu.percent],
     [MemoryStickIcon, "内存", metrics.memory.percent],
@@ -124,9 +121,10 @@ function SystemResourceStatus({ metrics }: { metrics: SystemMetrics | null }) {
             <span className="inline-flex items-center gap-1"><Icon className="size-3" aria-hidden="true" />{label}</span>
             <span className="tabular-nums">{value.toFixed(1)}%</span>
           </div>
-          <Progress value={value} className="h-1.5" />
+          <Progress value={metrics.supported ? value : 0} className="h-1.5 opacity-40" />
         </div>
       ))}
+      {!metrics.supported && <span className="shrink-0 text-[10px]">暂不支持</span>}
     </div>
   );
 }
