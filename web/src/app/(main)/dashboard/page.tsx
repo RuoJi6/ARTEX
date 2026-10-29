@@ -116,12 +116,16 @@ function SystemResourceStatus({ metrics }: { metrics: SystemMetrics | null }) {
     [HardDriveIcon, "磁盘", metrics.data_disk.percent],
   ] as const;
   return (
-    <div className="flex flex-1 items-center justify-center gap-4 text-xs text-muted-foreground" role="status" aria-live="polite">
-      <span className="font-medium">容器资源</span>
+    <div className="flex min-w-0 flex-1 items-center justify-center gap-3 text-xs text-muted-foreground" role="status" aria-live="polite">
+      <span className="shrink-0 font-medium">容器资源</span>
       {items.map(([Icon, label, value]) => (
-        <span key={label} className="inline-flex items-center gap-1 tabular-nums" title={`${label} ${value.toFixed(1)}%`}>
-          <Icon className="size-3.5" aria-hidden="true" /> {label} {value.toFixed(1)}%
-        </span>
+        <div key={label} className="w-24 min-w-0" title={`${label} ${value.toFixed(1)}%`}>
+          <div className="mb-1 flex items-center justify-between gap-1 text-[10px]">
+            <span className="inline-flex items-center gap-1"><Icon className="size-3" aria-hidden="true" />{label}</span>
+            <span className="tabular-nums">{value.toFixed(1)}%</span>
+          </div>
+          <Progress value={value} className="h-1.5" />
+        </div>
       ))}
     </div>
   );
