@@ -10,52 +10,6 @@ import { HttpPacketSyntax } from "@/components/http-code-block";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-function EditablePacket({
-  id,
-  value,
-  onChange,
-  onScroll,
-}: {
-  id: string;
-  value: string;
-  onChange: (value: string) => void;
-  onScroll: React.UIEventHandler<HTMLDivElement>;
-}) {
-  const editor = React.useRef<HTMLDivElement>(null);
-  const lastValue = React.useRef(value);
-
-  React.useEffect(() => {
-    if (!editor.current || lastValue.current === value) return;
-    if (editor.current.innerText !== value) {
-      editor.current.innerText = value;
-    }
-    lastValue.current = value;
-  }, [value]);
-
-  return (
-    <div
-      id={id}
-      ref={editor}
-      role="textbox"
-      aria-label="请求"
-      aria-multiline="true"
-      tabIndex={0}
-      contentEditable
-      suppressContentEditableWarning
-      spellCheck={false}
-      onInput={(event) => {
-        const next = event.currentTarget.innerText.replace(/\r\n?/g, "\n");
-        lastValue.current = next;
-        onChange(next);
-      }}
-      onScroll={onScroll}
-      className="h-full min-h-0 w-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-none border-0 px-3 py-2 font-mono text-xs leading-5 outline-none md:text-xs"
-    >
-      <HttpPacketSyntax raw={value} lineNumbers={false} wrapLines />
-    </div>
-  );
-}
-
 export function RepeaterTextPane({
   id,
   label,
@@ -119,11 +73,7 @@ export function RepeaterTextPane({
             {numbers}
           </pre>
         </div>
-        {syntaxHighlight && onChange ? (
-          <EditablePacket id={id} value={value} onChange={onChange} onScroll={(event) => {
-            if (gutter.current) gutter.current.style.transform = `translateY(-${event.currentTarget.scrollTop}px)`;
-          }} />
-        ) : <Textarea
+        <Textarea
           id={id}
           value={value}
           onChange={(event) => onChange?.(event.target.value)}
@@ -144,15 +94,15 @@ export function RepeaterTextPane({
           className={
             "field-sizing-fixed relative z-10 h-full max-h-none min-h-0 w-0 flex-1 resize-none rounded-none border-0 px-3 py-2 font-mono text-xs leading-5 focus-visible:ring-0 md:text-xs" +
             (syntaxHighlight
-              ? " bg-transparent text-transparent caret-foreground selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground group-focus-within:text-foreground"
+              ? " bg-transparent text-transparent caret-foreground selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground"
               : "")
           }
         />}
-        {syntaxHighlight && !onChange ? (
+        {syntaxHighlight ? (
           <div
             ref={syntax}
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 left-12 z-20 overflow-hidden px-3 py-2 font-mono text-xs leading-5 group-focus-within:invisible"
+            className="pointer-events-none absolute inset-y-0 right-0 left-12 z-20 overflow-hidden px-3 py-2 font-mono text-xs leading-5"
           >
             <HttpPacketSyntax
               raw={value}
