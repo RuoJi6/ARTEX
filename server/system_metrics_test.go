@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 )
 
@@ -20,6 +21,12 @@ func TestSystemMetricsReturnsContainerAndDiskValues(t *testing.T) {
 	}
 	if got.Scope == "" || got.Timestamp.IsZero() {
 		t.Fatalf("unexpected response metadata: %+v", got)
+	}
+	if runtime.GOOS != "linux" {
+		if got.Supported || got.Scope != "unsupported" {
+			t.Fatalf("unsupported platform returned metrics: %+v", got)
+		}
+		return
 	}
 	if got.Disk.TotalBytes == 0 || got.DataDisk.TotalBytes == 0 {
 		t.Fatalf("disk metrics missing: %+v", got)

@@ -1338,7 +1338,8 @@ export interface SystemMetricValue {
 }
 
 export interface SystemMetrics {
-  scope: "container" | string;
+  scope: "container" | "unsupported" | string;
+  supported: boolean;
   timestamp: string;
   container_metrics: boolean;
   cpu: SystemMetricValue;

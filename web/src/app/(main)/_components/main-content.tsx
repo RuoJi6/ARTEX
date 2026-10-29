@@ -6,9 +6,11 @@ import { usePathname } from "next/navigation";
 
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { CpuIcon, HardDriveIcon, MemoryStickIcon } from "lucide-react";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { SystemMetrics } from "@/lib/types";
 
 import { EgressIpNavbar, EgressIpProvider } from "./egress-ip-banner";
 import { LiveClock } from "./live-clock";
@@ -76,6 +78,7 @@ function MainContentInner({ children }: { children: ReactNode }) {
           </div>
           <div className="min-w-0 flex-1">
             <EgressIpNavbar />
+            <SystemResourceNavbar />
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <LiveClock />
@@ -93,5 +96,44 @@ function MainContentInner({ children }: { children: ReactNode }) {
         {children}
       </div>
     </>
+  );
+}
+
+function SystemResourceNavbar() {
+  const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const next = await api.systemMetrics();
+        if (alive) setMetrics(next);
+      } catch {
+        /* Keep the status bar quiet while the API is unavailable. */
+      }
+    };
+    void load();
+    const timer = setInterval(load, 5000);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
+
+  if (!metrics) return null;
+  if (!metrics.supported) {
+    return <div className="flex items-center justify-center text-xs text-muted-foreground" role="status">资源状态：暂不支持</div>;
+  }
+  const items = [
+    [CpuIcon, "CPU", metrics.cpu.percent],
+    [MemoryStickIcon, "内存", metrics.memory.percent],
+    [HardDriveIcon, "磁盘", metrics.data_disk.percent],
+  ] as const;
+  return (
+    <div className="flex items-center justify-center gap-3 text-[10px] text-muted-foreground" role="status" aria-live="polite">
+      <span>容器资源</span>
+      {items.map(([Icon, label, value]) => (
+        <span key={label} className="inline-flex items-center gap-1 tabular-nums" title={`${label} ${value.toFixed(1)}%`}>
+          <Icon className="size-3" aria-hidden="true" /> {label} {value.toFixed(1)}%
+        </span>
+      ))}
+    </div>
   );
 }

@@ -13,9 +13,6 @@ import {
   ShieldCheckIcon,
   TargetIcon,
   ZapIcon,
-  CpuIcon,
-  HardDriveIcon,
-  MemoryStickIcon,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Tooltip as RechartsTooltip, XAxis, YAxis } from "recharts";
 
@@ -41,7 +38,6 @@ import type {
   Tool,
   TrafficExchange,
   UsageStats,
-  SystemMetrics,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -71,15 +67,6 @@ function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1000) return (n / 1000).toFixed(1) + "k";
   return String(n);
-}
-
-function fmtBytes(n: number): string {
-  if (!n) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = n;
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) { value /= 1024; i++; }
-  return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 const ASSET_TYPE_LABELS: Record<string, string> = {
@@ -160,15 +147,6 @@ export default function DashboardPage() {
   const [skills, setSkills] = React.useState<SkillItem[]>([]);
   const [tools, setTools] = React.useState<Tool[]>([]);
   const [llmProfiles, setLLMProfiles] = React.useState<LLMProfile[]>([]);
-  const [systemMetrics, setSystemMetrics] = React.useState<SystemMetrics | null>(null);
-
-  React.useEffect(() => {
-    let alive = true;
-    const load = async () => { try { const m = await api.systemMetrics(); if (alive) setSystemMetrics(m); } catch { /* retry */ } };
-    void load();
-    const timer = setInterval(load, 5000);
-    return () => { alive = false; clearInterval(timer); };
-  }, []);
 
   // The task list is the most expensive dashboard source. Poll it independently
   // so a large history cannot hold back every other dashboard panel.
@@ -1150,30 +1128,6 @@ export default function DashboardPage() {
         {/* 系统状态 & 待审批 */}
         <Card className="p-4">
           <SectionTitle icon={ShieldCheckIcon}>系统状态</SectionTitle>
-
-          {systemMetrics && (
-            <div className="mb-3 rounded-lg border bg-muted/20 p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-[10px] font-medium">容器资源</span>
-                <span className="text-[9px] text-muted-foreground">每 5 秒刷新</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {([
-                  [CpuIcon, "CPU", systemMetrics.cpu],
-                  [MemoryStickIcon, "内存", systemMetrics.memory],
-                  [HardDriveIcon, "磁盘", systemMetrics.data_disk],
-                ] as const).map(([Icon, label, metric]) => (
-                  <div key={label} className="min-w-0">
-                    <div className="mb-1 flex items-center gap-1 text-[9px] text-muted-foreground"><Icon className="size-3" />{label}</div>
-                    <Progress value={metric.percent} className="h-1.5" />
-                    <div className="mt-1 truncate text-[9px] tabular-nums">{metric.percent.toFixed(1)}%</div>
-                    {label !== "CPU" && <div className="truncate text-[9px] text-muted-foreground">{fmtBytes(metric.used_bytes)} / {fmtBytes(metric.total_bytes)}</div>}
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 text-[9px] text-muted-foreground">监控范围：{systemMetrics.scope === "container" ? "ARTEX 容器" : "当前进程（非容器运行）"}</div>
-            </div>
-          )}
 
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
