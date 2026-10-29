@@ -107,13 +107,16 @@ function statusBg(code: number): string {
 
 function SystemResourceStatus({ metrics }: { metrics: SystemMetrics | null }) {
   if (!metrics) return null;
+  if (!metrics.supported) {
+    return <div className="ml-auto text-xs text-muted-foreground" role="status">资源状态：暂不支持</div>;
+  }
   const items = [
     [CpuIcon, "CPU", metrics.cpu.percent],
     [MemoryStickIcon, "内存", metrics.memory.percent],
     [HardDriveIcon, "磁盘", metrics.data_disk.percent],
   ] as const;
   return (
-    <div className="flex min-w-0 flex-1 items-center justify-center gap-3 text-xs text-muted-foreground" role="status" aria-live="polite">
+    <div className="ml-auto flex min-w-0 items-center justify-end gap-3 text-xs text-muted-foreground" role="status" aria-live="polite">
       <span className="shrink-0 font-medium">容器资源</span>
       {items.map(([Icon, label, value]) => (
         <div key={label} className="w-24 min-w-0" title={`${label} ${value.toFixed(1)}%`}>
@@ -121,10 +124,12 @@ function SystemResourceStatus({ metrics }: { metrics: SystemMetrics | null }) {
             <span className="inline-flex items-center gap-1"><Icon className="size-3" aria-hidden="true" />{label}</span>
             <span className="tabular-nums">{value.toFixed(1)}%</span>
           </div>
-          <Progress value={metrics.supported ? value : 0} className="h-1.5 opacity-40" />
+          <Progress
+            value={value}
+            className="h-2 bg-muted [&_[data-slot=progress-indicator]]:bg-slate-500 dark:[&_[data-slot=progress-indicator]]:bg-slate-400"
+          />
         </div>
       ))}
-      {!metrics.supported && <span className="shrink-0 text-[10px]">暂不支持</span>}
     </div>
   );
 }
