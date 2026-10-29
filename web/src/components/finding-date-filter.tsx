@@ -104,7 +104,7 @@ export function FindingDateFilter({
           <span className="truncate">{label}</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-80 p-4">
+      <PopoverContent align="start" className="w-[26rem] max-w-[calc(100vw-2rem)] p-4">
         <div className="mb-3">
           <p className="font-medium">按发现时间筛选</p>
           <p className="text-muted-foreground text-xs">选择年月日和时分，范围包含起止时刻。</p>
@@ -112,14 +112,14 @@ export function FindingDateFilter({
         <div className="space-y-3">
           <div className="grid gap-1.5 text-xs font-medium">
             <span>开始时间</span>
-            <div className="grid grid-cols-[1fr_8.5rem] gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_9.25rem] items-center gap-2">
               <DateField value={fromDate} onChange={(value) => apply({ fromDate: value })} label="开始日期" />
               <TimeSelect value={fromTime} onValueChange={(value) => apply({ fromTime: value })} aria-label="开始时分" />
             </div>
           </div>
           <div className="grid gap-1.5 text-xs font-medium">
             <span>结束时间</span>
-            <div className="grid grid-cols-[1fr_8.5rem] gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_9.25rem] items-center gap-2">
               <DateField value={toDate} onChange={(value) => apply({ toDate: value })} label="结束日期" />
               <TimeSelect value={toTime} onValueChange={(value) => apply({ toTime: value })} aria-label="结束时分" />
             </div>
