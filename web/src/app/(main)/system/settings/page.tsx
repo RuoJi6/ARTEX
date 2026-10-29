@@ -55,6 +55,7 @@ export default function SystemSettingsPage() {
   // 实验功能:noa 上下文压缩(默认关)。
   const [noaCompaction, setNoaCompaction] = React.useState(false);
   const [plannerCompactOverview, setPlannerCompactOverview] = React.useState(true);
+  const [workerCompactContext, setWorkerCompactContext] = React.useState(false);
   // 纯前端偏好：不走 /api/settings，直接读写 localStorage。
   const sendMode = useChatSendMode();
 
@@ -77,6 +78,7 @@ export default function SystemSettingsPage() {
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
     setPlannerCompactOverview(s.planner_compact_overview !== false);
+    setWorkerCompactContext(!!s.worker_compact_context);
   }, []);
 
   const saveWorkers = () => {
@@ -242,6 +244,20 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => {
         setPlannerCompactOverview(!v);
+        toast.error(`保存失败：${(e as Error).message}`);
+      });
+  };
+
+  const toggleWorkerCompactContext = (v: boolean) => {
+    setWorkerCompactContext(v);
+    api
+      .setSettings({ worker_compact_context: v })
+      .then((s) => {
+        apply(s);
+        toast.success(v ? "已开启 Worker Intent 相关上下文" : "已恢复 Worker 完整全局图 JSON");
+      })
+      .catch((e) => {
+        setWorkerCompactContext(!v);
         toast.error(`保存失败：${(e as Error).message}`);
       });
   };
@@ -517,7 +533,10 @@ export default function SystemSettingsPage() {
               <br />
               <b>Planner 紧凑态势视图</b>：默认开启，把预取的 graph_overview 转为紧凑文本并保留 Digest
               决策字段与回源入口。关闭后恢复完整 JSON，仅改变 Planner 输入格式，不关闭 Lineage 冷压缩。
-              两个开关都在下一轮运行时生效，无需重建 Agent。
+              <br />
+              <b>Worker Intent 相关上下文</b>：默认关闭。开启后不再向 Worker 注入完整全局图 JSON，只保留当前 Intent、
+              同资产或直接血缘相关的历史，完整人工提示及只读回源工具。不改变 Worker 工具结果、轮数或写回逻辑。
+              这些开关都在下一轮运行时生效，无需重建 Agent。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -541,6 +560,17 @@ export default function SystemSettingsPage() {
                 checked={plannerCompactOverview}
                 disabled={!loaded}
                 onCheckedChange={togglePlannerCompactOverview}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="worker-compact-context" className="text-sm font-normal text-muted-foreground">
+                Worker Intent 相关上下文{workerCompactContext ? " · 已开启" : " · 已关闭（完整全局图）"}
+              </Label>
+              <Switch
+                id="worker-compact-context"
+                checked={workerCompactContext}
+                disabled={!loaded}
+                onCheckedChange={toggleWorkerCompactContext}
               />
             </div>
             <div className="border-t pt-4">

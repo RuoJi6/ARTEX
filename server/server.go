@@ -3469,6 +3469,7 @@ func (s *Server) settingsPayload() map[string]any {
 		// 接管上下文压缩,取代内置 compaction;每 run 读一次,对之后启动的 run 生效。
 		"noa_compaction":           s.m.NoaCompactionEnabled(),
 		"planner_compact_overview": s.m.PlannerCompactOverviewEnabled(),
+		"worker_compact_context":   s.m.WorkerCompactContextEnabled(),
 		// 漏洞 IM 推送的全局项。渠道本身是独立资源，走 /api/notify/* 管理；
 		// 这里只放「作用于全部渠道」的三项。
 		"notify_enabled":             s.m.pg.GetBool(settingNotifyEnabled, true),
@@ -3546,6 +3547,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		// 实验功能:noa 上下文压缩开关(默认关);每 run 读,对之后启动的 run 生效,无需重建 agent。
 		NoaCompaction          *bool `json:"noa_compaction"`
 		PlannerCompactOverview *bool `json:"planner_compact_overview"`
+		WorkerCompactContext   *bool `json:"worker_compact_context"`
 		// 漏洞 IM 推送的全局项。三者都由投递引擎每轮读一次，改完即时生效，
 		// 不需要重建 agent 或重启。
 		NotifyEnabled    *bool   `json:"notify_enabled"`
@@ -3577,6 +3579,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.PlannerCompactOverview != nil {
 		if err := s.m.SetPlannerCompactOverview(*req.PlannerCompactOverview); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.WorkerCompactContext != nil {
+		if err := s.m.SetWorkerCompactContext(*req.WorkerCompactContext); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

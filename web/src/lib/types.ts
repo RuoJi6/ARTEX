@@ -1015,6 +1015,8 @@ export interface Settings {
   noa_compaction?: boolean;
   // Planner 预取态势的展示转换器；默认开。关闭后注入完整 graph_overview JSON。
   planner_compact_overview?: boolean;
+  // Worker 启动时只注入 Intent 相关历史；默认关，保留完整全局图 JSON。
+  worker_compact_context?: boolean;
   // ---- 漏洞 IM 推送（渠道本身是独立资源，见 /api/notify/*，这里只有三项全局配置）----
   notify_enabled?: boolean; // 推送总开关，默认开；用于维护期一键止血
   notify_public_base_url?: string; // 漏洞详情回链的外部访问地址；空=消息不带回链

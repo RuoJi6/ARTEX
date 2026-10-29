@@ -3343,6 +3343,7 @@ export const settings: Settings = {
   llm_pool_bind_fallback: false,
   noa_compaction: false,
   planner_compact_overview: true,
+  worker_compact_context: false,
 };
 
 // ── LLM 轮询（故障转移）──────────────────────────────────────────────────────

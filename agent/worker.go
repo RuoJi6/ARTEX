@@ -82,6 +82,9 @@ type Worker struct {
 	// compression mechanism. Read per run, like nonStreaming. nil = off (built-in
 	// compaction).
 	noaEnabledFn func() bool
+	// compactContextFn replaces the full launch overview with intent-related context.
+	// Read per run; nil = retain the original full overview.
+	compactContextFn func() bool
 	// maxTokensFn resolves the per-reply output cap in tokens, on the same
 	// per-run basis. nil or 0 = send no cap and let the endpoint decide.
 	maxTokensFn func() int
@@ -122,6 +125,12 @@ func (w *Worker) nonStreaming() bool { return w.nonStreamingFn != nil && w.nonSt
 // context-compression mechanism. nil/unset = off (built-in compaction). Read per
 // run so the settings toggle takes effect without rebuilding the agent.
 func (w *Worker) SetNoaEnabled(fn func() bool) { w.noaEnabledFn = fn }
+
+func (w *Worker) SetCompactContext(fn func() bool) { w.compactContextFn = fn }
+
+func (w *Worker) compactContext() bool {
+	return w.compactContextFn != nil && w.compactContextFn()
+}
 
 // SetMaxTokens wires a resolver for the per-reply output cap. nil/unset or 0 =
 // send no cap and let the endpoint decide. Read per run, like nonStreaming.
@@ -374,6 +383,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// then augment with the agent's visible skills/MCP. During the SDK settlement
 	// phase, Bash is hidden via Settlement.DisabledTools (no local gating needed).
 	base := append(tsx.WorkerTools(), w.extraTools...)
+	if w.compactContext() {
+		base = append(base, tsx.workerHistoryTools()...)
+	}
 	// worker 刻意不给 MultiEdit/Glob/Grep：文件精改用 Edit、检索走 Bash(grep/find)，
 	// 收敛工具面、减少低价值调用。其余 SDK 默认工具(Read/Write/Edit/LS/Bash/Sleep)照常。
 	base = append(base, defaultToolsExcept("MultiEdit", "Glob", "Grep")...)
@@ -392,7 +404,13 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// The run-wide intent is not the current tool action. Do not forward it or
 	// inherit a parent run's background into the action reviewer.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
-	overview := renderWorkerGraphOverview(tsx.graphOverviewData())
+	overviewData := tsx.graphOverviewData()
+	overview := ""
+	if w.compactContext() {
+		overview = renderWorkerTaskContext(overviewData, intent)
+	} else {
+		overview = renderWorkerGraphOverview(overviewData)
+	}
 	sysBody := workerSystem(w.proxyAddr, w.proxyCACert, w.workDir, runDir)
 	if w.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守
@@ -483,7 +501,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		}
 	}
 	// 意图 / 启动指令 / 意图锚定资产已随 system prompt 下发（见上方 sysBody 组装）。
-	// 这条启动 user 消息只承载【全局态势 overview】——可降级的了解大局信息，压掉无碍。
+	// 启动 user 消息只承载可降级的背景：默认是全局态势，实验开关开启时是本意图相关历史。
 	// overview 罕见地 marshal 失败为空时，回退一句启动词，避免首轮出现空 user 消息。
 	input := overview
 	if strings.TrimSpace(input) == "" {
