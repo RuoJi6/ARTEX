@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, copyText } from "@/lib/utils";
+import { PacketCodeEditor } from "@/components/packet-code-editor";
 
 function statusTone(status: number) {
   if (status >= 500) return "text-red-500";
@@ -308,34 +309,8 @@ export function HttpCodeBlock({ raw }: { raw: string }) {
           <TooltipContent side="bottom">{copied ? "已复制" : "复制报文"}</TooltipContent>
         </Tooltip>
       </div>
-      {/* biome-ignore lint/a11y/useSemanticElements: textarea cannot preserve line numbers and syntax-highlighting markup. */}
-      <div
-        role="textbox"
-        aria-label="HTTP 报文代码"
-        aria-multiline="true"
-        aria-readonly="true"
-        tabIndex={0}
-        className="min-h-0 max-h-[calc(100vh-15rem)] flex-1 min-w-0 overflow-auto bg-background py-2 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-        onCopy={(event) => {
-          const text = selectedPacketText(event.currentTarget, value, lines);
-          if (text === null) return;
-          event.preventDefault();
-          event.clipboardData.setData("text/plain", text);
-        }}
-        onKeyDown={(event) => {
-          if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "a") return;
-          event.preventDefault();
-          const selection = window.getSelection();
-          if (!selection) return;
-          const range = document.createRange();
-          range.selectNodeContents(event.currentTarget);
-          selection.removeAllRanges();
-          selection.addRange(range);
-        }}
-      >
-        <PacketHighlightContext.Provider value={query}>
-          <HttpPacketSyntax raw={value} wrapLines={wrapLines} />
-        </PacketHighlightContext.Provider>
+      <div className="min-h-0 max-h-[calc(100vh-15rem)] flex-1 min-w-0 overflow-hidden bg-background">
+        <PacketCodeEditor value={value} readOnly wrapLines={wrapLines} />
       </div>
       <div className="flex items-center gap-2 border-t bg-muted/20 px-2 py-1">
         <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
