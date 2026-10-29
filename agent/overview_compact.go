@@ -9,6 +9,17 @@ import (
 	"strings"
 )
 
+// PlannerOverviewPreview renders the current graph through the same converter
+// used by Planner. It is read-only and also returns the original JSON for comparison.
+func (t *ToolSet) PlannerOverviewPreview() (compact, full string, err error) {
+	data := t.graphOverviewData()
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return "", "", err
+	}
+	return plannerOverviewText(data), string(raw), nil
+}
+
 type overviewWriter struct {
 	strings.Builder
 	records []int

@@ -963,6 +963,16 @@ export interface TrafficHost {
   count: number;
 }
 
+export interface PlannerOverviewPreviewData {
+  task_id: string;
+  compact: string;
+  full: string;
+  compact_bytes: number;
+  full_bytes: number;
+  reduction_pct: number;
+  converter_mode: boolean;
+}
+
 // ---- App settings (runtime toggles) ----
 export interface Settings {
   traffic_capture: boolean;

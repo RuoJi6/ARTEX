@@ -76,3 +76,49 @@ func TestPlannerCompactOverviewSettingsRoundTrip(t *testing.T) {
 		t.Fatal("enabled value was not persisted")
 	}
 }
+
+func TestPlannerOverviewPreview(t *testing.T) {
+	m, err := NewManager(t.TempDir(), "")
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	defer m.Close()
+	task, err := m.CreateTask("preview fixture", "inspect the current graph", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = m.DeleteTask(task.ID, DeleteTaskOptions{}) })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := New(ctx, m, t.TempDir(), t.TempDir(), t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/"+task.ID+"/planner-overview-preview", nil)
+	req.SetPathValue("id", task.ID)
+	res := httptest.NewRecorder()
+	s.plannerOverviewPreview(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		TaskID       string  `json:"task_id"`
+		Compact      string  `json:"compact"`
+		Full         string  `json:"full"`
+		CompactBytes int     `json:"compact_bytes"`
+		FullBytes    int     `json:"full_bytes"`
+		Reduction    float64 `json:"reduction_pct"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.TaskID != task.ID || !strings.Contains(payload.Compact, "【Task】") || !strings.Contains(payload.Compact, "inspect the current graph") {
+		t.Fatalf("bad compact preview: %+v", payload)
+	}
+	if !strings.Contains(payload.Full, `"task"`) || !strings.Contains(payload.Full, "preview fixture") {
+		t.Fatalf("bad full preview: %s", payload.Full)
+	}
+	if payload.CompactBytes != len(payload.Compact) || payload.FullBytes != len(payload.Full) || payload.FullBytes == 0 {
+		t.Fatalf("bad byte counts: compact=%d full=%d", payload.CompactBytes, payload.FullBytes)
+	}
+	if payload.Reduction > 100 {
+		t.Fatalf("invalid reduction: %f", payload.Reduction)
+	}
+}

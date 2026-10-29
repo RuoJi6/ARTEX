@@ -17,6 +17,7 @@ import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSend
 import type { LLMProfile, Settings, WorkerPool } from "@/lib/types";
 
 import { BasicAuthCard } from "./_components/basic-auth-card";
+import { PlannerOverviewPreview } from "./_components/planner-overview-preview";
 import { UpdateCard } from "./_components/update-card";
 
 export default function SystemSettingsPage() {
@@ -541,6 +542,9 @@ export default function SystemSettingsPage() {
                 disabled={!loaded}
                 onCheckedChange={togglePlannerCompactOverview}
               />
+            </div>
+            <div className="border-t pt-4">
+              <PlannerOverviewPreview />
             </div>
           </CardContent>
         </Card>
