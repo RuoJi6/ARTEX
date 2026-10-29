@@ -116,6 +116,7 @@ import type {
   UsageStats,
   WorkspaceFile,
   WorkspaceListing,
+  SystemMetrics,
 } from "@/lib/types";
 
 function getToken(): string | null {
@@ -292,6 +293,7 @@ function schedulePayload(input: ScheduleInput) {
 export const api = {
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; service: string; version: string }>("/health"),
+  systemMetrics: () => get<SystemMetrics>("/system/metrics"),
 
   // ---- auth ----
   authStatus: () => get<{ initialized: boolean }>("/auth/status"),

@@ -1331,6 +1331,22 @@ export interface Stats {
   active_task?: Partial<Task>;
 }
 
+export interface SystemMetricValue {
+  used_bytes: number;
+  total_bytes: number;
+  percent: number;
+}
+
+export interface SystemMetrics {
+  scope: "container" | string;
+  timestamp: string;
+  container_metrics: boolean;
+  cpu: SystemMetricValue;
+  memory: SystemMetricValue;
+  disk: SystemMetricValue;
+  data_disk: SystemMetricValue;
+}
+
 // ---- Intercept Rules ----
 export type InterceptAction = "allow" | "deny" | "ask";
 export type InterceptMatchTarget = "tool_name" | "tool_input";
