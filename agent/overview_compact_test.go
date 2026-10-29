@@ -254,3 +254,19 @@ func TestOverviewOnlyIncludesActiveHints(t *testing.T) {
 		t.Fatalf("hint lifecycle filtering failed: %s", got)
 	}
 }
+
+func TestRenderGraphOverviewConverterToggle(t *testing.T) {
+	data := map[string]any{
+		"task":          map[string]any{"description": "authorized fixture", "goal": "review evidence"},
+		"frontier_open": float64(0),
+		"recent_facts":  []map[string]any{{"id": float64(7), "summary": "source fact"}},
+	}
+	compact := renderGraphOverview(data, true)
+	if !strings.Contains(compact, "同源压缩视图") || strings.Contains(compact, `"recent_facts"`) {
+		t.Fatalf("converter was not applied: %s", compact)
+	}
+	full := renderGraphOverview(data, false)
+	if !strings.Contains(full, `"recent_facts"`) || !strings.Contains(full, "source fact") || strings.Contains(full, "同源压缩视图") {
+		t.Fatalf("full JSON was not restored: %s", full)
+	}
+}
