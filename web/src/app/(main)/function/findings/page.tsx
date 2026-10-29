@@ -370,6 +370,7 @@ export default function FindingsPage() {
           query,
           sort,
           assetScope: activeAssetScope ?? undefined,
+          ...dateRange,
         },
         true,
       );
