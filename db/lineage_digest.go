@@ -96,9 +96,7 @@ func (s *ExplorationStore) AddLineageDigestChecked(ctx context.Context, payload 
 		return 0, err
 	}
 	defer tx.Rollback()
-	// Serializable isolation alone can order this transaction before a writer
-	// that commits first in real time. The short table write gate closes that
-	// window for every node and edge writer without requiring writer cooperation.
+	// The table lock prevents graph writers from changing the checked snapshot before commit.
 	if _, err := tx.ExecContext(ctx, `LOCK TABLE exploration_nodes, exploration_edges IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		return 0, err
 	}

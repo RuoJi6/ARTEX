@@ -97,7 +97,7 @@ func TestPlannerOverviewGlobalLimitKeepsRecoveryPath(t *testing.T) {
 	if utf8.RuneCountInString(got) > plannerOverviewMaxRunes || !utf8.ValidString(got) {
 		t.Fatalf("invalid capped view: runes=%d", utf8.RuneCountInString(got))
 	}
-	for _, want := range []string{"【全局视图截断】", "graph_overview", "expand_digest(id)", "keep original goals"} {
+	for _, want := range []string{"本节已截断", "graph_overview", "expand_digest(id)", "keep original goals"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q after global limit", want)
 		}
@@ -153,5 +153,104 @@ func TestPlannerOverviewTruncationKeepsCriticalHistoryAndRecovery(t *testing.T) 
 	}
 	if strings.Index(got, "CRITICAL DIGEST HISTORY") > strings.Index(got, "近期完成/中断") {
 		t.Fatal("secondary completed history was emitted before critical digest history")
+	}
+}
+
+func TestPlannerOverviewRecoveryIDsSurviveLargeRecords(t *testing.T) {
+	goals := make([]map[string]any, 100)
+	for i := range goals {
+		goals[i] = map[string]any{"id": i, "text": strings.Repeat("目", 600)}
+	}
+	results := make([]map[string]any, 200)
+	for i := range results {
+		results[i] = map[string]any{"fact_id": i, "summary": strings.Repeat("事实", 400)}
+	}
+	for _, data := range []map[string]any{
+		{"goals": goals, "cold_digests": []map[string]any{{"id": 42}, {"id": 43}}, "related_tasks": []map[string]any{{"cold_digests": []map[string]any{{"id": 44}}}}},
+		{"cold_digests": []map[string]any{{"id": 42, "key_results": results}, {"id": 43}}},
+	} {
+		got := plannerOverviewText(data)
+		for _, want := range []string{"Digest ID: 42,43", "expand_digest(id)", "【全局视图截断】"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("missing %q after truncation", want)
+			}
+		}
+		if data["related_tasks"] != nil && !strings.Contains(got, "42,43,44") {
+			t.Fatal("missing related digest recovery ID")
+		}
+		if utf8.RuneCountInString(got) > plannerOverviewMaxRunes {
+			t.Fatal("overview exceeds limit")
+		}
+	}
+}
+
+func TestPlannerOverviewReservesRunningAndHints(t *testing.T) {
+	goals := make([]map[string]any, 100)
+	for i := range goals {
+		goals[i] = map[string]any{"id": i, "text": strings.Repeat("目", 600)}
+	}
+	running := make([]map[string]any, 300)
+	for i := range running {
+		running[i] = map[string]any{"id": i, "state": "running", "summary": strings.Repeat("工", 340)}
+	}
+	got := plannerOverviewText(map[string]any{
+		"goals": goals, "running_intents": running, "running_intents_total": 300,
+		"hints": []map[string]any{{"id": 900, "text": "must preserve hint"}},
+	})
+	for _, want := range []string{"running_intents_total=300", "hints=1", "执行中 running_intents", "must preserve hint", "本节已截断", "graph_overview"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q after truncation", want)
+		}
+	}
+	if utf8.RuneCountInString(got) > plannerOverviewMaxRunes {
+		t.Fatal("overview exceeds limit")
+	}
+}
+
+func TestOverviewFindsRunningIntentOutsideRecentWindow(t *testing.T) {
+	d := testDB(t)
+	defer d.Close()
+	task, err := d.CreateTask("older running", "older running", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.DeleteTask(task.ID) })
+	store := d.Exploration(task.ExplorationID)
+	id, err := store.AddIntent(map[string]any{"summary": "old active work"}, 1, nil, "planner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetIntentState(id, "running"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`INSERT INTO exploration_nodes(exploration_id, kind, payload, state) SELECT $1, 'intent', '{}', 'done' FROM generate_series(1, 301)`, task.ExplorationID); err != nil {
+		t.Fatal(err)
+	}
+	data := NewToolSet(store, "").graphOverviewData()
+	if data["running_intents_total"] != 1 {
+		t.Fatalf("running total = %v", data["running_intents_total"])
+	}
+	if got := plannerOverviewText(data); !strings.Contains(got, "old active work") || !strings.Contains(got, "running_intents_total=1") {
+		t.Fatalf("older running work missing from overview: %s", got)
+	}
+}
+
+func TestOverviewOnlyIncludesActiveHints(t *testing.T) {
+	d := testDB(t)
+	defer d.Close()
+	task, err := d.CreateTask("active hints", "active hints", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.DeleteTask(task.ID) })
+	if _, err := d.Exec(`INSERT INTO exploration_nodes(exploration_id,kind,payload,state) VALUES
+		($1,'hint','{"text":"keep active hint"}','active'),
+		($1,'hint','{"text":"remove completed hint"}','consumed')`, task.ExplorationID); err != nil {
+		t.Fatal(err)
+	}
+	data := NewToolSet(d.Exploration(task.ExplorationID), "").graphOverviewData()
+	got := plannerOverviewText(data)
+	if !strings.Contains(got, "keep active hint") || strings.Contains(got, "remove completed hint") {
+		t.Fatalf("hint lifecycle filtering failed: %s", got)
 	}
 }

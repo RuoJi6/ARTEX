@@ -273,6 +273,11 @@ BEGIN
     END IF;
 END $$;
 
+-- Remove the obsolete row-trigger locking protocol before serving writes.
+DROP TRIGGER IF EXISTS trg_expnodes_graph_lock ON exploration_nodes;
+DROP TRIGGER IF EXISTS trg_expedges_graph_lock ON exploration_edges;
+DROP FUNCTION IF EXISTS lock_exploration_graph();
+
 CREATE TABLE IF NOT EXISTS exploration_anchors (
     node_id   BIGINT NOT NULL REFERENCES exploration_nodes(id) ON DELETE CASCADE,
     asset_id  BIGINT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,

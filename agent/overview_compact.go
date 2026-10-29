@@ -47,10 +47,40 @@ func plannerOverviewText(data map[string]any) string {
 		}
 	}
 
+	// Keep recovery IDs ahead of verbose records so global truncation cannot hide them.
+	var digestIDs []string
+	addIDs := func(digests []map[string]any, more any) {
+		for _, digest := range digests {
+			if id := ovText(digest["id"], 24); id != "" {
+				digestIDs = append(digestIDs, id)
+			}
+		}
+		if ids := ovIDs(more); ids != "" {
+			digestIDs = append(digestIDs, ids)
+		}
+	}
+	addIDs(ovMaps(data["cold_digests"]), data["cold_digests_more"])
+	for _, source := range ovMaps(data["related_tasks"]) {
+		addIDs(ovMaps(source["cold_digests"]), source["cold_digests_more"])
+	}
+	if len(digestIDs) > 0 {
+		b.record()
+		fmt.Fprintf(&b, "【历史恢复入口】Digest ID: %s；使用 expand_digest(id) 查阅，完整 ID 列表见 graph_overview。\n", ovText(strings.Join(digestIDs, ","), 8000))
+	}
+
+	// Bound high-priority sections separately so a long goal or hint cannot hide live work.
+	running := ovMaps(data["running_intents"])
+	hints := ovMaps(data["hints"])
+	b.record()
+	runningTotal := ovText(data["running_intents_total"], 20)
+	if runningTotal == "" {
+		runningTotal = "未知"
+	}
+	fmt.Fprintf(&b, "【关键状态】running_intents_total=%s，已获取=%d；hints=%d；总数未知时不得假定无运行任务，详细信息如有截断请调用 graph_overview。\n", runningTotal, len(running), len(hints))
+	ovPriorityRows(&b, "执行中 running_intents", running, "summary", 340, 300)
+	ovPriorityRows(&b, "人工提示 hints", hints, "text", 600, 50)
 	ovRows(&b, "目标 goals", ovMaps(data["goals"]), "text", 600, 100)
-	ovRows(&b, "人工提示 hints", ovMaps(data["hints"]), "text", 600, 50)
 	ovRows(&b, "开放意图 open_intents", ovMaps(data["open_intents"]), "summary", 340, 30)
-	ovRows(&b, "执行中 running_intents", ovMaps(data["running_intents"]), "summary", 340, 300)
 	ovRows(&b, "近期发现 finding_list", ovMaps(data["finding_list"]), "summary", 340, 10)
 	ovRows(&b, "近期事实 recent_facts", ovMaps(data["recent_facts"]), "summary", 340, 20)
 	ovDigests(&b, ovMaps(data["cold_digests"]), data["cold_digests_more"], 11000, 1800)
@@ -96,6 +126,16 @@ func plannerOverviewText(data map[string]any) string {
 	b.record()
 	b.WriteString("【原始记录】以上是 graph_overview 同源只读压缩视图，不是完整证据。完整结构化快照用 graph_overview，折叠历史用 expand_digest(id)，单节点证据用 node_detail(id)，事实用 list_facts；未出现的内容不等于未测试。\n")
 	return limitPlannerOverview(strings.TrimSpace(b.String()), b.records)
+}
+
+func ovPriorityRows(b *overviewWriter, title string, rows []map[string]any, field string, textLimit, limit int) {
+	if len(rows) == 0 {
+		return
+	}
+	var section overviewWriter
+	ovRows(&section, title, rows, field, textLimit, limit)
+	b.record()
+	b.WriteString(limitOverview(section.String(), section.records, 12000, "\n  ...本节已截断；调用 graph_overview 查看完整信息。\n"))
 }
 
 func ovRows(b *overviewWriter, title string, rows []map[string]any, field string, textLimit, limit int) {
@@ -145,6 +185,7 @@ func ovDigests(b *overviewWriter, digests []map[string]any, more any, bodyBudget
 		b.record()
 		id := ovText(d["id"], 24)
 		fmt.Fprintf(b, "- Digest #%s（成员=%s）\n", id, ovText(d["member_count"], 20))
+		b.record()
 		original, _ := d["body"].(string)
 		runes := []rune(original)
 		limit := perBody
@@ -187,6 +228,7 @@ func ovDigestDecisions(b *overviewWriter, digest map[string]any) {
 		fmt.Fprintf(b, "  工作状态: %s\n", strings.Join(parts, " "))
 	}
 	for _, result := range ovMaps(digest["key_results"]) {
+		b.record()
 		fmt.Fprintf(b, "  - Fact #%s [%s/%s] %s",
 			ovText(result["fact_id"], 24), ovText(result["state"], 20),
 			ovText(result["confidence"], 20), ovText(result["summary"], 800))
@@ -196,6 +238,7 @@ func ovDigestDecisions(b *overviewWriter, digest map[string]any) {
 		b.WriteByte('\n')
 	}
 	for _, item := range ovMaps(digest["unresolved"]) {
+		b.record()
 		fmt.Fprintf(b, "  未完成: #%s [%s] %s\n",
 			ovText(item["intent_id"], 24), ovText(item["state"], 20), ovText(item["reason"], 600))
 	}
@@ -218,11 +261,15 @@ func ovDigestRefIDs(value any, kind string) string {
 const plannerOverviewMaxRunes = 60000
 
 func limitPlannerOverview(s string, boundaries []int) string {
-	if len([]rune(s)) <= plannerOverviewMaxRunes {
+	const footer = "\n【全局视图截断】后续完整记录未展示；调用 graph_overview 获取完整结构化快照，使用 expand_digest(id) 与 node_detail(id) 找回；未出现不等于未测试。"
+	return limitOverview(s, boundaries, plannerOverviewMaxRunes, footer)
+}
+
+func limitOverview(s string, boundaries []int, maxRunes int, footer string) string {
+	if len([]rune(s)) <= maxRunes {
 		return s
 	}
-	const footer = "\n【全局视图截断】后续完整记录未展示；调用 graph_overview 获取完整结构化快照，使用 expand_digest(id) 与 node_detail(id) 找回；未出现不等于未测试。"
-	budget := plannerOverviewMaxRunes - len([]rune(footer))
+	budget := maxRunes - len([]rune(footer))
 	var b strings.Builder
 	used := 0
 	if len(boundaries) == 0 || boundaries[0] != 0 {
