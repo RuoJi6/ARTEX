@@ -62,10 +62,11 @@ export default function SystemSettingsPage() {
   // 请求序号：改了输入/保存/切捕获之后，在途请求回来时序号已经变了，直接丢弃。
   // 不这么做会出现"结果刚被清空，又被上一次的响应填回来"。
   const egressSeq = React.useRef(0);
-  // 清空结果并作废在途请求。
+  // 清空结果并作废在途请求。作废后 finally 会因序号对不上而跳过，所以一并复位 loading。
   const clearEgressReport = () => {
     egressSeq.current += 1;
     setEgressReport(null);
+    setEgressTesting(false);
   };
   // 探测地址：留空用公网回显；隔离网填内网回显服务。
   const [egressProbeUrl, setEgressProbeUrl] = React.useState("");

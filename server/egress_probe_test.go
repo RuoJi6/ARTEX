@@ -493,12 +493,23 @@ func TestProbeEgressBlocksLoopback(t *testing.T) {
 	}
 }
 
-// TestMaskSecrets 确认凭据不会随结果漏到界面上。
+// TestMaskSecrets 确认密码不会漏到界面上。三类：该换的（密码含 `@` / `/` / `%40`、
+// 报错里的端口部分）、不该动的（`@` 在路径/查询参数里、一段文本两个地址）、没密码时不能乱换。
 func TestMaskSecrets(t *testing.T) {
 	cases := map[string]string{
-		"http://user:pass@192.168.1.5:8080": "http://***@192.168.1.5:8080",
-		"http://192.168.1.5:8080":           "http://192.168.1.5:8080",
-		`socks5://u:p@h:1080: dial tcp`:     "socks5://***@h:1080: dial tcp",
+		"http://user:pass@192.168.1.5:8080":   "http://***@192.168.1.5:8080",
+		"http://192.168.1.5:8080":             "http://192.168.1.5:8080",
+		"http://user:p@ss@192.168.1.5:8080":   "http://***@192.168.1.5:8080",
+		"http://user:pa/ss@192.168.1.5:8080":  "http://***@192.168.1.5:8080",
+		"http://user:p%40ss@192.168.1.5:8080": "http://***@192.168.1.5:8080",
+		`socks5://u:p@h:1080: dial tcp`:       "socks5://***@h:1080: dial tcp",
+		"http://u@h:bad":                      "http://***@h:bad",
+		// 真实报错：`/` 让 Go 把 `u:s3cr3t` 当成"主机:端口"，这段就是密码前半部分。
+		`解析代理地址 "http://u:s3cr3t/p4ss@127.0.0.1:1": parse "http://u:s3cr3t/p4ss@127.0.0.1:1": invalid port ":s3cr3t" after host`: `解析代理地址 "http://***@127.0.0.1:1": parse "http://***@127.0.0.1:1": invalid port ":***" after host`,
+		"http://127.0.0.1:1/path@x":        "http://127.0.0.1:1/path@x",
+		"http://h/?q=a@b":                  "http://h/?q=a@b",
+		"http://127.0.0.1:8o80":            "http://127.0.0.1:8o80",
+		"http://a/path@x and http://u:p@h": "http://a/path@x and http://***@h",
 	}
 	for in, want := range cases {
 		if got := maskSecrets(in); got != want {
