@@ -39,22 +39,23 @@ type CredentialTraffic struct {
 	Accounts []int  `json:"accounts"`
 }
 type CredentialAnalysis struct {
-	ForceExtract bool                `json:"force_extract,omitempty"`
-	TrafficNote  string              `json:"traffic_note,omitempty"`
-	State        string              `json:"state"`
-	Lease        string              `json:"lease,omitempty"`
-	LeaseUntil   time.Time           `json:"lease_until,omitempty"`
-	SourceHash   string              `json:"source_hash,omitempty"`
-	Method       string              `json:"method,omitempty"`
-	Accounts     []CredentialAccount `json:"accounts"`
-	Traffic      []CredentialTraffic `json:"traffic"`
-	TrafficState string              `json:"traffic_state"`
-	Note         string              `json:"note,omitempty"`
-	Error        string              `json:"error,omitempty"`
-	Model        string              `json:"model,omitempty"`
-	InputTokens  int                 `json:"input_tokens"`
-	OutputTokens int                 `json:"output_tokens"`
-	ProcessedAt  *time.Time          `json:"processed_at,omitempty"`
+	ConversationID int64               `json:"conversation_id,omitempty"`
+	ForceExtract   bool                `json:"force_extract,omitempty"`
+	TrafficNote    string              `json:"traffic_note,omitempty"`
+	State          string              `json:"state"`
+	Lease          string              `json:"lease,omitempty"`
+	LeaseUntil     time.Time           `json:"lease_until,omitempty"`
+	SourceHash     string              `json:"source_hash,omitempty"`
+	Method         string              `json:"method,omitempty"`
+	Accounts       []CredentialAccount `json:"accounts"`
+	Traffic        []CredentialTraffic `json:"traffic"`
+	TrafficState   string              `json:"traffic_state"`
+	Note           string              `json:"note,omitempty"`
+	Error          string              `json:"error,omitempty"`
+	Model          string              `json:"model,omitempty"`
+	InputTokens    int                 `json:"input_tokens"`
+	OutputTokens   int                 `json:"output_tokens"`
+	ProcessedAt    *time.Time          `json:"processed_at,omitempty"`
 }
 
 func CredentialSourceHash(content string) string {

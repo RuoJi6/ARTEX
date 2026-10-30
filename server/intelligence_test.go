@@ -18,6 +18,17 @@ func TestIntelligenceHTTPSettingsAndScope(t *testing.T) {
 	if s.settingsPayload()[db.SettingTaskIntelligence] != false {
 		t.Fatal("default must be off")
 	}
+	if s.settingsPayload()[db.SettingTaskAutoTitle] != false || s.settingsPayload()[db.SettingChatAutoTitle] != false {
+		t.Fatal("auto title settings must default to off")
+	}
+	if r := request("PUT", "/api/settings", `{"task_auto_title_enabled":true,"chat_auto_title_enabled":true}`); r.Code != 200 {
+		t.Fatal(r.Code, r.Body)
+	}
+	if !s.m.pg.GetBool(db.SettingTaskAutoTitle, false) || !s.m.pg.GetBool(db.SettingChatAutoTitle, false) {
+		t.Fatal("auto title settings were not persisted")
+	}
+	defer s.m.pg.SetBool(db.SettingTaskAutoTitle, false)
+	defer s.m.pg.SetBool(db.SettingChatAutoTitle, false)
 	if r := request("PUT", "/api/settings", `{"task_intelligence_enabled":true}`); r.Code != 200 {
 		t.Fatal(r.Code, r.Body)
 	}

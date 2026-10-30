@@ -815,16 +815,51 @@ func ftsQuote(s string) string {
 // of -1 skip the response-size bounds. An empty Sort/Order defaults to
 // newest-first by timestamp.
 type PageQuery struct {
-	Host    string // host substring
-	Method  string // exact method (case-insensitive)
-	Query   string // broad search box: metadata columns OR captured text
-	Body    string // content box: captured request/response text only (full-text)
-	Path    string // url_template substring — the vulnerability's path
-	Status  string // exact code ("404") or class bucket ("4xx")
-	RespMin int64  // minimum resp_len, or -1 when unset
-	RespMax int64  // maximum resp_len, or -1 when unset
-	Sort    string // ts | status | resp_len (default ts)
-	Order   string // asc | desc (default desc)
+	Host    string   // host substring
+	Hosts   []string // task-scoped host candidates (exact host or host:port)
+	Method  string   // exact method (case-insensitive)
+	Query   string   // broad search box: metadata columns OR captured text
+	Body    string   // content box: captured request/response text only (full-text)
+	Path    string   // url_template substring — the vulnerability's path
+	Status  string   // exact code ("404") or class bucket ("4xx")
+	RespMin int64    // minimum resp_len, or -1 when unset
+	RespMax int64    // maximum resp_len, or -1 when unset
+	Sort    string   // ts | status | resp_len (default ts)
+	Order   string   // asc | desc (default desc)
+}
+
+// hostScopeClause limits traffic to the hosts attached to a task. Captures
+// store the request Host header, which may include a port, while asset rows
+// store normalized hostnames; match both forms without widening to subdomains.
+func hostScopeClause(hosts []string) (string, []any) {
+	conditions := make([]string, 0, len(hosts))
+	args := make([]any, 0, len(hosts)*2)
+	seen := make(map[string]struct{}, len(hosts))
+	for _, raw := range hosts {
+		host := strings.ToLower(strings.TrimSpace(raw))
+		if host == "" {
+			continue
+		}
+		if _, ok := seen[host]; ok {
+			continue
+		}
+		seen[host] = struct{}{}
+		if strings.HasPrefix(host, "*.") {
+			base := strings.TrimPrefix(host, "*.")
+			if base == "" {
+				continue
+			}
+			conditions = append(conditions, "(host=? OR host LIKE ? OR host LIKE ?)")
+			args = append(args, base, base+":%", "%."+base)
+			continue
+		}
+		conditions = append(conditions, "(host=? OR host LIKE ?)")
+		args = append(args, host, host+":%")
+	}
+	if len(conditions) == 0 {
+		return "", nil
+	}
+	return "(" + strings.Join(conditions, " OR ") + ")", args
 }
 
 // sortColumns whitelists the columns Page may order by, so the caller-supplied
@@ -876,6 +911,9 @@ func (t *Traffic) Page(f PageQuery, page, size int) (rows []ExchangeMeta, total 
 	}
 	if h := strings.TrimSpace(f.Host); h != "" {
 		add("host LIKE ?", "%"+h+"%")
+	}
+	if cond, scopeArgs := hostScopeClause(f.Hosts); cond != "" {
+		add(cond, scopeArgs...)
 	}
 	if m := strings.TrimSpace(f.Method); m != "" {
 		add("method=?", strings.ToUpper(m))
@@ -998,6 +1036,30 @@ type HostCount struct {
 // activity first — powers the page's target picker.
 func (t *Traffic) Hosts() ([]HostCount, error) {
 	rows, err := t.db.Query(`SELECT host, COUNT(*) AS n, MAX(ts) AS last FROM exchanges GROUP BY host ORDER BY last DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HostCount
+	for rows.Next() {
+		var h HostCount
+		var last int64
+		if err := rows.Scan(&h.Host, &h.Count, &last); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// HostsForScope returns recorded hosts that belong to a task's normalized host
+// scope. It is used by the task HTTP history picker and never mutates traffic.
+func (t *Traffic) HostsForScope(scope []string) ([]HostCount, error) {
+	cond, args := hostScopeClause(scope)
+	if cond == "" {
+		return []HostCount{}, nil
+	}
+	rows, err := t.db.Query(`SELECT host, COUNT(*) AS n, MAX(ts) AS last FROM exchanges WHERE `+cond+` GROUP BY host ORDER BY last DESC`, args...)
 	if err != nil {
 		return nil, err
 	}

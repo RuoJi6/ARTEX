@@ -11,7 +11,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { toneClasses } from "@/lib/status";
 import type { CredentialAccount, CredentialTraffic, CredentialTrafficDetail, TaskIntelligence } from "@/lib/types";
@@ -344,26 +343,22 @@ export function CredentialTrafficViewer({
               {data.reference.side === "request" ? "请求包含匹配凭据" : "响应包含匹配凭据"}，不代表认证验证成功。
             </p>
             <p className="text-sm">绑定时保存的匹配片段</p>
-            <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-3 text-xs">
-              {data.reference.excerpt}
-            </pre>
+            <HttpCodeBlock raw={data.reference.excerpt} />
             {data.unavailable ? (
               <Alert>
                 <AlertDescription>原始流量已删除或不可用，仍可查看上方保存的匹配片段。</AlertDescription>
               </Alert>
             ) : (
-              <Tabs defaultValue={data.reference.side}>
-                <TabsList>
-                  <TabsTrigger value="request">请求</TabsTrigger>
-                  <TabsTrigger value="response">响应</TabsTrigger>
-                </TabsList>
-                <TabsContent value="request">
+              <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="min-w-0">
+                  <p className="mb-1 px-1 text-sm font-medium">请求 Request</p>
                   <HttpCodeBlock raw={data.req ?? ""} />
-                </TabsContent>
-                <TabsContent value="response">
+                </div>
+                <div className="min-w-0">
+                  <p className="mb-1 px-1 text-sm font-medium">响应 Response</p>
                   <HttpCodeBlock raw={data.resp ?? ""} />
-                </TabsContent>
-              </Tabs>
+                </div>
+              </div>
             )}
           </div>
         ) : (

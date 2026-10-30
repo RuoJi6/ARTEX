@@ -12,6 +12,21 @@ import (
 // behavior is identical until a user edits a prompt in the UI.
 var PromptOverride func(agentKey string) (string, bool)
 
+// OpsecEnabled is wired by the server to the persisted global setting. Keeping
+// the block here makes it a code-owned runtime tail: database-edited prompts
+// cannot accidentally remove the operational safety guidance.
+var OpsecEnabled func() bool
+
+const opsecPromptBlock = `【OPSEC 准则（硬约束，仅次于授权范围和任务操作约束）】
+
+- 先复用已有流量、浏览器会话和已验证证据；能通过 traffic_search/traffic_get 或浏览器完成时，不要重复直接请求。
+- 所有目标交互必须经过平台配置的记录代理或浏览器工具，确保请求可追溯。
+- 不得使用裸 curl、urllib、requests 等工具的默认请求头直接访问目标。命令行请求必须尽量复用目标已有流量中的 User-Agent、Accept、Referer、Cookie 等请求特征；没有真实依据时不要伪造身份、设备或浏览器指纹。
+- 不得使用 -k、--ignore-https-errors、verify=False 等方式绕过证书校验；平台代理 CA 已配置时应正常验证。
+- 不得随机轮换 User-Agent、批量并发、快速循环、无节制重试、端口横扫、目录爆破或大规模扫描；遇到限速、验证码、WAF 或异常响应时立即停止当前方向。
+- OPSEC 不扩大授权范围；目标、主机、端口、路径或账号不在授权范围内时不得访问。
+- 请求和响应是否留痕由平台代理和浏览器负责；不要额外复制完整请求头、Cookie 或响应正文。`
+
 // Prompt-variable structs — fields mirror each agent's catalog (docs §5a) so a
 // user template referencing a catalog variable renders; referencing anything else
 // fails template execution and falls back to the built-in default.
@@ -43,11 +58,20 @@ func renderSystem(agentKey, def string, vars any) string {
 		}
 	}
 	if out, err := renderTmpl(tmpl, vars); err == nil {
+		if OpsecEnabled != nil && OpsecEnabled() {
+			return out + "\n\n" + opsecPromptBlock
+		}
 		return out
 	}
 	// DB template broke (e.g. references an out-of-catalog var) → code default.
 	if out, err := renderTmpl(def, vars); err == nil {
+		if OpsecEnabled != nil && OpsecEnabled() {
+			return out + "\n\n" + opsecPromptBlock
+		}
 		return out
+	}
+	if OpsecEnabled != nil && OpsecEnabled() {
+		return def + "\n\n" + opsecPromptBlock
 	}
 	return def
 }

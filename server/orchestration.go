@@ -175,10 +175,9 @@ func (s *Server) delegateToTask(ctx context.Context, in json.RawMessage, pick fu
 
 func (s *Server) toolListTasks() actool.CoreTool {
 	return roTool("list_tasks",
-		"列出所有任务(id/描述/目标/状态/运行时长/父任务/LLM 配置)，编排 agent 用它掌握全局、看哪些任务卡太久、各自用哪个 LLM。运行时长：运行中=创建→现在，终态=创建→最后活动(秒)。llm_profile：任务 planner/worker 用的配置名，(激活配置)=跟随全局激活。",
+		"列出所有任务(id/描述/目标/状态/运行时长/父任务/LLM 配置)，编排 agent 用它掌握全局、看哪些任务卡太久、各自用哪个 LLM。运行时长只累计实际执行时间，暂停、排队和终态后的时间不计入。llm_profile：任务 planner/worker 用的配置名，(激活配置)=跟随全局激活。",
 		objSchema(map[string]any{}),
 		func(context.Context, json.RawMessage) (actool.Result, error) {
-			lastAct, _ := s.m.PG().LastActivityAll()
 			// id -> name to resolve each task's pinned LLM profile.
 			profName := map[int64]string{}
 			if profs, err := s.m.pg.ListProfiles(); err == nil {
@@ -189,16 +188,8 @@ func (s *Server) toolListTasks() actool.CoreTool {
 			out := make([]map[string]any, 0)
 			for _, t := range s.m.List() {
 				status := s.deriveTaskStatus(t)
-				end := lastAct[t.ExpID]
-				if live := s.engine.LastActivity(t.ID); live > end {
-					end = live
-				}
-				dur := int64(0)
-				if status == "running" {
-					dur = time.Now().Unix() - t.CreatedAt
-				} else if end > t.CreatedAt {
-					dur = end - t.CreatedAt
-				}
+				lifecycle := t.lifecycleSnapshot()
+				dur := taskRunSeconds(lifecycle.ActiveRunSeconds, lifecycle.RunSegmentStartedAt, time.Now().Unix(), status, lifecycle.Paused, lifecycle.Queued)
 				row := map[string]any{"id": t.ID, "description": t.Description, "goal": t.Goal, "status": status, "run_seconds": dur}
 				if t.ParentRef != "" {
 					row["parent_ref"] = t.ParentRef
@@ -251,7 +242,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			"plan_heartbeat_seconds": map[string]any{"type": "integer", "description": "可选：planner 心跳触发间隔(秒)。距上轮规划结束/任务开始满该值且期间无触发 → 触发一轮规划(兜底死锁 + 唤醒去监督飞行中的 worker)。留空或 0 = 默认 600(10min)；"},
 			"seed_first_intent":      map[string]any{"type": "boolean", "description": "可选：对于简单任务可开启，创建时直接下发一条种子意图(内容=描述+目标)让 worker 免等首轮 planner 直接开跑测试；默认 false(走标准先规划再执行)。"},
 		}, "description", "goal"),
-		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
 				Description          string          `json:"description"`
 				Goal                 string          `json:"goal"`
@@ -305,7 +296,40 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			if pin != nil {
 				llmIDs = []int64{*pin}
 			}
+			name := ""
+			autoTitleEnabled := s.m.pg.GetBool(db.SettingTaskAutoTitle, false)
+			if autoTitleEnabled {
+				if err := ctx.Err(); err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				active, activeErr := s.m.pg.ActiveProfile()
+				if activeErr != nil {
+					log.Printf("[auto-title] active profile lookup failed: %v", activeErr)
+				} else if active == nil {
+					log.Printf("[auto-title] no active profile")
+				} else if prov, _, providerOK := s.providerForProfile(active.ID); providerOK {
+					titleCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+					defer cancel()
+					generated, titleErr := agent.GenerateAutoTitle(titleCtx, prov, a.Description+"\n"+a.Goal)
+					if err := ctx.Err(); err != nil {
+						return actool.Errorf(err.Error()), nil
+					}
+					if titleErr == nil {
+						name = generated
+					} else {
+						log.Printf("[auto-title] task title generation failed: %v", titleErr)
+					}
+				} else {
+					log.Printf("[auto-title] task provider unavailable for active profile %d", active.ID)
+				}
+			}
+			if autoTitleEnabled {
+				if err := ctx.Err(); err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+			}
 			t, err := s.m.CreateTaskWithOptions(a.Description, a.Goal, db.TaskCreateOptions{
+				Name:                 name,
 				SourceTaskIDs:        sourceIDs,
 				LLMProfileIDs:        llmIDs,
 				TimeoutSeconds:       a.TimeoutSeconds,
@@ -510,12 +534,75 @@ func (s *Server) seedOrchestrationTools() {
 	s.reseedWorkerPrompt()            // worker 提示词:加否定结论证据门槛(一次性)
 	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
-	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
+	s.migrateReporterWorkflow()       // 修复旧库残留的 reproduction 工具/提示词绑定
+	if s.m.pg.GetBool(settingBrowserScreenshot, false) {
+		// Re-apply the opt-in after startup seeding so an existing database gets
+		// both reporter visibility and the repaired Playwright launch arguments.
+		if err := s.setReporterBrowserScreenshotVisibility(true); err != nil {
+			log.Printf("[reporter] 截图 MCP 启动配置同步失败: %v", err)
+		}
+	}
+	s.seedFindingTrafficTools() // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
 	s.seedFindingCaseTools()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。
+}
+
+// migrateReporterWorkflow repairs databases created by the short-lived
+// structured-reproduction reporter. That workflow referenced
+// update_finding_reproduction, which is no longer a runtime tool; leaving the
+// old prompt/trigger in place makes a newly reported vulnerability fail after
+// all evidence has already been collected. User-authored reporter prompts are
+// preserved unless they contain the removed tool contract.
+func (s *Server) migrateReporterWorkflow() {
+	const flag = "reporter_workflow_markdown_v2"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	defer func() { _ = s.m.pg.SetSetting(flag, "true") }()
+
+	reporter, err := s.m.pg.GetAgentByKey("reporter")
+	if err != nil || reporter == nil {
+		return
+	}
+	if current, err := s.m.pg.CurrentPrompt(reporter.ID); err == nil &&
+		(strings.Contains(current, "update_finding_reproduction") || strings.Contains(current, "漏洞步骤编写 agent")) {
+		if _, err := s.m.pg.ResetPromptToDefault(reporter.ID, agent.ReporterDefaultPrompt); err != nil {
+			log.Printf("[reporter] 旧版提示词迁移失败: %v", err)
+		} else {
+			log.Printf("[reporter] 已将旧版复现步骤提示词迁移为 Markdown 报告流程")
+		}
+	}
+
+	// 只补齐当前报告流程需要的绑定，不覆盖管理员已有的其它配置。
+	_ = s.m.pg.AddAgentToToolBinding("reporter", []string{
+		"update_finding_report", "get_finding_traffic", "bind_finding_traffic",
+		"get_task_node_detail", "list_task_findings", "get_task_worker_trace",
+		"list_task_worker_traces", "search_task_worker_traces", "get_task_graph",
+	})
+	// 旧行保留在工具目录里供历史审计，但不能继续被运行时广告或调用。
+	if _, err := s.m.pg.Exec(`UPDATE tools SET enabled=false, updated_at=now() WHERE key='update_finding_reproduction' AND system`); err != nil {
+		log.Printf("[reporter] 旧 reproduction 工具停用失败: %v", err)
+	}
+
+	triggers, err := s.m.pg.ListTriggersFor("reporter")
+	if err != nil {
+		log.Printf("[reporter] 读取触发器失败: %v", err)
+		return
+	}
+	for _, t := range triggers {
+		if !t.OnToolCall || !strings.Contains(t.ToolCallMessage, "update_finding_reproduction") {
+			continue
+		}
+		t.ToolCallMessage = reporterToolCallMessage
+		if err := s.m.pg.UpdateTrigger(t); err != nil {
+			log.Printf("[reporter] 旧触发器迁移失败: %v", err)
+			continue
+		}
+		log.Printf("[reporter] 已将旧 reproduction 触发器迁移为报告保存流程")
+	}
 }
 
 // refreshBuiltinToolSchemas propagates code schema/description changes on the

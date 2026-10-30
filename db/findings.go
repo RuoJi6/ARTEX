@@ -150,15 +150,18 @@ func (d *DB) ListFindings(limit int) ([]*DBFinding, error) {
 }
 
 // FindingFilter narrows a paginated findings query. Empty-string fields mean "no
-// filter on that column". Sort is "severity" (severity desc, then newest) or
-// anything else (newest first).
+// filter on that column". Sort is "severity" (severity desc, then time) or
+// anything else (time only). TimeDirection defaults to newest first.
 type FindingFilter struct {
-	Severity  string // high | medium | low
-	Status    string // pending | false_positive | ignored | resolved
-	VulnClass string
-	TaskID    string // 任务 id(字符串形式;空/非法 = 不按任务筛选)
-	Query     string // 名称/类型/摘要/证据/报告正文的模糊检索关键词
-	Sort      string // "severity" | "time"
+	Severity      string // high | medium | low
+	Status        string // pending | false_positive | ignored | resolved
+	VulnClass     string
+	TaskID        string // 任务 id(字符串形式;空/非法 = 不按任务筛选)
+	Query         string // 名称/类型/摘要/证据/报告正文的模糊检索关键词
+	Sort          string // "severity" | "time"
+	TimeDirection string // "asc" | "desc"; applies to time, not the severity ranking
+	From          string // RFC3339 timestamp, inclusive
+	To            string // RFC3339 timestamp, inclusive
 	// AssetScope 是资产树的节点 key(a:<id> / c:<id> / r:<domain> / __none__),
 	// 选中一个节点等于选中它的整棵子树。空 = 不按资产筛选。
 	AssetScope string
@@ -167,6 +170,14 @@ type FindingFilter struct {
 	assetIDs  []int64 // 子树里所有资产 id
 	assetNone bool    // 只要「未关联资产」的发现
 	assetMiss bool    // 选中的节点在当前筛选下不存在 → 结果恒空
+}
+
+// timeOrder only returns SQL keywords from a fixed allowlist.
+func (f FindingFilter) timeOrder() string {
+	if f.TimeDirection == "asc" {
+		return "ASC"
+	}
+	return "DESC"
 }
 
 // FindingUnassignedTask is the task filter sentinel for findings whose task is
@@ -190,6 +201,18 @@ func (f FindingFilter) where() (string, []any) {
 	add("severity", f.Severity)
 	add("status", f.Status)
 	add("vulnclass", f.VulnClass)
+	if from := strings.TrimSpace(f.From); from != "" {
+		if parsed, err := time.Parse(time.RFC3339, from); err == nil {
+			args = append(args, parsed)
+			conds = append(conds, fmt.Sprintf("f.created_at >= $%d", len(args)))
+		}
+	}
+	if to := strings.TrimSpace(f.To); to != "" {
+		if parsed, err := time.Parse(time.RFC3339, to); err == nil {
+			args = append(args, parsed)
+			conds = append(conds, fmt.Sprintf("f.created_at <= $%d", len(args)))
+		}
+	}
 	// task_id 是 bigint 列,按整数比较(不能走上面的文本 add);空/非法值忽略。
 	if f.TaskID == FindingUnassignedTask {
 		conds = append(conds, "(f.task_id IS NULL OR t.id IS NULL)")
@@ -259,10 +282,10 @@ func (d *DB) ListFindingsPage(f FindingFilter, page, pageSize int) ([]*DBFinding
 		return []*DBFinding{}, total, nil
 	}
 
-	order := "f.created_at DESC, f.id DESC"
+	order := "f.created_at " + f.timeOrder() + ", f.id DESC"
 	if f.Sort == "severity" {
-		// critical > high > medium > low > 其它, then newest first.
-		order = `CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC, f.created_at DESC, f.id DESC`
+		// critical > high > medium > low > 其它, then the requested time direction.
+		order = `CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC, ` + order
 	}
 	pageArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
 	q := fmt.Sprintf(`
@@ -324,9 +347,9 @@ func (d *DB) ListFindingGroups(f FindingFilter, page, pageSize int) ([]FindingGr
 		return []FindingGroup{}, groupTotal, findingTotal, nil
 	}
 
-	order := "MAX(f.created_at) DESC, t.id DESC NULLS LAST"
+	order := "MAX(f.created_at) " + f.timeOrder() + ", t.id DESC NULLS LAST"
 	if f.Sort == "severity" {
-		order = `MAX(CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) DESC, MAX(f.created_at) DESC, t.id DESC NULLS LAST`
+		order = `MAX(CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) DESC, ` + order
 	}
 	pageArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
 	query := fmt.Sprintf(`SELECT t.id, COALESCE(t.name,''), COALESCE(t.description,''), COALESCE(

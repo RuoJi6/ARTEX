@@ -188,19 +188,15 @@ function fmtDuration(sec: number): string {
   return `${s}s`;
 }
 
-// taskDuration is the task's run duration in seconds: created → now while running,
-// created → completion for a finished task, else created → last activity. 0 when it
-// never ran (no activity yet).
+// taskDuration counts only active execution segments. A live segment ticks locally;
+// paused, queued, and terminal tasks stay fixed at their persisted active total.
 function taskDuration(task: Task, nowSec: number): number {
-  const start = task.created_unix ?? 0;
-  if (!start) return 0;
-  const end =
-    task.status === "running"
-      ? nowSec
-      : task.completed_unix && task.completed_unix > 0
-        ? task.completed_unix
-        : (task.last_activity_unix ?? 0);
-  return end > start ? end - start : 0;
+  const active = Math.max(0, Math.floor(task.active_run_seconds ?? 0));
+  const segmentStart = task.run_segment_started_unix ?? 0;
+  if (task.status === "running" && !task.paused && !task.queued && segmentStart > 0) {
+    return active + Math.max(0, Math.floor(nowSec - segmentStart));
+  }
+  return active;
 }
 
 // deleteDetails takes only the countable part of the result so callers can pass an

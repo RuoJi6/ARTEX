@@ -43,6 +43,10 @@ type Server struct {
 	m          *Manager
 	engine     *Engine
 	ctx        context.Context
+	dataDir    string
+	metricsMu  sync.Mutex
+	lastCPUUse uint64
+	lastCPUAt  time.Time
 
 	skillDir  string // root directory for skill subdirectories
 	jwtKey    []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
@@ -121,9 +125,10 @@ type Server struct {
 
 	// Cold task archives run through one persistent FIFO worker. The buffered wake
 	// channel coalesces enqueue bursts; the database remains the source of truth.
-	archiveWake chan struct{}
-	archiveWG   sync.WaitGroup
-	side        *sideQuestionState
+	archiveWake    chan struct{}
+	archiveWG      sync.WaitGroup
+	credentialWake chan struct{}
+	side           *sideQuestionState
 }
 
 // provEntry is a cached provider + its config for one LLM profile id.
@@ -152,12 +157,12 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if err != nil {
 		log.Fatalf("[auth] JWT key: %v", err)
 	}
-	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, jwtKey: key, chatBusy: map[string]bool{},
+	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, dataDir: dataDir, jwtKey: key, chatBusy: map[string]bool{},
 		chatCancel: map[string]context.CancelCauseFunc{}, triggerQ: map[string][]triggeredRun{},
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{},
 		profChatAgents: map[int64]*agent.ChatAgent{},
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
-		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
+		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1), credentialWake: make(chan struct{}, 1)}
 	s.initSideQuestions()
 	if m.pg != nil {
 		if err := s.basicAuth.load(m.pg); err != nil {
@@ -190,6 +195,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	// Wire DB-stored prompt templates into the agents (新版方案 §3.3 / §5a). With no
 	// override row, agents keep their built-in defaults — behavior is unchanged.
 	if m.pg != nil {
+		agent.OpsecEnabled = func() bool { return m.pg.GetBool(settingOpsecEnabled, false) }
 		agent.PromptOverride = func(key string) (string, bool) {
 			a, err := m.pg.GetAgentByKey(key)
 			if err != nil || a == nil {
@@ -198,6 +204,12 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			t, err := m.pg.CurrentPrompt(a.ID)
 			if err != nil || t == "" {
 				return "", false
+			}
+			if key == "reporter" && m.pg.GetBool(settingBrowserScreenshot, false) {
+				t += `
+
+【报告步骤截图已开启】
+				报告撰写时，针对每个复现步骤中真实出现且仍可访问的 HTTP 页面，使用 browser MCP 的 browser_navigate 和 browser_take_screenshot 截取页面证据。只导航到漏洞证据中出现的目标 URL，不要自行扩大测试范围。将截图保存到当前工作目录下的 findings/screenshots/ 目录，文件名使用 finding-<finding_id>-step-<n>.png；确认文件存在后，在对应步骤中**统一使用工作区相对路径**加入 Markdown 图片：![步骤 <n> 截图](findings/screenshots/finding-<finding_id>-step-<n>.png)。禁止使用绝对路径、workspace://、file://，也不要混用相对路径和绝对路径；报告中所有截图都必须使用这一种格式。截图失败时如实写明，不要用占位图或把截图描述冒充图片。`
 			}
 			return t, true
 		}
@@ -271,6 +283,12 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	go s.reconcileConcurrency()
 	s.startTaskArchiveWorker()
 	if m.pg != nil {
+		agent.CredentialRecorded = func() {
+			select {
+			case s.credentialWake <- struct{}{}:
+			default:
+			}
+		}
 		s.seedCredentialProcessor()
 		go s.runCredentialProcessor()
 	}
@@ -706,6 +724,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/stats", s.stats)
+	mux.HandleFunc("GET /api/system/metrics", s.systemMetrics)
 	mux.HandleFunc("GET /api/logs", s.getLogs)
 	mux.HandleFunc("GET /api/logs/history", s.getLogsHistory)
 	mux.HandleFunc("GET /api/logs/stream", s.streamLogs)
@@ -761,6 +780,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/task-archives/delete/batch", s.deleteTaskArchivesBatch)
 	mux.HandleFunc("GET /api/tasks/{id}/coverage", s.taskCoverage)
 	mux.HandleFunc("GET /api/tasks/{id}/coverage-graph", s.taskCoverageGraph)
+	// Asset relationships are read directly from the asset store. This action
+	// only runs the topology explanation and produces the asset/network reports.
+	mux.HandleFunc("POST /api/tasks/{id}/topology-mapping", s.taskAssetMapping)
+	mux.HandleFunc("GET /api/tasks/{id}/topology-mapping/status", s.taskAssetMappingStatus)
+	// Keep the old paths for clients from earlier builds.
+	mux.HandleFunc("POST /api/tasks/{id}/asset-mapping", s.taskAssetMapping)
+	mux.HandleFunc("GET /api/tasks/{id}/asset-mapping/status", s.taskAssetMappingStatus)
 	mux.HandleFunc("GET /api/tasks/{id}/asset-refs", s.taskAssetRefs)
 	mux.HandleFunc("POST /api/tasks/{id}/assets", s.attachTaskAssets)
 	mux.HandleFunc("DELETE /api/tasks/{id}/assets/{assetID}", s.detachTaskAsset)
@@ -773,6 +799,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/workspace/mkdir", s.wsMkdir)
 	mux.HandleFunc("DELETE /api/workspace/delete", s.wsDelete)
 	mux.HandleFunc("GET /api/workspace/download", s.wsDownload)
+	mux.HandleFunc("GET /api/workspace/preview", s.wsPreview)
 	mux.HandleFunc("POST /api/workspace/upload", s.wsUpload)
 	mux.HandleFunc("GET /api/tasks/{id}/scope", s.taskScopeList)
 	mux.HandleFunc("POST /api/tasks/{id}/scope", s.taskScopeAdd)
@@ -833,6 +860,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/findings/{id}", s.getFinding)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/lineage", s.findingLineage)
 	mux.HandleFunc("POST /api/exploration/findings/{id}/deepen", s.deepenFinding)
+	mux.HandleFunc("POST /api/exploration/findings/{id}/generate-report", s.generateFindingReport)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/retests", s.listFindingRetests)
 	mux.HandleFunc("GET /api/exploration/findings/retests/active", s.listActiveFindingRetests)
 	mux.HandleFunc("POST /api/exploration/findings/{id}/retests", s.startFindingRetest)
@@ -898,6 +926,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/notify/deliveries", s.notifyListDeliveries)
 	mux.HandleFunc("POST /api/notify/deliveries/{id}/retry", s.notifyRetryDelivery)
 	mux.HandleFunc("POST /api/settings/web-search/test", s.testWebSearch)
+	// 出口代理连通性测试：发真实请求验证 global_proxy 是否可用，并回显出口 IP。
+	mux.HandleFunc("POST /api/settings/proxy/test", s.testEgressProxy)
 	mux.HandleFunc("GET /api/report", s.getReport)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)
 	mux.HandleFunc("POST /api/chat", s.chat)
@@ -1137,7 +1167,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		metric := metrics[t.ExpID]
 		dto.Tokens = tokenTotalDTO(metric.Tokens)
 		// prefer the live in-memory heartbeat (fresher) and fall back to the
-		// persisted max activity time (survives restarts) for run-duration display.
+		// persisted max activity time (survives restarts) for activity display.
 		dto.LastActivity = metric.LastActivity
 		if live := s.engine.LastActivity(t.ID); live > dto.LastActivity {
 			dto.LastActivity = live
@@ -2312,7 +2342,7 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(report.FindingsMarkdown(fs, now)))
 	case "md-zip":
 		path := filepath.Join(stage, "findings.zip")
-		if err := buildFindingsEvidenceZip(path, fs, stage, now); err != nil {
+		if err := buildFindingsEvidenceZip(path, fs, stage, now, s.m.dir); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
@@ -3258,7 +3288,30 @@ func (s *Server) getTraffic(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page := atoiDefault(q.Get("page"), 0)
 	size := atoiDefault(q.Get("size"), 100)
-	ex, matched, _ := tr.Page(traffic.PageQuery{
+	var taskHosts []string
+	taskScoped := false
+	if rawTaskID := strings.TrimSpace(q.Get("task_id")); rawTaskID != "" {
+		taskScoped = true
+		taskID, err := strconv.ParseInt(rawTaskID, 10, 64)
+		if err != nil || taskID <= 0 || s.m.ResolveTask(rawTaskID) == nil {
+			writeErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		taskHosts, err = s.m.Assets().HostsByTaskWithSources(taskID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if taskScoped && len(taskHosts) == 0 {
+		writeJSON(w, 200, map[string]any{
+			"enabled": s.m.TrafficEnabled(), "proxy": s.m.ProxyAddr(), "count": 0,
+			"total": 0, "page": page, "size": size, "exchanges": []any{},
+		})
+		return
+	}
+	pageQuery := traffic.PageQuery{
+		Hosts:   taskHosts,
 		Host:    q.Get("host"),
 		Method:  q.Get("method"),
 		Query:   q.Get("q"),
@@ -3269,8 +3322,14 @@ func (s *Server) getTraffic(w http.ResponseWriter, r *http.Request) {
 		RespMax: int64(atoiDefault(q.Get("resp_max"), -1)),
 		Sort:    q.Get("sort"),
 		Order:   q.Get("order"),
-	}, page, size)
+	}
+	ex, matched, _ := tr.Page(pageQuery, page, size)
 	count, _ := tr.Count() // global total, for the stat card
+	if taskScoped {
+		// matched already represents the current task scope plus all active
+		// filters. Reusing it avoids a second full SQLite scan on every refresh.
+		count = matched
+	}
 	writeJSON(w, 200, map[string]any{
 		"enabled":   s.m.TrafficEnabled(), // reflect the capture toggle
 		"proxy":     s.m.ProxyAddr(),
@@ -3290,12 +3349,33 @@ func (s *Server) getTrafficHosts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"hosts": []any{}})
 		return
 	}
-	hosts, err := tr.Hosts()
+	var hosts []string
+	if rawTaskID := strings.TrimSpace(r.URL.Query().Get("task_id")); rawTaskID != "" {
+		taskID, err := strconv.ParseInt(rawTaskID, 10, 64)
+		if err != nil || taskID <= 0 || s.m.ResolveTask(rawTaskID) == nil {
+			writeErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		hosts, err = s.m.Assets().HostsByTaskWithSources(taskID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	var result []traffic.HostCount
+	var err error
+	if len(hosts) > 0 {
+		result, err = tr.HostsForScope(hosts)
+	} else if r.URL.Query().Get("task_id") != "" {
+		result = []traffic.HostCount{}
+	} else {
+		result, err = tr.Hosts()
+	}
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"hosts": hosts})
+	writeJSON(w, 200, map[string]any{"hosts": result})
 }
 
 // deleteTraffic removes recorded traffic for every host containing the query's
@@ -3441,23 +3521,29 @@ func (s *Server) settingsPayload() map[string]any {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
 	return map[string]any{
-		"traffic_capture":           s.m.TrafficEnabled(),
-		"agent_traffic_binding":     s.m.pg.GetBool(settingAgentTrafficBinding, false),
-		"task_intelligence_enabled": s.m.pg.GetBool(db.SettingTaskIntelligence, false),
-		db.SettingCredentialAgent:   s.m.pg.GetBool(db.SettingCredentialAgent, false),
-		db.SettingCredentialTraffic: s.m.pg.GetBool(db.SettingCredentialAgent, false) && s.m.pg.GetBool(db.SettingCredentialTraffic, false),
-		"llm_record":                s.m.LLMRecordEnabled(),
-		"web_search_enabled":        on,
-		"web_search_backend":        backend,
-		"brave_key_set":             strings.TrimSpace(braveKey) != "",
-		"tavily_key_set":            strings.TrimSpace(tavilyKey) != "",
-		"web_search_proxy":          proxy,                       // 独立出口代理(http/https/socks5)，空=直连
-		"global_proxy":              s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
-		"python_interpreter":        strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
-		"workers":                   s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
-		"worker_pools":              s.m.WorkerPools(),           // 非空时按池顺序绑定 worker 会话
-		"task_concurrency_enabled":  concOn,                      // 任务并发上限开关(默认关)
-		"task_concurrency_limit":    concLimit,                   // 同时运行任务上限(开启后默认5)
+		"traffic_capture":                      s.m.TrafficEnabled(),
+		"browser_screenshot_enabled":           s.m.pg.GetBool(settingBrowserScreenshot, false),
+		"browser_screenshot_timestamp_enabled": s.m.pg.GetBool(settingScreenshotTimestamp, false),
+		"opsec_enabled":                        s.m.pg.GetBool(settingOpsecEnabled, false),
+		"agent_traffic_binding":                s.m.pg.GetBool(settingAgentTrafficBinding, false),
+		"task_intelligence_enabled":            s.m.pg.GetBool(db.SettingTaskIntelligence, false),
+		db.SettingTaskAutoTitle:                s.m.pg.GetBool(db.SettingTaskAutoTitle, false),
+		db.SettingChatAutoTitle:                s.m.pg.GetBool(db.SettingChatAutoTitle, false),
+		db.SettingCredentialAgent:              s.m.pg.GetBool(db.SettingCredentialAgent, false),
+		db.SettingCredentialTraffic:            s.m.pg.GetBool(db.SettingCredentialAgent, false) && s.m.pg.GetBool(db.SettingCredentialTraffic, false),
+		"llm_record":                           s.m.LLMRecordEnabled(),
+		"web_search_enabled":                   on,
+		"web_search_backend":                   backend,
+		"brave_key_set":                        strings.TrimSpace(braveKey) != "",
+		"tavily_key_set":                       strings.TrimSpace(tavilyKey) != "",
+		"web_search_proxy":                     proxy,             // 独立出口代理(http/https/socks5)，空=直连
+		"global_proxy":                         s.m.GlobalProxy(), // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
+		"show_egress_ip":                       s.m.pg.GetBool(settingShowEgressIP, false),
+		"python_interpreter":                   strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
+		"workers":                              s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
+		"worker_pools":                         s.m.WorkerPools(),           // 非空时按池顺序绑定 worker 会话
+		"task_concurrency_enabled":             concOn,                      // 任务并发上限开关(默认关)
+		"task_concurrency_limit":               concLimit,                   // 同时运行任务上限(开启后默认5)
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
 		"llm_pool_enabled":       s.m.LLMPoolEnabled(),
@@ -3518,8 +3604,13 @@ func (s *Server) pgDetectPython(w http.ResponseWriter, r *http.Request) {
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TrafficCapture      *bool `json:"traffic_capture"`
+		BrowserScreenshot   *bool `json:"browser_screenshot_enabled"`
+		ScreenshotTimestamp *bool `json:"browser_screenshot_timestamp_enabled"`
+		OpsecEnabled        *bool `json:"opsec_enabled"`
 		AgentTrafficBinding *bool `json:"agent_traffic_binding"`
 		TaskIntelligence    *bool `json:"task_intelligence_enabled"`
+		TaskAutoTitle       *bool `json:"task_auto_title_enabled"`
+		ChatAutoTitle       *bool `json:"chat_auto_title_enabled"`
 		CredentialAgent     *bool `json:"credential_agent_enabled"`
 		CredentialTraffic   *bool `json:"credential_traffic_binding"`
 		LLMRecord           *bool `json:"llm_record"` // LLM 录制开关（默认关）；即时生效，无需重建 agent
@@ -3531,6 +3622,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		TavilyKey        *string       `json:"tavily_search_api_key"`
 		WebSearchProxy   *string       `json:"web_search_proxy"`   // 独立出口代理(http/https/socks5)；null=不改，""=清空
 		GlobalProxy      *string       `json:"global_proxy"`       // 全局出口代理(http/https/socks5)；null=不改，""=清空(直连)
+		ShowEgressIP     *bool         `json:"show_egress_ip"`     // 在顶栏显示直连/全局代理出口 IP；默认关
 		PythonInterp     *string       `json:"python_interpreter"` // 自定义脚本工具的 python 解释器路径
 		Workers          *int          `json:"workers"`            // 并发工作 agent 数(>0)；对之后启动的任务生效
 		WorkerPools      *[]WorkerPool `json:"worker_pools"`
@@ -3706,8 +3798,46 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.TaskAutoTitle != nil {
+		if err := s.m.pg.SetBool(db.SettingTaskAutoTitle, *req.TaskAutoTitle); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.ChatAutoTitle != nil {
+		if err := s.m.pg.SetBool(db.SettingChatAutoTitle, *req.ChatAutoTitle); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
 	if req.AgentTrafficBinding != nil {
 		if err := s.m.pg.SetBool(settingAgentTrafficBinding, *req.AgentTrafficBinding); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.BrowserScreenshot != nil {
+		if err := s.setReporterBrowserScreenshotVisibility(*req.BrowserScreenshot); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		if err := s.m.pg.SetBool(settingBrowserScreenshot, *req.BrowserScreenshot); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		// The reporter's MCP visibility and prompt are assembled when agents are
+		// built. Rebuild immediately so the setting applies to the next run,
+		// rather than only after a later unrelated LLM/settings change.
+		changed = true
+	}
+	if req.ScreenshotTimestamp != nil {
+		if err := s.m.pg.SetBool(settingScreenshotTimestamp, *req.ScreenshotTimestamp); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.OpsecEnabled != nil {
+		if err := s.m.pg.SetBool(settingOpsecEnabled, *req.OpsecEnabled); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
@@ -3726,6 +3856,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changed = true // capture-off egress is baked into agents at build time → rebuild
+	}
+	if req.ShowEgressIP != nil {
+		if err := s.m.pg.SetBool(settingShowEgressIP, *req.ShowEgressIP); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
 	}
 	if req.WebSearchEnabled != nil || req.WebSearchBackend != nil || req.BraveKey != nil || req.TavilyKey != nil || req.WebSearchProxy != nil {
 		// Fill unspecified fields from current state so a partial PUT doesn't reset them.
@@ -3755,6 +3891,39 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, s.settingsPayload())
+}
+
+// setReporterBrowserScreenshotVisibility keeps the report writer's browser MCP
+// permission in sync with the screenshot setting. Other agents retain their
+// explicit MCP permissions.
+func (s *Server) setReporterBrowserScreenshotVisibility(enabled bool) error {
+	reporter, err := s.m.pg.GetAgentByKey("reporter")
+	if err != nil || reporter == nil {
+		return err
+	}
+	servers, err := s.m.pg.ListMCP()
+	if err != nil {
+		return err
+	}
+	for _, server := range servers {
+		if server.Name == browserMCPName {
+			// Turning screenshots on is an explicit opt-in. Make the browser MCP
+			// usable in the shipped root-based container at the same time as the
+			// permission toggle, so the next reporter run gets a working browser
+			// instead of a deterministic Chromium sandbox error.
+			if enabled {
+				server.Args = encodeJSON(ensureBrowserMCPArgs(decodeStrSlice(server.Args), true))
+				server.Enabled = true
+				if _, err := s.m.pg.SaveMCP(server); err != nil {
+					return err
+				}
+			}
+			return s.m.pg.ToggleVisibility(reporter.ID, "mcp", server.ID, enabled)
+		}
+	}
+	// The built-in browser MCP may be deleted by an administrator. Keep the
+	// setting writable so it takes effect automatically if the server returns.
+	return nil
 }
 
 // testWebSearch runs a real "test" search with the given (or currently saved)

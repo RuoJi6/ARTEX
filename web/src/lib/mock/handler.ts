@@ -8,6 +8,7 @@ import {
   isCompanyScopeKind,
   normalizeCompanyScopeValue,
 } from "../company-scope";
+import { filterAndSortFindings } from "../finding-severity";
 import type {
   Activity,
   ArchiveBatchItem,
@@ -950,6 +951,11 @@ function controlMockTask(id: string, action: "pause" | "resume"): BatchControlIt
     task.queued = false;
     task.status = "paused";
     task.engine_mode = "paused";
+    if (task.run_segment_started_unix && task.run_segment_started_unix > 0) {
+      task.active_run_seconds = (task.active_run_seconds ?? 0) + Math.max(0, Math.floor(Date.now() / 1000) - task.run_segment_started_unix);
+      task.run_seconds = task.active_run_seconds;
+    }
+    task.run_segment_started_unix = 0;
   } else {
     if (!task.paused && task.status !== "paused") {
       return { id, ok: false, status: task.status, error: "任务未暂停" };
@@ -958,6 +964,7 @@ function controlMockTask(id: string, action: "pause" | "resume"): BatchControlIt
     task.queued = false;
     task.status = "running";
     task.engine_mode = "exploring";
+    task.run_segment_started_unix = Math.floor(Date.now() / 1000);
   }
   return { id, ok: true, status: task.status, queued: false };
 }
@@ -1247,6 +1254,9 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       status: "created",
       created_at: now.toISOString(),
       created_unix: Math.floor(now.getTime() / 1000),
+      active_run_seconds: 0,
+      run_segment_started_unix: 0,
+      run_seconds: 0,
       paused: false,
       active: true,
       in_flight: 0,
@@ -1962,12 +1972,10 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/exploration/finding-case-review" && m === "POST")
     throw new Error("演示模式不执行 Reporter 整理，请在已配置模型的实例中使用");
   if (path === "/exploration/finding-cases" && m === "GET") {
-    const list = mockApplyAssetScope(mockFilterFindings(q), q.get("asset_scope"));
-    const ranks = { critical: 4, high: 3, medium: 2, low: 1 } as const;
-    list.sort(
-      (a, b) =>
-        (q.get("sort") === "severity" ? ranks[b.severity] - ranks[a.severity] : 0) || +new Date(b.ts) - +new Date(a.ts),
-    );
+    const list = filterAndSortFindings(mockApplyAssetScope(mockFilterFindings(q), q.get("asset_scope")), "all", {
+      field: q.get("sort") === "severity" ? "severity" : "time",
+      direction: q.get("time_direction") === "asc" ? "asc" : "desc",
+    });
     const page = Math.max(1, Number(q.get("page")) || 1);
     const size = Math.min(100, Math.max(1, Number(q.get("limit")) || 20));
     const scoped = mockFindings.filter((f) => !q.get("task_id") || f.task_id === q.get("task_id"));
@@ -2043,11 +2051,16 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
         max_severity: Math.max(...items.map((finding) => severityOrder[finding.severity])),
       };
     });
-    groups.sort((left, right) =>
-      q.get("sort") === "severity"
-        ? right.max_severity - left.max_severity || right.last_found_at.localeCompare(left.last_found_at)
-        : right.last_found_at.localeCompare(left.last_found_at),
-    );
+    groups.sort((left, right) => {
+      const severityCompared = right.max_severity - left.max_severity;
+      if (q.get("sort") === "severity" && severityCompared !== 0) return severityCompared;
+      const timeCompared = Date.parse(left.last_found_at) - Date.parse(right.last_found_at);
+      if (timeCompared !== 0) return q.get("time_direction") === "asc" ? timeCompared : -timeCompared;
+      // Match the backend's task ID DESC NULLS LAST tie-breaker.
+      if (left.task_id === null) return right.task_id === null ? 0 : 1;
+      if (right.task_id === null) return -1;
+      return right.task_id.localeCompare(left.task_id, undefined, { numeric: true });
+    });
     const rawPage = Number(q.get("page") ?? 1);
     const rawPageSize = Number(q.get("limit") ?? 10);
     const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
@@ -2261,13 +2274,10 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     }
     // 全局:带 page/limit → 分页对象;否则裸数组(dashboard)。
     if (!q.has("page") && !q.has("limit")) return mockFindings.map(withFid);
-    const sev = { critical: 4, high: 3, medium: 2, low: 1 } as const;
-    const list = mockApplyAssetScope(mockFilterFindings(q), q.get("asset_scope"));
-    list.sort((a, b) =>
-      q.get("sort") === "severity"
-        ? sev[b.severity] - sev[a.severity] || +new Date(b.ts) - +new Date(a.ts)
-        : +new Date(b.ts) - +new Date(a.ts),
-    );
+    const list = filterAndSortFindings(mockApplyAssetScope(mockFilterFindings(q), q.get("asset_scope")), "all", {
+      field: q.get("sort") === "severity" ? "severity" : "time",
+      direction: q.get("time_direction") === "asc" ? "asc" : "desc",
+    });
     const rawPage = Number(q.get("page") ?? 1);
     const rawPageSize = Number(q.get("limit") ?? 20);
     const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
@@ -2374,6 +2384,28 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/settings/basic-auth" && m === "PUT")
     throw new Error("演示模式不支持修改 HTTP Basic Auth，请在实际部署中配置");
   if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };
+  if (path === "/settings/proxy/test")
+    return {
+      ok: true,
+      capture: false,
+      configured: "",
+      agent_proxy: "",
+      checks: [
+        {
+          key: "direct",
+          label: "① 直连 IP（不经过代理）",
+          result: { ok: true, exit_ip: "203.0.113.7", via: "direct", via_label: "直连", latency_ms: 12, probes: [] },
+        },
+        {
+          key: "global",
+          label: "② 经全局代理的出口 IP",
+          skipped: true,
+          skip_reason: "输入框为空，未配置代理",
+          result: { ok: false, latency_ms: 0, probes: [] },
+        },
+      ],
+      warnings: [],
+    };
   if (path === "/settings/python/detect") return { python_interpreter: "/usr/bin/python3" };
   if (path === "/chat")
     return { reply: "（demo）我已把该建议注入为一条高优意图，work agent 会尽快执行。", mode: "hint" };

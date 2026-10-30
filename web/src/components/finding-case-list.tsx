@@ -122,6 +122,7 @@ export function FindingCaseMembers({
   renderRecords?: (items: Finding[]) => React.ReactNode;
 }) {
   const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(20);
   const [data, setData] = React.useState<{ items: Finding[]; total: number } | null>(null);
   const [error, setError] = React.useState("");
   const [retry, setRetry] = React.useState(0);
@@ -130,7 +131,7 @@ export function FindingCaseMembers({
     let active = true;
     setError("");
     api
-      .findingCaseMembers(caseId, page, contextTask)
+      .findingCaseMembers(caseId, page, contextTask, pageSize)
       .then((v) => {
         if (active) setData(v);
       })
@@ -140,7 +141,7 @@ export function FindingCaseMembers({
     return () => {
       active = false;
     };
-  }, [caseId, page, version, contextTask, retry]);
+  }, [caseId, page, pageSize, version, contextTask, retry]);
   if (error)
     return (
       <Alert>
@@ -173,14 +174,17 @@ export function FindingCaseMembers({
               matched={!matchedIds || matchedIds.includes(Number(f.finding_id))}
             />
           ))}
-      {data.total > 20 ? (
+      {data.total > 10 ? (
         <TablePagination
           page={page}
-          pageSize={20}
+          pageSize={pageSize}
           total={data.total}
           onPageChange={setPage}
-          onPageSizeChange={() => setPage(1)}
-          pageSizeOptions={[20]}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+          pageSizeOptions={[10, 20, 50, 100]}
         />
       ) : null}
     </div>
@@ -406,6 +410,7 @@ export function FindingCaseList({
   onTotal?: (total: number) => void;
 }) {
   const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(20);
   const [data, setData] = React.useState<FindingCasePage | null>(null);
   const [error, setError] = React.useState("");
   const [refresh, setRefresh] = React.useState(0);
@@ -420,7 +425,7 @@ export function FindingCaseList({
     let timer: ReturnType<typeof setTimeout>;
     async function load() {
       try {
-        const v = await api.findingCases({ ...JSON.parse(key), page, pageSize: 20 });
+        const v = await api.findingCases({ ...JSON.parse(key), page, pageSize });
         if (active) {
           setData(v);
           setError("");
@@ -436,7 +441,7 @@ export function FindingCaseList({
       active = false;
       clearTimeout(timer);
     };
-  }, [key, page, refresh]);
+  }, [key, page, pageSize, refresh]);
   React.useEffect(() => {
     if (data) onTotal?.(data.total);
   }, [data, onTotal]);
@@ -500,11 +505,14 @@ export function FindingCaseList({
       {data ? (
         <TablePagination
           page={page}
-          pageSize={20}
+          pageSize={pageSize}
           total={data.total}
           onPageChange={setPage}
-          onPageSizeChange={() => setPage(1)}
-          pageSizeOptions={[20]}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+          pageSizeOptions={[10, 20, 50, 100]}
         />
       ) : null}
     </div>

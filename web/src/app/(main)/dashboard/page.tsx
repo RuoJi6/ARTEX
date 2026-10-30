@@ -9,6 +9,9 @@ import {
   ArrowUpRightIcon,
   BugIcon,
   ClockIcon,
+  CpuIcon,
+  HardDriveIcon,
+  MemoryStickIcon,
   NetworkIcon,
   ShieldCheckIcon,
   TargetIcon,
@@ -38,6 +41,7 @@ import type {
   Tool,
   TrafficExchange,
   UsageStats,
+  SystemMetrics,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -101,6 +105,35 @@ function statusBg(code: number): string {
   return "bg-red-400";
 }
 
+function SystemResourceStatus({ metrics }: { metrics: SystemMetrics | null }) {
+  if (!metrics) return null;
+  if (!metrics.supported) {
+    return <div className="ml-auto text-xs text-muted-foreground" role="status">资源状态：暂不支持</div>;
+  }
+  const items = [
+    [CpuIcon, "CPU", metrics.cpu.percent],
+    [MemoryStickIcon, "内存", metrics.memory.percent],
+    [HardDriveIcon, "磁盘", metrics.data_disk.percent],
+  ] as const;
+  return (
+    <div className="ml-auto flex min-w-0 items-center justify-end gap-3 text-xs text-muted-foreground" role="status" aria-live="polite">
+      <span className="shrink-0 font-medium">容器资源</span>
+      {items.map(([Icon, label, value]) => (
+        <div key={label} className="w-24 min-w-0" title={`${label} ${value.toFixed(1)}%`}>
+          <div className="mb-1 flex items-center justify-between gap-1 text-[10px]">
+            <span className="inline-flex items-center gap-1"><Icon className="size-3" aria-hidden="true" />{label}</span>
+            <span className="tabular-nums">{value.toFixed(1)}%</span>
+          </div>
+          <Progress
+            value={value}
+            className="h-2 bg-muted [&_[data-slot=progress-indicator]]:bg-slate-500 dark:[&_[data-slot=progress-indicator]]:bg-slate-400"
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── sub-components ────────────────────────────────────────────────────────────
 
 function LiveDot({ className }: { className?: string }) {
@@ -147,6 +180,22 @@ export default function DashboardPage() {
   const [skills, setSkills] = React.useState<SkillItem[]>([]);
   const [tools, setTools] = React.useState<Tool[]>([]);
   const [llmProfiles, setLLMProfiles] = React.useState<LLMProfile[]>([]);
+  const [systemMetrics, setSystemMetrics] = React.useState<SystemMetrics | null>(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const next = await api.systemMetrics();
+        if (alive) setSystemMetrics(next);
+      } catch {
+        /* retry on the next interval */
+      }
+    };
+    void load();
+    const timer = setInterval(load, 5000);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
 
   // The task list is the most expensive dashboard source. Poll it independently
   // so a large history cannot hold back every other dashboard panel.
@@ -495,9 +544,12 @@ export default function DashboardPage() {
     <div className="flex flex-1 flex-col gap-4 pb-6">
       {/* ── Header ── */}
       <div>
+        <div className="flex items-center gap-6">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">总览</h1>
           <p className="text-xs text-muted-foreground">系统全局状态 · 实时刷新</p>
+        </div>
+          <SystemResourceStatus metrics={systemMetrics} />
         </div>
       </div>
 

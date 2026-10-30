@@ -33,6 +33,7 @@ import type {
   DeleteTaskOptions,
   DeleteTaskResult,
   Edge,
+  EgressReport,
   EvidenceBodyPreview,
   ExplorationNodePage,
   ExplorationNodeQuery,
@@ -116,6 +117,7 @@ import type {
   UsageStats,
   WorkspaceFile,
   WorkspaceListing,
+  SystemMetrics,
 } from "@/lib/types";
 
 function getToken(): string | null {
@@ -242,6 +244,9 @@ function findingFilterParams(q: Omit<FindingQuery, "page" | "pageSize">): URLSea
   if (q.task && q.task !== "all") p.set("task_id", q.task);
   if (q.query?.trim()) p.set("q", q.query.trim());
   if (q.sort) p.set("sort", q.sort);
+  if (q.timeDirection) p.set("time_direction", q.timeDirection);
+  if (q.from) p.set("from", q.from);
+  if (q.to) p.set("to", q.to);
   if (q.assetScope) p.set("asset_scope", q.assetScope);
   return p;
 }
@@ -289,6 +294,7 @@ function schedulePayload(input: ScheduleInput) {
 export const api = {
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; service: string; version: string }>("/health"),
+  systemMetrics: () => get<SystemMetrics>("/system/metrics"),
 
   // ---- auth ----
   authStatus: () => get<{ initialized: boolean }>("/auth/status"),
@@ -460,6 +466,10 @@ export const api = {
     }>(`/tasks/${id}/coverage`),
   // 资产覆盖图：范围内全部资产 + 连接用的根域名/公司节点，含 tested/in_scope。
   taskCoverageGraph: (id: string) => get<CoverageGraphData>(`/tasks/${id}/coverage-graph`),
+  startTopologyMapping: (id: string) =>
+    post<{ status: string; agent_key: string; conversation_id: number }>(`/tasks/${id}/topology-mapping`, {}),
+  topologyMappingStatus: (id: string) =>
+    get<{ running: boolean; conversation_id?: number }>(`/tasks/${id}/topology-mapping/status`),
   // 全局 llm_usage 聚合（仪表盘新版 token 视图）：按 profile 总量 + 按天分桶。
   usageStats: (days = 365) => get<UsageStats>(`/tokens/usage?days=${days}`),
   // ---- 目标管理（总览）----
@@ -649,9 +659,9 @@ export const api = {
     get<FindingCaseDetail>(
       `/exploration/finding-cases/${id}${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
     ),
-  findingCaseMembers: (id: string, page = 1, contextTask?: string) =>
+  findingCaseMembers: (id: string, page = 1, contextTask?: string, pageSize = 20) =>
     get<FindingsPage>(
-      `/exploration/finding-cases/${id}/members?page=${page}&limit=20${contextTask ? `&context_task=${encodeURIComponent(contextTask)}` : ""}`,
+      `/exploration/finding-cases/${id}/members?page=${page}&limit=${pageSize}${contextTask ? `&context_task=${encodeURIComponent(contextTask)}` : ""}`,
     ),
   removeFindingCaseMember: (id: string, fid: string, reason: string) =>
     http<{ ok: boolean }>(`/exploration/finding-cases/${id}/members/${fid}`, {
@@ -718,6 +728,11 @@ export const api = {
   getFinding: (id: string, contextTaskId?: string) =>
     get<Finding>(
       `/exploration/findings/${id}${contextTaskId ? `?context_task=${encodeURIComponent(contextTaskId)}` : ""}`,
+    ),
+  generateFindingReport: (id: string) =>
+    post<{ queued: boolean; agent_key: "reporter"; finding_id: number; finding_node_id: number }>(
+      `/exploration/findings/${encodeURIComponent(id)}/generate-report`,
+      {},
     ),
   findingTraffic: (id: string, contextTask?: string) =>
     get<FindingTraffic>(
@@ -907,6 +922,7 @@ export const api = {
     method = "",
     q = "",
     opts: {
+      taskId?: string;
       body?: string;
       path?: string;
       status?: string;
@@ -918,6 +934,7 @@ export const api = {
   ) =>
     get<TrafficResp>(
       `/traffic?page=${page}&size=${size}` +
+        (opts.taskId ? `&task_id=${encodeURIComponent(opts.taskId)}` : "") +
         (host ? `&host=${encodeURIComponent(host)}` : "") +
         (method && method !== "all" ? `&method=${encodeURIComponent(method)}` : "") +
         (q ? `&q=${encodeURIComponent(q)}` : "") +
@@ -930,7 +947,8 @@ export const api = {
         (opts.order ? `&order=${encodeURIComponent(opts.order)}` : ""),
     ),
   trafficExchange: (id: string) => get<TrafficDetail>(`/traffic/exchange?id=${encodeURIComponent(id)}`),
-  trafficHosts: () => get<{ hosts: TrafficHost[] }>(`/traffic/hosts`),
+  trafficHosts: (taskId?: string) =>
+    get<{ hosts: TrafficHost[] }>(`/traffic/hosts${taskId ? `?task_id=${encodeURIComponent(taskId)}` : ""}`),
   trafficDeleteHost: (host: string) => del<{ deleted: number }>(`/traffic?host=${encodeURIComponent(host)}`),
   trafficDeleteHosts: (hosts: string[]) => del<{ deleted: number }>(`/traffic/hosts`, { hosts }),
   // Purges every exchange and compacts the index; `reclaimed` is the bytes of
@@ -962,6 +980,10 @@ export const api = {
     brave_search_api_key?: string;
     tavily_search_api_key?: string;
   }) => post<{ ok: boolean; error?: string; count?: number; backend?: string }>(`/settings/web-search/test`, patch),
+
+  // global_proxy 传空 = 测直连；probe_url 可覆盖默认探测地址（隔离网用）。
+  testEgressProxy: (patch: { global_proxy?: string; probe_url?: string }) =>
+    post<EgressReport>(`/settings/proxy/test`, patch),
 
   // ---- 漏洞 IM 推送 ----
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，

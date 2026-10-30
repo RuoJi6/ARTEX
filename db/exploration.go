@@ -1272,7 +1272,7 @@ func (d *DB) TokenTotalsAll() (map[int64]TokenUsage, error) {
 // LastActivityAll returns the unix time of the most recent activity per
 // exploration (exploration_id → max created_at epoch), one query for all tasks.
 // Persisted (unlike Engine.LastActivity's in-memory map), so it survives restarts
-// and gives终态任务 a stable "ran until" time for computing run duration.
+// and gives终态任务 a stable last-activity time for history views.
 func (d *DB) LastActivityAll() (map[int64]int64, error) {
 	rows, err := d.Query(`SELECT exploration_id, EXTRACT(EPOCH FROM MAX(created_at))::bigint FROM activity GROUP BY exploration_id`)
 	if err != nil {

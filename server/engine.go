@@ -937,6 +937,9 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			return
 		}
 		defer e.decInflight(t.ID)
+		if err := e.m.StartTaskRunSegment(t.ID); err != nil {
+			log.Printf("[runtime] task %s start segment failed: %v", t.ID, err)
+		}
 		e.stampFirstRun(t) // 首次真正规划 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
 		e.touch(t.ID)
 		emit := func(r db.Activity) { e.emitActivity(t, r) }
@@ -1085,6 +1088,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			log.Printf("[worker %s] task %s 意图 #%d 领取后回退失败: %v", name, t.ID, intent.ID, err)
 		}
 		return true
+	}
+	if err := e.m.StartTaskRunSegment(t.ID); err != nil {
+		log.Printf("[runtime] task %s start segment failed: %v", t.ID, err)
 	}
 	// per-work child context so the planner's kill_work can stop just this work.
 	workCtx, workCancel := context.WithCancelCause(ectx)

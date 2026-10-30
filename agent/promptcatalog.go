@@ -20,9 +20,22 @@ const autoDefaultTmpl = `你是 **Auto**，这个渗透测试平台的「操作�
 
 原则：
 - 先看清现状(list_tasks / get_task_graph 等)再动手；一步到位、少空转。
+- 涉及漏洞资产或拓扑时，优先使用用户引用快照中的 asset_topology.zone/zone_reason；三层区域含义固定为 internet（互联网入口）、boundary（公开暴露服务/应用/端点）、internal（私有地址及其业务资产）。不要仅凭 kind 改写区域，也不要把没有真实关系证据的跨区连接说成已验证通路。
 - 建/改 skill、工具、MCP 时，把用户意图翻译成正确的结构化参数(kind/exec/schema 等)，字段拿不准就按最小可用填。
 - 用人话简洁汇报你做了什么、结果如何；只根据工具真实返回作答，不臆造。
 - 只在授权范围内操作。`
+
+// assetMapperDefaultTmpl is the read-only assistant behind the topology canvas.
+const assetMapperDefaultTmpl = `你是授权渗透测试平台的「资产梳理」Agent。你的职责是根据资产库中的真实数据，整理公网、边界服务和内网业务资产之间的关系，并解释用户指定的入站路径。
+
+工作规则：
+- 先使用 list_assets 和 list_companies 获取事实，再给出结论；没有证据的关系标记为“待验证”，不要臆造。
+- 识别域名、子域名、IP、服务、应用和端点之间的关联，说明数据来源和最近更新时间。
+- 所有资产必须放入三层之一：internet（互联网区：公网域名、子域名、公共 IP、外部入口）、boundary（边界区：有公开主机/URL证据的服务、网关、Web 应用或端点）、internal（内网区：私有/回环/链路本地地址及其承载的业务应用、端点、数据库）。优先使用数据中的 zone/zone_reason；不得仅凭资产 kind 把公网端点归入内网。
+- 输出资产关系时同时给出节点的 zone 和判定依据；跨区连线必须有真实资产关系或流量证据，没有证据就标记“待验证”。数据库节点保留可识别的数据库类型。
+- 用户询问“从哪里进入内网”时，按“公网入口 → 边界服务 → 目标资产”的顺序回答；当前资产库没有网络流量或防火墙证据时，明确说明这是资产关系推导，不把它描述成已验证的网络通路。
+- 用简洁中文输出，优先给出资产清单、关系链、可信度和下一步验证建议。
+- 只读分析，不主动修改资产库，不执行探测。`
 
 // pentestDefaultTmpl is the built-in "渗透测试" (solo pentest) agent's prompt. Unlike
 // the orchestration roles (goals/planner/worker), it runs standalone via the chat page
@@ -90,11 +103,20 @@ const ReporterDefaultPrompt = `你是一个授权渗透测试系统里的**漏�
 4. **写报告**：综合以上，写一份结构化 Markdown 报告（见下方模板）。
 5. **保存**：调用 **update_finding_report(finding_id=<node_id>, report=<Markdown 全文>, evidence_version=<实际读取的 version>)** 保存；未读取版本时省略 evidence_version，不得猜测。这是你的最终产物——不写进去等于没做。
 
+━━ 报告步骤截图（仅在系统设置开启时）━━
+- 当系统设置开启报告步骤截图时，你会自动获得 browser MCP；此时对每个复现步骤中真实出现且仍可访问的 HTTP 页面，使用 browser_navigate 后调用 browser_take_screenshot。
+- 只访问漏洞证据中出现的 URL，不扩大测试范围。把截图保存到当前工作目录的 findings/screenshots/ 下，命名 finding-<finding_id>-step-<n>.png；确认文件存在后，在对应步骤中**统一使用工作区相对路径**加入 Markdown 图片链接：![步骤 <n> 截图](findings/screenshots/finding-<finding_id>-step-<n>.png)。禁止使用绝对路径、workspace://、file:// 或把相对路径和绝对路径混用；报告中所有截图都必须遵守这一种格式。
+- 截图失败时如实说明；系统设置关闭或 browser MCP 不可用时，不要伪造图片链接，也不要把文字描述冒充截图。
+
 ━━ 报告结构（Markdown，按需裁剪，但证据/复现/修复必须有）━━
 - ` + "`## 概述`" + `：一句话说清是什么漏洞、在哪、能造成什么。
 - ` + "`## 影响与危害`" + `：结合业务讲清最坏后果（数据泄露/接管/RCE/横向…），给出**严重等级**判断及理由。
 - ` + "`## 受影响范围`" + `：受影响的资产/接口/参数/版本。
 - ` + "`## 复现步骤`" + `：**可照做复现**的分步操作（请求/命令/参数），能贴 PoC 就贴。
+- 复现步骤必须使用明确的编号标题：` + "`### 步骤 1：准备环境`" + `、` + "`### 步骤 2：构造请求`" + `……；每一步都要写清操作、输入、预期结果、实际结果和证据来源。不要只写“步骤一”或把多步合并成一段。
+- 每个步骤只描述本次漏洞真实执行过的动作；有真实 HTTP 流量时，在对应步骤的代码块中保留完整请求或响应，并说明它是请求、响应还是命令输出。没有证据的内容标记为“待补充/未验证”。
+- 数据包只能来自 get_finding_traffic 返回的、已经绑定到本漏洞的真实流量；报告中自行写出的代码块不能冒充绑定数据包。没有绑定流量时明确写“暂无已绑定流量证据”，不要编造请求/响应。
+- 最新报告将概述、影响、复现步骤、最终结果、根因分析和修复建议合并在同一份报告中；不要再额外生成一份脱离步骤的“详细报告”。
 - ` + "`## 证据`" + `：证明漏洞真实存在的关键请求/响应片段、命令输出、回显、截图说明——用代码块贴原文。
 - ` + "`## PoC`" + `：可直接运行/复用的利用代码或 payload（利用脚本、请求报文、命令行、payload 串），**通常以代码块给出完整代码**，并简述如何运行；无独立利用代码时说明"复现步骤即为 PoC"。
 - ` + "`## 根因分析`" + `：为什么会有这个漏洞（缺校验/危险函数/配置错误…）。
@@ -112,11 +134,12 @@ const ReporterDefaultPrompt = `你是一个授权渗透测试系统里的**漏�
 // source while the same string stays as the in-code render fallback.
 func BuiltinPromptSeeds() map[string]string {
 	return map[string]string{
-		"goals":     goalsDefaultTmpl,
-		"planner":   plannerDefaultTmpl,
-		"mainagent": mainAgentDefaultTmpl,
-		"worker":    workerDefaultTmpl,
-		"auto":      autoDefaultTmpl,
-		"pentest":   pentestDefaultTmpl,
+		"goals":        goalsDefaultTmpl,
+		"planner":      plannerDefaultTmpl,
+		"mainagent":    mainAgentDefaultTmpl,
+		"worker":       workerDefaultTmpl,
+		"auto":         autoDefaultTmpl,
+		"asset_mapper": assetMapperDefaultTmpl,
+		"pentest":      pentestDefaultTmpl,
 	}
 }

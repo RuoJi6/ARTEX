@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -41,13 +42,16 @@ func (s *Server) seedCredentialProcessor() {
 	_ = s.m.pg.SetBool(flag, true)
 }
 func (s *Server) runCredentialProcessor() {
-	ticker := time.NewTicker(3 * time.Second)
+	// Events wake the worker immediately. The slow ticker is only a recovery
+	// scan for rows created before a notification or after a process restart.
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
+		case <-s.credentialWake:
 		}
 		if !s.m.pg.GetBool(db.SettingTaskIntelligence, false) || !s.m.pg.GetBool(db.SettingCredentialAgent, false) {
 			continue
@@ -93,6 +97,14 @@ func (s *Server) processCredentialJob(parent context.Context, item *db.Intellige
 		}
 	}()
 	result := *item.Credentials
+	conversationID := result.ConversationID
+	if conversationID == 0 {
+		if c, err := s.m.pg.CreateConversation(db.CredentialAgentKey, "凭据整理 · "+firstLine(item.Title, 42), nil); err == nil {
+			conversationID = c.ID
+			result.ConversationID = c.ID
+			_, _ = s.m.pg.AppendConvActivity(c.ID, db.Activity{Worker: db.CredentialAgentKey, Kind: "user", Summary: "收到凭据上报，开始整理", Detail: item.Content})
+		}
+	}
 	needsExtract := result.ForceExtract || result.SourceHash != db.CredentialSourceHash(item.Content) || result.Method == "" || (result.Error != "" && len(result.Accounts) == 0)
 	result.State = "ready"
 	result.ForceExtract = false
@@ -185,7 +197,19 @@ func (s *Server) processCredentialJob(parent context.Context, item *db.Intellige
 	if err := s.m.pg.FinishCredentialJob(finish, item, result); err != nil {
 		log.Printf("[credentials] save record #%d: %v", item.ID, err)
 	}
+	if conversationID > 0 {
+		detail, _ := json.Marshal(result)
+		kind, summary := "result", "凭据整理完成"
+		isError := result.State == "error"
+		if isError {
+			kind, summary = "text", "凭据整理失败："+result.Error
+		}
+		_, _ = s.m.pg.AppendConvActivity(conversationID, db.Activity{Worker: db.CredentialAgentKey, Kind: kind, IsError: isError, Summary: summary, Detail: string(detail), InputTokens: intPtr(result.InputTokens), OutputTokens: intPtr(result.OutputTokens)})
+		_ = s.m.pg.TouchConversation(conversationID)
+	}
 }
+
+func intPtr(v int) *int { return &v }
 
 var credentialURLs = regexp.MustCompile(`https?://[^\s<>"'，；）)]+`)
 var credentialTrafficIDs = regexp.MustCompile(`\b[0-9]{8,}-[0-9]{3,}\b`)

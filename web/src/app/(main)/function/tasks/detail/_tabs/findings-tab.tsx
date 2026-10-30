@@ -13,18 +13,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api } from "@/lib/api";
-import { filterAndSortFindings } from "@/lib/finding-severity";
+import { type FindingSortField, filterAndSortFindings } from "@/lib/finding-severity";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import { SEVERITY_FILTER_OPTIONS, statusMeta } from "@/lib/status";
 import type { Finding, FindingStatus, Severity } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type FindingSortField = "time";
-
-const FINDING_SORT_FIELDS: readonly FindingSortField[] = ["time"];
+const FINDING_SORT_FIELDS: readonly FindingSortField[] = ["time", "severity"];
 const FINDING_SORT_PREFERENCE_KEY = "artex_task_findings_sort";
 
 function findingLabel(finding: Finding): string {
@@ -185,7 +183,7 @@ export function FindingsTab({ taskId }: { taskId: string }) {
 
   // Discover inherited sources before filtering; finding-cases owns folder matching.
   const taskFindings = findings.filter((f) => f.task_id === taskId || f.inherited);
-  const items = filterAndSortFindings(taskFindings, severity, sortPreference.direction, query);
+  const items = filterAndSortFindings(taskFindings, severity, sortPreference, query);
 
   return (
     <div className="flex flex-col gap-4">
@@ -204,6 +202,42 @@ export function FindingsTab({ taskId }: { taskId: string }) {
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
+        <Select
+          value={sortPreference.field}
+          onValueChange={(field) => {
+            if (field === "time" || field === "severity") {
+              setSortPreference((current) => ({ ...current, field }));
+            }
+          }}
+        >
+          <SelectTrigger size="sm" className="w-36" aria-label="发现排序方式">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="time">按时间排序</SelectItem>
+            <SelectItem value="severity">按严重度排序</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label={`${sortPreference.field === "severity" ? "同严重度" : "全部"}发现时间当前${sortPreference.direction === "asc" ? "正序" : "倒序"}，点击切换排序方向`}
+          onClick={() =>
+            setSortPreference((current) => ({
+              ...current,
+              direction: current.direction === "asc" ? "desc" : "asc",
+            }))
+          }
+        >
+          {sortPreference.direction === "asc" ? (
+            <ArrowUpIcon aria-hidden="true" />
+          ) : (
+            <ArrowDownIcon aria-hidden="true" />
+          )}
+          {sortPreference.field === "severity" ? "同严重度：" : ""}
+          {sortPreference.direction === "asc" ? "最早优先" : "最新优先"}
+        </Button>
         <form
           className="flex w-full items-center gap-2 sm:w-auto"
           onSubmit={(event) => {
@@ -233,7 +267,8 @@ export function FindingsTab({ taskId }: { taskId: string }) {
           task: taskId,
           severity: severity === "all" ? undefined : severity,
           query: query || undefined,
-          sort: "severity",
+          sort: sortPreference.field,
+          timeDirection: sortPreference.direction,
         }}
         contextTask={taskId}
       />
@@ -252,7 +287,8 @@ export function FindingsTab({ taskId }: { taskId: string }) {
               task: source,
               severity: severity === "all" ? undefined : severity,
               query: query || undefined,
-              sort: "severity",
+              sort: sortPreference.field,
+              timeDirection: sortPreference.direction,
             }}
             contextTask={taskId}
             readOnly
@@ -264,25 +300,17 @@ export function FindingsTab({ taskId }: { taskId: string }) {
         <Card className="overflow-hidden py-0">
           <CardContent className="px-0">
             <div className="flex items-center border-b px-4 py-2 text-xs text-muted-foreground">
-              <span className="min-w-0 flex-1">漏洞（按严重度排序）</span>
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 outline-none focus-visible:underline"
-                aria-label={`同等级发现时间当前${sortPreference.direction === "asc" ? "正序" : "倒序"}，点击切换排序方向`}
-                onClick={() =>
-                  setSortPreference((current) => ({
-                    field: "time",
-                    direction: current.direction === "asc" ? "desc" : "asc",
-                  }))
-                }
-              >
-                <span>同等级发现时间</span>
+              <span className="min-w-0 flex-1">
+                漏洞（{sortPreference.field === "severity" ? "按严重度排序" : "按时间排序"}）
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span>{sortPreference.field === "severity" ? "同严重度发现时间" : "发现时间"}</span>
                 {sortPreference.direction === "asc" ? (
                   <ArrowUpIcon className="size-3.5" />
                 ) : (
                   <ArrowDownIcon className="size-3.5" />
                 )}
-              </button>
+              </span>
             </div>
             {items.map((f) => (
               <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />

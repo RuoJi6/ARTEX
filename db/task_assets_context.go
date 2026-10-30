@@ -229,7 +229,6 @@ FROM assets a JOIN context_assets ctx ON ctx.id=a.id`, taskID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	hosts := map[string]struct{}{}
 	add := func(host string) {
 		host = strings.TrimSpace(strings.ToLower(host))
@@ -250,6 +249,55 @@ FROM assets a JOIN context_assets ctx ON ctx.id=a.id`, taskID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	// A task may be scoped to domains before the asset graph has materialized
+	// every matching subdomain/service row. Include the declared scope values so
+	// task HTTP history still sees the real recorded traffic. Root domains use a
+	// wildcard marker understood by traffic.Page and therefore include subdomains.
+	scopes, err := s.ListTaskScopeWithSources(taskID)
+	if err != nil {
+		return nil, err
+	}
+	rootDomains := map[string]bool{}
+	for _, scope := range scopes {
+		domain := strings.TrimSpace(strings.ToLower(scope.Domain))
+		switch scope.Kind {
+		case "root_domain":
+			if domain != "" {
+				add(domain)
+				rootDomains[domain] = false
+			}
+		case "subdomain":
+			if domain != "" {
+				add(domain)
+			}
+		case "ip", "cidr":
+			add(strings.TrimSpace(strings.ToLower(scope.Value)))
+			network := strings.TrimSpace(strings.ToLower(scope.Net))
+			add(network)
+			if slash := strings.IndexByte(network, '/'); slash > 0 {
+				add(network[:slash])
+			}
+		}
+	}
+	for _, scope := range scopes {
+		if scope.Kind != "subdomain" {
+			continue
+		}
+		domain := strings.TrimSpace(strings.ToLower(scope.Domain))
+		for root := range rootDomains {
+			if domain == root || strings.HasSuffix(domain, "."+root) {
+				rootDomains[root] = true
+			}
+		}
+	}
+	for root, hasChildren := range rootDomains {
+		if !hasChildren {
+			add("*." + root)
+		}
 	}
 	out := make([]string, 0, len(hosts))
 	for host := range hosts {

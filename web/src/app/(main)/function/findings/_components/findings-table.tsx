@@ -75,6 +75,12 @@ export interface FindingEdit {
 
 export type FindingReport = { status: "loading" | "done" | "error"; text: string };
 
+function isStructuredReproductionReport(report: string) {
+  return (
+    /^##\s+(?:复现步骤|测试过程|复现过程)\s*$/im.test(report) && /^\s*(?:###\s*)?步骤\s*\d+[.、:：)）]/im.test(report)
+  );
+}
+
 // Exploration node ids are only unique inside a task. Prefer the persisted
 // finding id and otherwise namespace the node id by task so editing one group
 // cannot update a similarly-named node in another expanded group.
@@ -446,8 +452,8 @@ export function FindingsTable({
                         {f.evidence}
                       </pre>
 
-                      {/* 详细报告(Markdown):展开时按 finding_id 懒加载,免进详情页即可查看。 */}
-                      {f.finding_id && (
+                      {/* 旧版详细报告保留；新版合并报告在详情页按概览/步骤/根因/修复展示。 */}
+                      {f.finding_id && !isStructuredReproductionReport(reports[rowKey]?.text ?? "") && (
                         <div className="flex flex-col gap-1.5">
                           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                             <span className="flex items-center gap-2">

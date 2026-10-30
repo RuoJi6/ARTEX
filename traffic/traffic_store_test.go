@@ -414,6 +414,25 @@ func TestPageFiltersAndSort(t *testing.T) {
 	}
 }
 
+func TestPageHostScopeMatchesTaskHostsAndPorts(t *testing.T) {
+	tr, _ := openTraffic(t)
+	tr.record(newFlow("api.example.com", "GET", "/", nil, []byte("bare")))
+	tr.record(newFlow("api.example.com:8443", "GET", "/", nil, []byte("port")))
+	tr.record(newFlow("other.example.com", "GET", "/", nil, []byte("other")))
+	rows, total, err := tr.Page(PageQuery{Hosts: []string{"api.example.com"}, RespMin: -1, RespMax: -1}, 0, 100)
+	if err != nil || total != 2 || len(rows) != 2 {
+		t.Fatalf("task host scope should match bare host and host:port, total=%d rows=%d err=%v", total, len(rows), err)
+	}
+	hosts, err := tr.HostsForScope([]string{"api.example.com"})
+	if err != nil || len(hosts) != 1 {
+		t.Fatalf("scoped host picker should return 1 normalized host, len=%d err=%v", len(hosts), err)
+	}
+	rows, total, err = tr.Page(PageQuery{Hosts: []string{"*.example.com"}, RespMin: -1, RespMax: -1}, 0, 100)
+	if err != nil || total != 3 || len(rows) != 3 {
+		t.Fatalf("wildcard root scope should include subdomains, total=%d rows=%d err=%v", total, len(rows), err)
+	}
+}
+
 func TestQueryHostPortAndURLForms(t *testing.T) {
 	tr, _ := openTraffic(t)
 	tr.record(newFlow("api.example.com:8082", "GET", "/admin", nil, []byte("8082")))

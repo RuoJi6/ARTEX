@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -223,6 +224,89 @@ func (s *Server) wsDownload(w http.ResponseWriter, r *http.Request) {
 	// RFC 5987 filename* keeps non-ASCII names intact; plain filename is the fallback.
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+sanitizeFilename(name)+"\"; filename*=UTF-8''"+url.PathEscape(name))
 	http.ServeFile(w, r, abs)
+}
+
+// GET /api/workspace/preview?path=<rel> — serve an image inline for report
+// Markdown. Unlike download, this uses an inline content disposition so a
+// report can render a saved browser screenshot with a normal Markdown image URL.
+func (s *Server) wsPreview(w http.ResponseWriter, r *http.Request) {
+	rawPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	abs, ok := s.wsResolve(rawPath)
+	if filepath.IsAbs(rawPath) {
+		base := filepath.Clean(s.m.dir)
+		candidate := filepath.Clean(rawPath)
+		ok = candidate == base || strings.HasPrefix(candidate, base+string(os.PathSeparator))
+		if ok {
+			abs = candidate
+		}
+	}
+	if !ok {
+		writeErr(w, 400, "非法路径")
+		return
+	}
+	fi, err := os.Stat(abs)
+	// Reports use the workspace-relative canonical path
+	// findings/screenshots/finding-<node>-step-<n>.png, while the files live
+	// under the per-conversation session directory. Resolve that exact suffix
+	// in the newest matching session so the links stay portable across reports.
+	if (err != nil || fi.IsDir()) && !filepath.IsAbs(rawPath) {
+		if fallback, found := s.findSessionPreview(rawPath); found {
+			abs = fallback
+			fi, err = os.Stat(abs)
+		}
+	}
+	if err != nil || fi.IsDir() {
+		writeErr(w, 404, "文件不存在")
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(abs))
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" && ext != ".gif" {
+		writeErr(w, 415, "仅支持图片预览")
+		return
+	}
+	if s.m.pg.GetBool(settingScreenshotTimestamp, false) {
+		rawRel := filepath.ToSlash(strings.TrimPrefix(strings.TrimSpace(rawPath), "/"))
+		rel := filepath.ToSlash(s.wsRel(abs))
+		if strings.HasPrefix(rawRel, "findings/screenshots/") || strings.HasPrefix(rel, "findings/screenshots/") || strings.Contains(rel, "/findings/screenshots/") {
+			// The frontend renders this as a small top-right overlay. Use the
+			// file mtime so the label reflects capture/save time, not view time.
+			// Containers may run with UTC even when the host is configured for
+			// China Standard Time, so make the report display zone explicit.
+			w.Header().Set("X-Report-Screenshot-Timestamp", reportScreenshotTimestamp(fi.ModTime()))
+		}
+	}
+	w.Header().Set("Content-Disposition", "inline; filename=\""+sanitizeFilename(filepath.Base(abs))+"\"")
+	http.ServeFile(w, r, abs)
+}
+
+func reportScreenshotTimestamp(t time.Time) string {
+	return t.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02 15:04:05")
+}
+
+func (s *Server) findSessionPreview(rawPath string) (string, bool) {
+	rel := filepath.Clean(strings.TrimPrefix(strings.TrimSpace(rawPath), "/"))
+	const prefix = "findings" + string(os.PathSeparator) + "screenshots" + string(os.PathSeparator)
+	if rel == "." || !strings.HasPrefix(rel, prefix) || strings.Contains(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	base := filepath.Join(filepath.Clean(s.m.dir), "sessions")
+	matches, err := filepath.Glob(filepath.Join(base, "*", filepath.FromSlash(rel)))
+	if err != nil || len(matches) == 0 {
+		return "", false
+	}
+	var newest string
+	var newestTime int64
+	for _, candidate := range matches {
+		info, statErr := os.Stat(candidate)
+		if statErr != nil || info.IsDir() {
+			continue
+		}
+		mtime := info.ModTime().UnixNano()
+		if newest == "" || mtime > newestTime {
+			newest, newestTime = candidate, mtime
+		}
+	}
+	return newest, newest != ""
 }
 
 // POST /api/workspace/upload?path=<dir> — multipart form field "file" (one or more).

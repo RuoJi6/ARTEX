@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 
 import { FindingCaseList } from "@/components/finding-case-list";
+import { FindingDateFilter, type FindingDateRange } from "@/components/finding-date-filter";
 import { FindingRetestDialog } from "@/components/finding-retest-dialog";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
@@ -142,6 +143,7 @@ export default function FindingsPage() {
   const [sort, setSort] = React.useState<"severity" | "time">("severity");
   const [search, setSearch] = React.useState("");
   const [query, setQuery] = React.useState("");
+  const [dateRange, setDateRange] = React.useState<FindingDateRange>({});
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const [flat, setFlat] = React.useState<FlatFindingsState>(EMPTY_FLAT_STATE);
   const [flatPage, setFlatPage] = React.useState(1);
@@ -167,7 +169,16 @@ export default function FindingsPage() {
   const retestRefreshVersion = React.useRef(0);
   const [deepenDescription, setDeepenDescription] = React.useState("");
   const [deepening, setDeepening] = React.useState(false);
-  const filterFingerprint = JSON.stringify([severity, status, vulnclass, task, sort, query]);
+  const filterFingerprint = JSON.stringify([
+    severity,
+    status,
+    vulnclass,
+    task,
+    sort,
+    query,
+    dateRange.from,
+    dateRange.to,
+  ]);
   const activeFilterFingerprint = React.useRef(filterFingerprint);
   activeFilterFingerprint.current = filterFingerprint;
 
@@ -310,6 +321,7 @@ export default function FindingsPage() {
           task,
           query,
           sort,
+          ...dateRange,
           assetScope: view === "asset" ? (assetScope ?? undefined) : undefined,
         },
         ids: [...selectedIds],
@@ -358,6 +370,7 @@ export default function FindingsPage() {
           query,
           sort,
           assetScope: activeAssetScope ?? undefined,
+          ...dateRange,
         },
         true,
       );
@@ -374,7 +387,19 @@ export default function FindingsPage() {
       // Polling keeps the last successful snapshot visible.
       setFlat((current) => ({ ...current, loading: false }));
     }
-  }, [activeAssetScope, filterFingerprint, flatPage, flatPageSize, severity, status, vulnclass, task, query, sort]);
+  }, [
+    activeAssetScope,
+    dateRange,
+    filterFingerprint,
+    flatPage,
+    flatPageSize,
+    severity,
+    status,
+    vulnclass,
+    task,
+    query,
+    sort,
+  ]);
 
   // loadAssetTree 取整棵资产树。树不随选中节点变化(否则选一下就塌成一条链),
   // 所以这里不带 assetScope。
@@ -384,7 +409,7 @@ export default function FindingsPage() {
     const request = ++assetTreeRequest.current;
     setAssetTree((current) => ({ ...current, loading: true }));
     try {
-      const result = await api.findingAssetTree({ severity, status, vulnclass, task, query, sort });
+      const result = await api.findingAssetTree({ severity, status, vulnclass, task, query, sort, ...dateRange });
       if (request !== assetTreeRequest.current || activeFilterFingerprint.current !== requestFilter) return;
       setAssetTree({
         nodes: result.nodes ?? [],
@@ -399,7 +424,7 @@ export default function FindingsPage() {
       setAssetTree((current) => ({ ...current, loading: false }));
       toast.error(`资产树加载失败：${(e as Error).message}`);
     }
-  }, [filterFingerprint, severity, status, vulnclass, task, query, sort]);
+  }, [dateRange, filterFingerprint, severity, status, vulnclass, task, query, sort]);
 
   const refreshGroups = React.useCallback(async () => {
     const requestFilter = filterFingerprint;
@@ -415,6 +440,7 @@ export default function FindingsPage() {
         task,
         query,
         sort,
+        ...dateRange,
       });
       if (request !== groupsRequest.current || activeFilterFingerprint.current !== requestFilter) return;
       setGroups(result.items);
@@ -423,7 +449,7 @@ export default function FindingsPage() {
     } catch {
       // Polling keeps the last successful snapshot visible.
     }
-  }, [filterFingerprint, page, pageSize, severity, status, vulnclass, task, query, sort]);
+  }, [dateRange, filterFingerprint, page, pageSize, severity, status, vulnclass, task, query, sort]);
 
   const loadGroup = React.useCallback(
     async (key: string, groupPage: number, groupPageSize: number) => {
@@ -454,6 +480,7 @@ export default function FindingsPage() {
             task: key,
             query,
             sort,
+            ...dateRange,
           },
           true,
         );
@@ -488,7 +515,7 @@ export default function FindingsPage() {
         }));
       }
     },
-    [filterFingerprint, severity, status, vulnclass, query, sort],
+    [dateRange, filterFingerprint, severity, status, vulnclass, query, sort],
   );
 
   React.useEffect(() => {
@@ -896,8 +923,8 @@ export default function FindingsPage() {
           })}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <InputGroup className="w-full sm:w-72">
+        <div className="scrollbar-none flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-1">
+          <InputGroup className="w-72 shrink-0">
             <InputGroupInput
               type="search"
               value={search}
@@ -926,7 +953,7 @@ export default function FindingsPage() {
           </ToggleGroup>
 
           <Select value={status} onValueChange={(v) => setStatus(v as "all" | FindingStatus)}>
-            <SelectTrigger size="sm" className="w-32">
+            <SelectTrigger size="sm" className="w-32 shrink-0">
               <SelectValue placeholder="状态" />
             </SelectTrigger>
             <SelectContent>
@@ -940,7 +967,7 @@ export default function FindingsPage() {
           </Select>
 
           <Select value={vulnclass} onValueChange={setVulnclass}>
-            <SelectTrigger size="sm" className="w-40">
+            <SelectTrigger size="sm" className="w-40 shrink-0">
               <SelectValue placeholder="漏洞类型" />
             </SelectTrigger>
             <SelectContent>
@@ -954,7 +981,7 @@ export default function FindingsPage() {
           </Select>
 
           <Select value={task} onValueChange={setTask}>
-            <SelectTrigger size="sm" className="w-48">
+            <SelectTrigger size="sm" className="w-48 shrink-0">
               <SelectValue placeholder="任务" />
             </SelectTrigger>
             <SelectContent>
@@ -980,8 +1007,10 @@ export default function FindingsPage() {
             </SelectContent>
           </Select>
 
+          <FindingDateFilter value={dateRange} onChange={setDateRange} />
+
           <Select value={sort} onValueChange={(v) => setSort(v as "severity" | "time")}>
-            <SelectTrigger size="sm" className="w-36">
+            <SelectTrigger size="sm" className="w-36 shrink-0">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -990,7 +1019,7 @@ export default function FindingsPage() {
             </SelectContent>
           </Select>
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex shrink-0 items-center gap-3">
             {selectedIds.size > 0 && (
               <span className="text-xs text-muted-foreground tabular-nums">已选 {selectedIds.size} 条</span>
             )}
@@ -1077,7 +1106,7 @@ export default function FindingsPage() {
         {view === "cases" && (
           <FindingCaseList
             onTotal={setCaseTotal}
-            query={{ severity, status, vulnclass, task, query, sort }}
+            query={{ severity, status, vulnclass, task, query, sort, ...dateRange }}
             selectedIds={selectedIds}
             onSelect={toggleSelected}
           />

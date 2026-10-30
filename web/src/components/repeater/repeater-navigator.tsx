@@ -32,9 +32,11 @@ type Rename = { kind: "tab" | "group"; id: string; name: string };
 export function RepeaterNavigator({
   workspace,
   onRename,
+  className,
 }: {
   workspace: RepeaterWorkspace;
   onRename: (value: Rename) => void;
+  className?: string;
 }) {
   const store = useRepeaterStore();
   const [filters, setFilters] = React.useState(DEFAULT_FILTERS);
@@ -77,7 +79,10 @@ export function RepeaterNavigator({
   return (
     <nav
       aria-label="请求重发分组和标签"
-      className="flex h-[28rem] min-h-0 w-full shrink-0 flex-col gap-3 overflow-y-auto rounded-md border p-3 lg:h-[calc(100dvh-14rem)] lg:min-h-[480px] lg:w-80 xl:h-auto xl:min-h-0"
+      className={cn(
+        "flex h-[28rem] min-h-0 w-full shrink-0 flex-col gap-3 overflow-y-auto rounded-md border p-3 lg:h-[calc(100dvh-14rem)] lg:min-h-[480px] lg:w-80 xl:h-auto xl:min-h-0",
+        className,
+      )}
     >
       <div className="flex shrink-0 flex-col gap-2">
         <Input

@@ -147,7 +147,36 @@ func loadChatMention(pg *db.DB, ref chatMentionRef) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"finding": f, "assets": assets}, nil
+		out := map[string]any{"finding": f, "assets": assets}
+		// Auto conversations opened from a finding must see the same three-layer
+		// topology that the coverage page renders. Keep this bounded so a large
+		// task does not turn every first question into an oversized context.
+		if f.TaskID != nil && *f.TaskID > 0 {
+			if graph, graphErr := pg.Assets().BuildCoverageGraph(*f.TaskID, 0); graphErr == nil {
+				type topologyNode struct {
+					Key, Kind, Label, Domain, IP, Zone, ZoneReason string
+					Port                                           int
+					Tested, InScope                                bool
+				}
+				counts := map[string]int{"internet": 0, "boundary": 0, "internal": 0}
+				nodes := make([]topologyNode, 0, 60)
+				for _, n := range graph.Nodes {
+					if _, ok := counts[n.Zone]; ok {
+						counts[n.Zone]++
+					}
+					if len(nodes) < 60 {
+						nodes = append(nodes, topologyNode{Key: n.Key, Kind: n.Kind, Label: n.Label,
+							Domain: n.Domain, IP: n.IP, Port: n.Port, Zone: n.Zone,
+							ZoneReason: n.ZoneReason, Tested: n.Tested, InScope: n.InScope})
+					}
+				}
+				out["asset_topology"] = map[string]any{
+					"zones": counts, "nodes": nodes,
+					"nodes_total": len(graph.Nodes), "truncated": len(graph.Nodes) > len(nodes),
+				}
+			}
+		}
+		return out, nil
 	case "company":
 		c, err := pg.Companies().GetCompany(ref.ID)
 		if err != nil || c == nil {

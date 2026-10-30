@@ -123,7 +123,7 @@ func (d *DB) ListFindingCases(filter FindingFilter, page, size int) ([]FindingCa
 	if err := d.QueryRow(base+` SELECT count(*) FROM entities`, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	order := `e.created DESC,e.fid DESC`
+	order := `e.created ` + filter.timeOrder() + `,e.fid DESC`
 	if filter.Sort == "severity" {
 		order = `e.severity_rank DESC,` + order
 	}

@@ -65,6 +65,28 @@ function originLabel(row: InterceptApprovalRow) {
   return "—";
 }
 
+// Background task runs carry a pool label such as "work#2 · #2770", while
+// conversation-backed runs carry the agent key (for example "reporter").
+// Present a stable, human-readable agent label in both cases.
+function agentLabel(row: InterceptApprovalRow) {
+  const key = (row.conv_agent_key || "").trim().toLowerCase();
+  const labels: Record<string, string> = {
+    auto: "自动 Agent",
+    mainagent: "主 Agent",
+    planner: "规划 Agent",
+    worker: "执行 Worker",
+    reporter: "报告编写",
+    retester: "复测 Agent",
+    pentest: "渗透测试 Agent",
+  };
+  if (key && labels[key]) return labels[key];
+  const raw = (row.agent_name || "").trim();
+  if (/^work#\d+(?:\s|$)/i.test(raw)) return "执行 Worker";
+  const rawKey = raw.toLowerCase();
+  if (labels[rawKey]) return labels[rawKey];
+  return raw || "未知 Agent";
+}
+
 function ApprovalOrigin({ row, detail = false }: { row: InterceptApprovalRow; detail?: boolean }) {
   const [locating, setLocating] = React.useState(false);
   const label = detail && row.task_id ? `任务 ${row.task_id}` : originLabel(row);
@@ -454,7 +476,7 @@ export function ApprovalDetail({
               <SideQuestionButton side={side} />
             </div>
             <CodeBlock
-              label={`${current.agent_name || current.conv_agent_key || "Agent"} · 工具请求`}
+              label={`${agentLabel(current)} · 工具请求`}
               text={JSON.stringify(row.tool_input ?? {}, null, 2)}
             />
             {command ? (
@@ -726,8 +748,8 @@ function ApprovalTable({
                     <span className="truncate" title={originLabel(row)}>
                       <ApprovalOrigin row={row} />
                     </span>
-                    <span className="truncate text-muted-foreground text-xs">
-                      {row.agent_name || row.conv_agent_key}
+                    <span className="truncate text-muted-foreground text-xs" title={agentLabel(row)}>
+                      Agent：{agentLabel(row)}
                     </span>
                   </div>
                 </TableCell>

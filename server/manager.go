@@ -63,6 +63,8 @@ type Task struct {
 	WorkerCount          int                    `json:"worker_count"`           // 本任务 Worker 数;0=用全局默认
 	FirstRunAt           int64                  `json:"first_run_at,omitempty"`
 	DeadlineAt           int64                  `json:"deadline_at,omitempty"`
+	ActiveRunSeconds     int64                  `json:"active_run_seconds"`
+	RunSegmentStartedAt  int64                  `json:"run_segment_started_at,omitempty"`
 	Store                *pgdb.ExplorationStore `json:"-"`
 	Guard                *guard.Guard           `json:"-"`
 	notify               chan struct{}
@@ -81,21 +83,23 @@ type Task struct {
 // updateLifecycle instead of reading or writing the corresponding Task fields
 // directly after the task has been published by Manager.
 type taskLifecycleState struct {
-	Name          string
-	Remark        string
-	PinnedAt      int64
-	Status        string
-	Paused        bool
-	Queued        bool
-	QueuedAt      int64
-	QueueMode     string
-	CompletedAt   int64
-	FirstRunAt    int64
-	DeadlineAt    int64
-	SourceTaskIDs []int64
-	CompanyIDs    []int64
-	CategoryID    *int64
-	CategoryName  string
+	Name                string
+	Remark              string
+	PinnedAt            int64
+	Status              string
+	Paused              bool
+	Queued              bool
+	QueuedAt            int64
+	QueueMode           string
+	CompletedAt         int64
+	FirstRunAt          int64
+	DeadlineAt          int64
+	ActiveRunSeconds    int64
+	RunSegmentStartedAt int64
+	SourceTaskIDs       []int64
+	CompanyIDs          []int64
+	CategoryID          *int64
+	CategoryName        string
 }
 
 func (t *Task) lifecycleSnapshot() taskLifecycleState {
@@ -109,21 +113,23 @@ func (t *Task) lifecycleSnapshot() taskLifecycleState {
 
 func (t *Task) lifecycleSnapshotLocked() taskLifecycleState {
 	return taskLifecycleState{
-		Name:          t.Name,
-		Remark:        t.Remark,
-		PinnedAt:      t.PinnedAt,
-		Status:        t.Status,
-		Paused:        t.Paused,
-		Queued:        t.Queued,
-		QueuedAt:      t.QueuedAt,
-		QueueMode:     t.QueueMode,
-		CompletedAt:   t.CompletedAt,
-		FirstRunAt:    t.FirstRunAt,
-		DeadlineAt:    t.DeadlineAt,
-		SourceTaskIDs: append([]int64(nil), t.SourceTaskIDs...),
-		CompanyIDs:    append([]int64(nil), t.CompanyIDs...),
-		CategoryID:    cloneInt64Ptr(t.CategoryID),
-		CategoryName:  t.CategoryName,
+		Name:                t.Name,
+		Remark:              t.Remark,
+		PinnedAt:            t.PinnedAt,
+		Status:              t.Status,
+		Paused:              t.Paused,
+		Queued:              t.Queued,
+		QueuedAt:            t.QueuedAt,
+		QueueMode:           t.QueueMode,
+		CompletedAt:         t.CompletedAt,
+		FirstRunAt:          t.FirstRunAt,
+		DeadlineAt:          t.DeadlineAt,
+		ActiveRunSeconds:    t.ActiveRunSeconds,
+		RunSegmentStartedAt: t.RunSegmentStartedAt,
+		SourceTaskIDs:       append([]int64(nil), t.SourceTaskIDs...),
+		CompanyIDs:          append([]int64(nil), t.CompanyIDs...),
+		CategoryID:          cloneInt64Ptr(t.CategoryID),
+		CategoryName:        t.CategoryName,
 	}
 }
 
@@ -145,6 +151,8 @@ func (t *Task) updateLifecycle(update func(*taskLifecycleState)) {
 	t.CompletedAt = state.CompletedAt
 	t.FirstRunAt = state.FirstRunAt
 	t.DeadlineAt = state.DeadlineAt
+	t.ActiveRunSeconds = state.ActiveRunSeconds
+	t.RunSegmentStartedAt = state.RunSegmentStartedAt
 	t.SourceTaskIDs = append(t.SourceTaskIDs[:0], state.SourceTaskIDs...)
 	t.CompanyIDs = append(t.CompanyIDs[:0], state.CompanyIDs...)
 	t.CategoryID = cloneInt64Ptr(state.CategoryID)
@@ -256,6 +264,9 @@ type Manager struct {
 // Settings keys the UI toggles at runtime.
 const (
 	settingTrafficCapture      = "traffic_capture"
+	settingBrowserScreenshot   = "browser_screenshot_enabled"
+	settingScreenshotTimestamp = "browser_screenshot_timestamp_enabled"
+	settingOpsecEnabled        = "opsec_enabled"
 	settingAgentTrafficBinding = "agent_traffic_binding"
 	settingWebSearchOn         = "web_search_enabled"
 	settingWebSearchBackend    = "web_search_backend"
@@ -265,10 +276,11 @@ const (
 	// settingGlobalProxy is the global egress proxy for all target traffic
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.
-	settingGlobalProxy = "global_proxy"
-	settingWorkers     = "workers"
-	settingWorkerPools = "worker_pools"
-	settingLLMRecord   = "llm_record"
+	settingGlobalProxy  = "global_proxy"
+	settingShowEgressIP = "show_egress_ip"
+	settingWorkers      = "workers"
+	settingWorkerPools  = "worker_pools"
+	settingLLMRecord    = "llm_record"
 	// LLM 轮询(故障转移)。默认关闭——开启后走「全局激活配置」的 agent 在当前配置
 	// 不可用(余额不足/key 失效/限流/服务异常)时自动切到下一个配置。
 	// settingLLMPoolBindFallback 仅在轮询开启时有意义:默认关闭,即 agent/任务显式
@@ -527,6 +539,13 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	pg, err := pgdb.Open(dsn)
 	if err != nil {
 		return nil, err
+	}
+	// A live segment cannot be trusted across a process restart: its end time
+	// could be deployment/crash downtime. Clear it before tasks are restored so
+	// the next engine admission starts a fresh segment at actual execution time.
+	if _, err := pg.ClearOpenTaskRunSegments(); err != nil {
+		_ = pg.Close()
+		return nil, fmt.Errorf("clear stale task run segments: %w", err)
 	}
 	if err := pg.RecoverFindingRetests(); err != nil {
 		pg.Close()
@@ -840,8 +859,13 @@ func (m *Manager) syncBrowserMCPProxy() {
 	proxy := m.ProxyAddr()  // "" when capture off
 	cert := m.ProxyCACert() // "" when capture off
 
-	args := stripProxyArgs(decodeStrSlice(srv.Args))
+	args := ensureBrowserMCPArgs(stripProxyArgs(decodeStrSlice(srv.Args)), m.pg.GetBool(settingBrowserScreenshot, false))
 	env := decodeStrMap(srv.Env)
+	if m.pg.GetBool(settingBrowserScreenshot, false) {
+		// A persisted screenshot opt-in must survive restart even if an older
+		// database had the seeded MCP disabled.
+		srv.Enabled = true
+	}
 	delete(env, "NODE_EXTRA_CA_CERTS")
 	if proxy != "" {
 		args = append(args, "--proxy-server", proxy)
@@ -860,6 +884,59 @@ func (m *Manager) syncBrowserMCPProxy() {
 	} else {
 		log.Printf("[mcp] browser MCP 已移除捕获代理配置")
 	}
+}
+
+// ensureBrowserMCPArgs keeps the built-in Playwright MCP runnable in the
+// application container. The production image intentionally runs the service
+// as root; Chromium refuses to start in that mode unless --no-sandbox is
+// passed. When report screenshots are enabled, use Playwright's isolated
+// profile mode as well: every MCP stdio client then gets an in-memory browser
+// context, so concurrent report writers cannot contend for the same persistent
+// profile lock. Keep this migration idempotent so an existing database is
+// repaired as soon as the browser MCP is reconciled (including after a restart).
+func ensureBrowserMCPArgs(args []string, screenshotEnabled bool) []string {
+	out := append([]string(nil), args...)
+	has := func(want string) bool {
+		for _, arg := range out {
+			if arg == want || strings.HasPrefix(arg, want+"=") {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("--headless") {
+		out = append(out, "--headless")
+	}
+	if !has("--no-sandbox") {
+		out = append(out, "--no-sandbox")
+	}
+	if screenshotEnabled && !has("--ignore-https-errors") {
+		out = append(out, "--ignore-https-errors")
+	}
+	if screenshotEnabled && !has("--isolated") {
+		// Playwright rejects --isolated together with --user-data-dir. The
+		// screenshot opt-in deliberately favors independent per-run contexts,
+		// so discard a stale/custom persistent profile flag before enabling the
+		// isolated mode. This also prevents an old database row from reintroducing
+		// the shared-profile lock after an upgrade.
+		filtered := make([]string, 0, len(out)+1)
+		for i := 0; i < len(out); i++ {
+			arg := out[i]
+			if arg == "--user-data-dir" {
+				if i+1 < len(out) {
+					i++
+				}
+				continue
+			}
+			if strings.HasPrefix(arg, "--user-data-dir=") {
+				continue
+			}
+			filtered = append(filtered, arg)
+		}
+		out = filtered
+		out = append(out, "--isolated")
+	}
+	return out
 }
 
 // stripProxyArgs removes any --proxy-server/--proxy-bypass flags (both "--flag val"
@@ -1030,6 +1107,7 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 		TimeoutSeconds: pt.TimeoutSeconds, PlanHeartbeatSeconds: pt.PlanHeartbeatSeconds,
 		CoverageEnabled: pt.CoverageEnabled, WorkerCount: pt.WorkerCount,
 		FirstRunAt: unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
+		ActiveRunSeconds: pt.ActiveRunSeconds, RunSegmentStartedAt: unixOrZero(pt.RunSegmentStartedAt),
 		Store: store, Guard: guard.NewWithInterceptor(ic), notify: make(chan struct{}, 1),
 	}
 }
@@ -1310,13 +1388,16 @@ func (m *Manager) SetTaskPaused(id string, paused bool) error {
 	if err != nil {
 		return err
 	}
-	if err := m.pg.SetPaused(n, paused); err != nil {
+	active, started, err := m.pg.SetPausedRuntime(n, paused)
+	if err != nil {
 		return err
 	}
 	m.mu.Lock()
 	if t := m.tasks[id]; t != nil {
 		t.updateLifecycle(func(state *taskLifecycleState) {
 			state.Paused = paused
+			state.ActiveRunSeconds = active
+			state.RunSegmentStartedAt = unixOrZero(started)
 		})
 	}
 	m.mu.Unlock()
@@ -1352,7 +1433,8 @@ func (m *Manager) applyTaskAdmission(id, expectedStatus, status string, queued b
 		mode = ""
 	}
 
-	var queuedAt, completedAt, firstRunAt, deadlineAt sql.NullTime
+	var queuedAt, completedAt, firstRunAt, deadlineAt, segmentStartedAt sql.NullTime
+	var activeRunSeconds int64
 	var committedMode string
 	err = m.pg.QueryRow(`UPDATE tasks
 	SET status=$2,
@@ -1381,9 +1463,11 @@ func (m *Manager) applyTaskAdmission(id, expectedStatus, status string, queued b
 	        WHEN $6='timeout' AND $2 NOT IN ('done','failed','timeout') THEN NULL
 	        ELSE deadline_at
 	    END
+	    ,active_run_seconds=active_run_seconds + CASE WHEN ($3 OR $2 IN ('done','failed','timeout')) AND run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END
+	    ,run_segment_started_at=CASE WHEN $3 OR $2 IN ('done','failed','timeout') THEN NULL ELSE run_segment_started_at END
 	WHERE id=$1 AND deleted_at IS NULL AND status=$6
-	RETURNING queued_at, queue_mode, completed_at, first_run_at, deadline_at`, n, status, queued, mode, preservePosition, expectedStatus, manualUntil).
-		Scan(&queuedAt, &committedMode, &completedAt, &firstRunAt, &deadlineAt)
+	RETURNING queued_at, queue_mode, completed_at, first_run_at, deadline_at, active_run_seconds, run_segment_started_at`, n, status, queued, mode, preservePosition, expectedStatus, manualUntil).
+		Scan(&queuedAt, &committedMode, &completedAt, &firstRunAt, &deadlineAt, &activeRunSeconds, &segmentStartedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("task %s lifecycle changed before admission (expected status %q)", id, expectedStatus)
 	}
@@ -1414,6 +1498,11 @@ func (m *Manager) applyTaskAdmission(id, expectedStatus, status string, queued b
 			if deadlineAt.Valid {
 				state.DeadlineAt = deadlineAt.Time.Unix()
 			}
+			state.ActiveRunSeconds = activeRunSeconds
+			state.RunSegmentStartedAt = 0
+			if segmentStartedAt.Valid {
+				state.RunSegmentStartedAt = segmentStartedAt.Time.Unix()
+			}
 		})
 	}
 	m.mu.Unlock()
@@ -1434,11 +1523,15 @@ func (m *Manager) ApplyTaskPauseOrigin(id string, scheduled bool) error {
 		return err
 	}
 	var mode string
+	var activeRunSeconds int64
+	var segmentStartedAt sql.NullTime
 	err = m.pg.QueryRow(`UPDATE tasks
-		SET paused=true, queued=false, queued_at=NULL, schedule_paused=$2, schedule_manual_until=NULL
+		SET paused=true, queued=false, queued_at=NULL, schedule_paused=$2, schedule_manual_until=NULL,
+		    active_run_seconds=active_run_seconds + CASE WHEN run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
+		    run_segment_started_at=NULL
 		WHERE id=$1 AND deleted_at IS NULL AND paused=false
 		  AND status NOT IN ('done','failed','timeout')
-		RETURNING COALESCE(queue_mode,'')`, n, scheduled).Scan(&mode)
+		RETURNING COALESCE(queue_mode,''), active_run_seconds, run_segment_started_at`, n, scheduled).Scan(&mode, &activeRunSeconds, &segmentStartedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("task %s is unavailable for pause", id)
 	}
@@ -1452,6 +1545,11 @@ func (m *Manager) ApplyTaskPauseOrigin(id string, scheduled bool) error {
 			state.Queued = false
 			state.QueuedAt = 0
 			state.QueueMode = mode
+			state.ActiveRunSeconds = activeRunSeconds
+			state.RunSegmentStartedAt = 0
+			if segmentStartedAt.Valid {
+				state.RunSegmentStartedAt = segmentStartedAt.Time.Unix()
+			}
 		})
 	}
 	m.mu.Unlock()
@@ -1470,16 +1568,20 @@ func (m *Manager) EnqueueTask(id, mode string) error {
 		return fmt.Errorf("invalid queue mode %q", mode)
 	}
 	var queuedAt time.Time
+	var activeRunSeconds int64
+	var segmentStartedAt sql.NullTime
 	var committedMode string
 	err = m.pg.QueryRow(`UPDATE tasks
 		SET queued=true,
 		    queued_at=CASE WHEN queued THEN COALESCE(queued_at, now()) ELSE now() END,
+		    active_run_seconds=active_run_seconds + CASE WHEN run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
+		    run_segment_started_at=NULL,
 		    queue_mode=CASE
 		        WHEN queue_mode='bootstrap' OR $2='bootstrap' THEN 'bootstrap'
 		        ELSE 'resume'
 		    END
 		WHERE id=$1 AND deleted_at IS NULL
-		RETURNING queued_at, queue_mode`, n, mode).Scan(&queuedAt, &committedMode)
+		RETURNING queued_at, queue_mode, active_run_seconds, run_segment_started_at`, n, mode).Scan(&queuedAt, &committedMode, &activeRunSeconds, &segmentStartedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("task %s is unavailable for enqueue", id)
 	}
@@ -1492,6 +1594,80 @@ func (m *Manager) EnqueueTask(id, mode string) error {
 			state.QueuedAt = queuedAt.UnixNano()
 			state.Queued = true
 			state.QueueMode = committedMode
+			state.ActiveRunSeconds = activeRunSeconds
+			state.RunSegmentStartedAt = 0
+			if segmentStartedAt.Valid {
+				state.RunSegmentStartedAt = segmentStartedAt.Time.Unix()
+			}
+		})
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+// StartTaskRunSegment records the start of actual execution, once the engine
+// has admitted a task and is about to run planner/worker work.
+func (m *Manager) StartTaskRunSegment(id string) error {
+	m.taskStateMu.Lock()
+	defer m.taskStateMu.Unlock()
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return err
+	}
+	m.mu.RLock()
+	if t := m.tasks[id]; t != nil && t.lifecycleSnapshot().RunSegmentStartedAt > 0 {
+		m.mu.RUnlock()
+		return nil
+	}
+	m.mu.RUnlock()
+	active, started, err := m.pg.StartTaskRunSegment(n)
+	if err != nil {
+		return err
+	}
+	if started != nil {
+		m.mirrorTaskRuntime(id, active, started)
+	}
+	return nil
+}
+
+// FinalizeTaskRunSegment is idempotent and is used by pause/terminal paths that
+// may race with a late engine cancellation.
+func (m *Manager) FinalizeTaskRunSegment(id string) error {
+	m.taskStateMu.Lock()
+	defer m.taskStateMu.Unlock()
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return err
+	}
+	active, started, err := m.pg.FinalizeTaskRunSegment(n)
+	if err != nil {
+		return err
+	}
+	m.mirrorTaskRuntime(id, active, started)
+	return nil
+}
+
+func (m *Manager) mirrorTaskRuntime(id string, active int64, started *time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t := m.tasks[id]; t != nil {
+		t.updateLifecycle(func(state *taskLifecycleState) {
+			state.ActiveRunSeconds = active
+			state.RunSegmentStartedAt = unixOrZero(started)
+		})
+	}
+}
+
+func (m *Manager) syncTaskRuntime(id string, n int64) error {
+	pt, err := m.pg.GetTask(n)
+	if err != nil || pt == nil {
+		return err
+	}
+	m.mu.Lock()
+	if t := m.tasks[id]; t != nil {
+		t.updateLifecycle(func(state *taskLifecycleState) {
+			state.ActiveRunSeconds = pt.ActiveRunSeconds
+			state.RunSegmentStartedAt = unixOrZero(pt.RunSegmentStartedAt)
 		})
 	}
 	m.mu.Unlock()
@@ -1580,20 +1756,30 @@ func (m *Manager) SetTaskStatusGuarded(id, status string) (won bool, err error) 
 	if err != nil {
 		return false, err
 	}
-	won, err = m.pg.SetTerminalStatusGuarded(n, status)
+	active, started, won, err := m.pg.SetTerminalStatusGuardedRuntime(n, status)
 	if err != nil || !won {
 		return won, err
 	}
+	// Mirror the committed terminal transition before any optional hydration.
+	// This keeps the in-memory clock stopped even if GetTask later fails.
 	m.mu.Lock()
 	if t := m.tasks[id]; t != nil {
 		t.updateLifecycle(func(state *taskLifecycleState) {
 			state.Status = status
-			if state.CompletedAt == 0 {
-				state.CompletedAt = time.Now().Unix()
+			state.ActiveRunSeconds = active
+			state.RunSegmentStartedAt = unixOrZero(started)
+			if pgdb.IsTerminal(status) {
+				state.RunSegmentStartedAt = 0
+				if state.CompletedAt == 0 {
+					state.CompletedAt = time.Now().Unix()
+				}
 			}
 		})
 	}
 	m.mu.Unlock()
+	if err := m.syncTaskRuntime(id, n); err != nil {
+		return true, err
+	}
 	return true, nil
 }
 
@@ -1606,16 +1792,20 @@ func (m *Manager) SetTaskStatus(id, status string) error {
 	if err != nil {
 		return err
 	}
-	if err := m.pg.SetStatus(n, status); err != nil {
+	active, started, err := m.pg.SetStatusRuntime(n, status)
+	if err != nil {
 		return err
 	}
+	// Mirror the successful UPDATE immediately. A later GetTask hydration is
+	// best-effort and must not reopen a terminal clock in memory.
 	m.mu.Lock()
 	if t := m.tasks[id]; t != nil {
 		t.updateLifecycle(func(state *taskLifecycleState) {
 			state.Status = status
-			// Mirror the DB's completed_at stamp on the live handle so the DTO shows
-			// the finish time without a reload (terminal -> stamp once; else clear).
+			state.ActiveRunSeconds = active
+			state.RunSegmentStartedAt = unixOrZero(started)
 			if pgdb.IsTerminal(status) {
+				state.RunSegmentStartedAt = 0
 				if state.CompletedAt == 0 {
 					state.CompletedAt = time.Now().Unix()
 				}
@@ -1625,6 +1815,9 @@ func (m *Manager) SetTaskStatus(id, status string) error {
 		})
 	}
 	m.mu.Unlock()
+	if err := m.syncTaskRuntime(id, n); err != nil {
+		return err
+	}
 	return nil
 }
 

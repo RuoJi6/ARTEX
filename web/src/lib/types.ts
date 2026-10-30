@@ -34,10 +34,13 @@ export interface Task {
   goal: string;
   status: TaskStatus;
   created_at: string;
-  created_unix?: number; // created_at as unix seconds (run-duration calc)
+  created_unix?: number;
   completed_at?: string; // RFC3339 finish time (done/failed); "" if unfinished
   completed_unix?: number; // completed_at as unix seconds (0/undef if unfinished)
   last_activity_unix?: number; // unix seconds of the last activity (0/undef if none)
+  run_seconds?: number; // backend-computed active runtime seconds
+  active_run_seconds?: number; // completed running segments in seconds
+  run_segment_started_unix?: number; // current running segment start; 0 when inactive
   paused?: boolean;
   queued?: boolean;
   active?: boolean;
@@ -324,6 +327,8 @@ export interface CoverageGraphNode {
   app_name?: string;
   page_title?: string;
   status_code?: number;
+  zone?: "internet" | "boundary" | "internal";
+  zone_reason?: string;
 }
 
 export interface CoverageGraphEdge {
@@ -602,6 +607,9 @@ export interface FindingQuery {
   task?: string; // 任务 id;"all"/空 = 不按任务筛选
   query?: string;
   sort?: "severity" | "time";
+  timeDirection?: "asc" | "desc"; // Missing = newest first; secondary to severity when sort="severity".
+  from?: string; // ISO timestamp, inclusive
+  to?: string; // ISO timestamp, inclusive
   // 资产树节点 key;选中一个节点 = 选中它的整棵子树。空 = 不按资产筛选。
   assetScope?: string;
 }
@@ -976,9 +984,17 @@ export interface PlannerOverviewPreviewData {
 // ---- App settings (runtime toggles) ----
 export interface Settings {
   traffic_capture: boolean;
+  /** 是否向可见 Agent 暴露浏览器 MCP 的截图工具。默认关闭。 */
+  browser_screenshot_enabled?: boolean;
+  /** 是否在报告截图右上角显示截图保存时间。默认关闭。 */
+  browser_screenshot_timestamp_enabled?: boolean;
+  /** 是否向 Agent 注入统一 OPSEC 准则。默认关闭。 */
+  opsec_enabled?: boolean;
   credential_agent_enabled: boolean;
   credential_traffic_binding: boolean;
   task_intelligence_enabled: boolean; // 默认关闭；关闭不注入情报工具或提示
+  task_auto_title_enabled: boolean; // Agent 创建任务时自动生成任务名称
+  chat_auto_title_enabled: boolean; // 对话首条消息后自动生成会话标题
   agent_traffic_binding: boolean; // Agent 自动绑定流量证据，默认关闭；不影响人工绑定
   llm_record: boolean; // LLM 录制开关（默认关）；关闭时不记录任何 LLM 调用
   // Web search. brave_key_set / tavily_key_set reflect whether a key is stored
@@ -995,6 +1011,7 @@ export interface Settings {
   // 全局出口代理(http/https/socks5，可带 user:pass)，所有目标流量走它。开启流量捕获时作为
   // MITM 上游；关闭捕获时直接注入 agent 的 bash/WebFetch。空=直连。
   global_proxy?: string;
+  show_egress_ip?: boolean; // 在顶栏显示直连 / 全局代理出口 IP；默认关闭
   python_interpreter?: string; // 自定义脚本工具的 python 解释器路径(空=运行时检测)
   workers?: number; // 并发工作 agent 数(默认3)；对之后启动的任务生效
   worker_pools: WorkerPool[];
@@ -1326,6 +1343,23 @@ export interface Stats {
   roe_enabled: boolean;
   findings_confirmed: number;
   active_task?: Partial<Task>;
+}
+
+export interface SystemMetricValue {
+  used_bytes: number;
+  total_bytes: number;
+  percent: number;
+}
+
+export interface SystemMetrics {
+  scope: "container" | "unsupported" | string;
+  supported: boolean;
+  timestamp: string;
+  container_metrics: boolean;
+  cpu: SystemMetricValue;
+  memory: SystemMetricValue;
+  disk: SystemMetricValue;
+  data_disk: SystemMetricValue;
 }
 
 // ---- Intercept Rules ----
@@ -1873,4 +1907,42 @@ export interface IntelligencePage {
   total: number;
   counts: Record<IntelligenceKind, number>;
   enabled: boolean;
+}
+
+// ---- 出口代理连通性测试（POST /api/settings/proxy/test）----
+export interface EgressProbeResult {
+  ok: boolean;
+  exit_ip?: string;
+  via?: "direct" | "http" | "https" | "socks5";
+  via_label?: string;
+  latency_ms: number;
+  error?: string;
+  // 每个地址的明细：区分"连不上代理"和"代理通但出不了网"。
+  probes: {
+    url: string;
+    ok: boolean;
+    ip?: string;
+    latency_ms: number;
+    error?: string;
+  }[];
+}
+
+// 报告里的一行：① 直连 / ② 经全局代理。
+export interface EgressCheck {
+  key: "direct" | "global";
+  label: string;
+  path?: string;
+  skipped?: boolean;
+  skip_reason?: string;
+  result: EgressProbeResult;
+}
+
+export interface EgressReport {
+  ok: boolean;
+  capture: boolean;
+  configured: string;
+  // agent_proxy 是 Agent 实际使用的代理地址：捕获开时是流量捕获的地址，不是输入框里的值。
+  agent_proxy: string;
+  checks: EgressCheck[];
+  warnings?: string[];
 }

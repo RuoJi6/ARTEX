@@ -12,6 +12,7 @@ import (
 // Missing host/setting means off. Rechecked on every write for running sessions.
 var IntelligenceEnabled func() bool
 var IntelligenceRecord func(context.Context, int64, int64, string, db.IntelligenceInput) (int64, error)
+var CredentialRecorded func()
 
 func intelligenceEnabled() bool { return IntelligenceEnabled != nil && IntelligenceEnabled() }
 func intelligenceSchema() map[string]any {

@@ -602,7 +602,7 @@ function UserRow({ step, intent, getDetail }: { step: Activity; intent?: boolean
   }, [inView, step.seq, getDetail, step.summary, inline]);
   const { text, attachments } = parseUserBody(full ?? step.summary);
   return (
-    <div ref={ref} className="mt-3 mb-2 flex min-w-0 justify-end gap-2">
+    <div ref={ref} className="mt-3 mb-2 flex w-full min-w-0 justify-end gap-2">
       <div className="flex min-w-0 max-w-[85%] flex-col items-end gap-1.5">
         {attachments.length > 0 && (
           <div className="flex min-w-0 max-w-full flex-wrap justify-end gap-1.5">
@@ -654,10 +654,10 @@ function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: num
     };
   }, [inView, step.seq, getDetail, step.summary]);
   return (
-    <div ref={ref} className="mb-2 mt-1 flex min-w-0 flex-col gap-1">
+    <div ref={ref} className="mb-2 mt-1 flex min-w-0 max-w-full flex-col gap-1 overflow-hidden">
       <div
         className={
-          "min-w-0 flex-1 break-words rounded-lg bg-muted px-3 py-2 " +
+          "min-w-0 max-w-full flex-1 break-words [overflow-wrap:anywhere] rounded-lg bg-muted px-3 py-2 " +
           (step.is_error ? "text-sm text-red-600 dark:text-red-400" : "")
         }
       >
@@ -758,7 +758,7 @@ export function Transcript({
     return () => observer.disconnect();
   }, [focusedSeq]);
   return (
-    <div ref={transcriptRef} className="flex flex-col gap-1" style={focusPadding ? { paddingBlock: focusPadding } : undefined}>
+    <div ref={transcriptRef} className="flex w-full min-w-0 max-w-full flex-col gap-1" style={focusPadding ? { paddingBlock: focusPadding } : undefined}>
       <ExecView activity={activity} taskId={taskId} chat={chat} fetchDetail={fetchDetail} focusedSeq={focusedSeq} />
       {live && (
         <div className="flex items-center gap-2 pl-2 pt-1 text-xs text-muted-foreground">

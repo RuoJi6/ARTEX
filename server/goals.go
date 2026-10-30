@@ -252,6 +252,11 @@ func (s *Server) hasReadyQueuedTask(excludeID string) bool {
 }
 
 func (s *Server) startAdmittedTask(t *Task, mode string) {
+	if s.engine.ReadyFor(t) {
+		if err := s.m.StartTaskRunSegment(t.ID); err != nil {
+			log.Printf("[runtime] task %s start segment failed: %v", t.ID, err)
+		}
+	}
 	if mode == "bootstrap" {
 		if !s.engine.beginTaskOperation(t.ID) {
 			return
