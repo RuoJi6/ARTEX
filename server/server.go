@@ -357,6 +357,19 @@ func (s *Server) agentRunSeconds(key string) int {
 	return a.RunSecs
 }
 
+// normalizeAdaptiveThinking 把 5.5 代 Claude 模型上的经典 thinking_type=enabled
+// 自动归一到 adaptive：这些模型已废弃 enabled，直接发 enabled 会被上游 400 拒绝
+// (requires adaptive thinking)。""（不发送）和 "disabled" 保持不变。
+func normalizeAdaptiveThinking(cfg *agent.Config) {
+	if cfg.Format != llm.FormatAnthropic || cfg.ThinkingType != "enabled" {
+		return
+	}
+	m := strings.ToLower(strings.TrimSpace(cfg.Model))
+	if strings.Contains(m, "5-5") || strings.Contains(m, "5.5") {
+		cfg.ThinkingType = "adaptive"
+	}
+}
+
 // loadLLMConfig reads the active LLM profile from PG (llm_profiles).
 func (s *Server) loadLLMConfig() (agent.Config, bool) {
 	p, err := s.m.pg.ActiveProfile()
@@ -368,6 +381,7 @@ func (s *Server) loadLLMConfig() (agent.Config, bool) {
 	cfg.ContextWindowK = p.ContextWindowK
 	cfg.ThinkingType = p.ThinkingType
 	cfg.ReasoningEffort = p.ReasoningEffort
+	normalizeAdaptiveThinking(&cfg)
 	cfg.Stream = p.Streaming
 	cfg.MaxTokens, cfg.MaxTokensField = p.MaxTokens, p.MaxTokensField
 	cfg.SessionHeaderKey = p.SessionHeaderKey
@@ -539,6 +553,7 @@ func (s *Server) loadProfileConfig(id int64) (agent.Config, bool) {
 	cfg.ContextWindowK = p.ContextWindowK
 	cfg.ThinkingType = p.ThinkingType
 	cfg.ReasoningEffort = p.ReasoningEffort
+	normalizeAdaptiveThinking(&cfg)
 	cfg.Stream = p.Streaming
 	cfg.MaxTokens, cfg.MaxTokensField = p.MaxTokens, p.MaxTokensField
 	cfg.SessionHeaderKey = p.SessionHeaderKey
