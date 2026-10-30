@@ -2,8 +2,8 @@ package agent
 
 // cold-digest §6: graph_overview folding + the restore tools.
 //
-//	coldDigestsRecent — builds the folded cold region for graph_overview:
-//	  cold_digests (flat {id, body, member_count}), newest-member first, capped.
+//	coldDigestsRecent — builds folded cards with model body plus deterministic
+//	  work, key_results, unresolved and source_refs, newest-member first, capped.
 //	expand_digest(id)  — level-1 restore: a digest's member compact list.
 
 import (
@@ -35,8 +35,157 @@ func (t *ToolSet) digestMemberEntry(store *db.ExplorationStore, id int64) map[st
 	return m
 }
 
-// coldDigestsRecent returns a store's active digests as flat bodies for
-// graph_overview, ordered by the recency of their freshest member (max member id ≈
+type lineageDigestView struct {
+	digests []*db.Node
+	members map[int64][]int64
+	nodes   map[int64]*db.Node
+	parents map[int64][]int64
+	yields  map[int64][]int64
+	covered map[int64]int64
+	hot     map[int64]bool
+}
+
+func (v *lineageDigestView) hidden(id int64) bool {
+	_, covered := v.covered[id]
+	return covered && !v.hot[id]
+}
+
+func loadLineageDigestView(store *db.ExplorationStore, digests []*db.Node, fullGraph bool) *lineageDigestView {
+	view := &lineageDigestView{
+		digests: digests, members: map[int64][]int64{}, nodes: map[int64]*db.Node{},
+		parents: map[int64][]int64{}, yields: map[int64][]int64{},
+		covered: map[int64]int64{}, hot: map[int64]bool{},
+	}
+	if len(digests) == 0 {
+		return view
+	}
+	digestIDs := make([]int64, 0, len(digests))
+	for _, digest := range digests {
+		digestIDs = append(digestIDs, digest.ID)
+	}
+	membersByDigest, _ := store.DigestMembersFor(digestIDs)
+	allMembers := map[int64]bool{}
+	for _, digest := range digests {
+		members := membersByDigest[digest.ID]
+		view.members[digest.ID] = members
+		for _, id := range members {
+			allMembers[id] = true
+			if _, exists := view.covered[id]; !exists {
+				view.covered[id] = digest.ID
+			}
+		}
+	}
+	memberIDs := make([]int64, 0, len(allMembers))
+	for id := range allMembers {
+		memberIDs = append(memberIDs, id)
+	}
+	var edges []db.Edge
+	if fullGraph {
+		g, nodes, graphEdges, err := loadColdGraphParts(store)
+		if err == nil {
+			view.nodes = nodes
+			view.hot = g.hotSet()
+			edges = graphEdges
+		}
+	} else {
+		nodes, _ := store.NodesByIDs(memberIDs)
+		view.nodes = indexColdNodes(nodes)
+		edges, _ = store.EdgesTouching(memberIDs)
+	}
+	for _, edge := range edges {
+		switch edge.Rel {
+		case db.RelDerivedFrom, db.RelSpawns:
+			view.parents[edge.To] = append(view.parents[edge.To], edge.From)
+		case db.RelYields:
+			view.yields[edge.From] = append(view.yields[edge.From], edge.To)
+		}
+	}
+	return view
+}
+
+func digestDecisionFields(view *lineageDigestView, digest *db.Node, detailed bool) map[string]any {
+	memberIDs := view.members[digest.ID]
+	intentIDs := []int64{}
+	factIDs := []int64{}
+	for _, id := range memberIDs {
+		node := view.nodes[id]
+		if node == nil {
+			continue
+		}
+		switch node.Kind {
+		case db.KindIntent:
+			intentIDs = append(intentIDs, id)
+		case db.KindFact:
+			factIDs = append(factIDs, id)
+		}
+	}
+	work := make([]map[string]any, 0, len(intentIDs))
+	unresolved := []map[string]any{}
+	for _, intentID := range intentIDs {
+		node := view.nodes[intentID]
+		entry := map[string]any{"intent_id": intentID, "state": node.State}
+		if detailed {
+			parentIDs := append([]int64{}, view.parents[intentID]...)
+			resultIDs := append([]int64{}, view.yields[intentID]...)
+			sort.Slice(parentIDs, func(i, j int) bool { return parentIDs[i] < parentIDs[j] })
+			sort.Slice(resultIDs, func(i, j int) bool { return resultIDs[i] < resultIDs[j] })
+			entry["goal"] = nodeSummary(node)
+			entry["parent_ids"] = parentIDs
+			entry["result_ids"] = resultIDs
+		}
+		work = append(work, entry)
+		switch node.State {
+		case "blocked", "exhausted", "stopped":
+			reason := node.BlockedReason
+			if reason == "" {
+				reason = "工作状态为 " + node.State + "，未完成范围需按原始记录确认"
+			}
+			unresolved = append(unresolved, map[string]any{
+				"intent_id": intentID, "state": node.State, "reason": reason,
+			})
+		}
+	}
+	keyResults := make([]map[string]any, 0, len(factIDs))
+	for _, factID := range factIDs {
+		node := view.nodes[factID]
+		entry := map[string]any{
+			"fact_id": factID, "state": node.State, "summary": nodeSummary(node),
+			"confidence": nodeConfidence(node),
+		}
+		var raw map[string]any
+		if json.Unmarshal(node.Payload, &raw) == nil {
+			if conditions, ok := raw["conditions"].(string); ok && conditions != "" {
+				entry["conditions"] = conditions
+			}
+		}
+		keyResults = append(keyResults, entry)
+	}
+	refs := map[string][]int64{"intents": {}, "facts": {}, "findings": {}}
+	for _, id := range memberIDs {
+		node := view.nodes[id]
+		if node == nil {
+			continue
+		}
+		switch node.Kind {
+		case db.KindIntent:
+			refs["intents"] = append(refs["intents"], id)
+		case db.KindFact:
+			refs["facts"] = append(refs["facts"], id)
+		case db.KindFinding:
+			refs["findings"] = append(refs["findings"], id)
+		}
+	}
+	for _, ids := range refs {
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	}
+	return map[string]any{
+		"work": work, "key_results": keyResults,
+		"unresolved": unresolved, "source_refs": refs,
+	}
+}
+
+// coldDigestsRecent returns active digest bodies and deterministic decision
+// fields for graph_overview, ordered by the recency of their freshest member (max member id ≈
 // latest cooled node — a digest near the live frontier is likelier relevant), and
 // capped at `cap`. Overflow digest ids are returned separately (moreIDs) so they
 // stay reachable via expand_digest even when not shown inline — cold_digests is the
@@ -47,35 +196,40 @@ func coldDigestsRecent(store *db.ExplorationStore, cap int) (shown []map[string]
 	if err != nil || len(ads) == 0 {
 		return nil, nil
 	}
+	return coldDigestsRecentView(loadLineageDigestView(store, ads, false), cap)
+}
+
+func coldDigestsRecentView(view *lineageDigestView, cap int) (shown []map[string]any, moreIDs []int64) {
 	type dg struct {
-		id        int64
-		entry     map[string]any
-		freshness int64 // max member id (ids are monotonic ≈ creation time)
+		digest    *db.Node
+		freshness int64
 	}
-	items := make([]dg, 0, len(ads))
-	for _, d := range ads {
-		var p struct {
-			Body string `json:"body"`
-		}
-		_ = json.Unmarshal(d.Payload, &p)
-		ms, _ := store.DigestMembers(d.ID) // sorted asc → last = freshest
+	items := make([]dg, 0, len(view.digests))
+	for _, d := range view.digests {
+		ms := view.members[d.ID]
 		var fresh int64
 		if len(ms) > 0 {
 			fresh = ms[len(ms)-1]
 		}
-		items = append(items, dg{
-			id:        d.ID,
-			entry:     map[string]any{"id": d.ID, "body": p.Body, "member_count": len(ms)},
-			freshness: fresh,
-		})
+		items = append(items, dg{digest: d, freshness: fresh})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].freshness > items[j].freshness })
 	for i, it := range items {
-		if i < cap {
-			shown = append(shown, it.entry)
-		} else {
-			moreIDs = append(moreIDs, it.id)
+		d := it.digest
+		if i >= cap {
+			moreIDs = append(moreIDs, d.ID)
+			continue
 		}
+		var p struct {
+			Body string `json:"body"`
+		}
+		_ = json.Unmarshal(d.Payload, &p)
+		ms := view.members[d.ID]
+		entry := map[string]any{"id": d.ID, "body": p.Body, "member_count": len(ms)}
+		for key, value := range digestDecisionFields(view, d, false) {
+			entry[key] = value
+		}
+		shown = append(shown, entry)
 	}
 	return shown, moreIDs
 }
@@ -87,15 +241,8 @@ func coldDigestsRecent(store *db.ExplorationStore, cap int) (shown []map[string]
 // hidden (§6 render-time revival check). Returns a never-hidden predicate when the
 // store has no digests.
 func hiddenMembersFor(store *db.ExplorationStore) func(int64) bool {
-	covered, err := store.CoveredMembers()
-	if err != nil || len(covered) == 0 {
-		return func(int64) bool { return false }
-	}
-	var hot map[int64]bool
-	if cg, _, err := loadColdGraph(store); err == nil {
-		hot = cg.hotSet()
-	}
-	return func(id int64) bool { _, c := covered[id]; return c && !hot[id] }
+	ads, _ := store.ActiveDigests()
+	return loadLineageDigestView(store, ads, true).hidden
 }
 
 // resolveDigest finds a digest node by id in the current task, else in a direct
@@ -155,6 +302,12 @@ func (t *ToolSet) expandDigest() actool.CoreTool {
 				"state":   n.State, // active / superseded
 				"body":    p.Body,
 				"members": list,
+			}
+			if n.State == db.StateDigestActive {
+				view := loadLineageDigestView(store, []*db.Node{n}, false)
+				for key, value := range digestDecisionFields(view, n, true) {
+					out[key] = value
+				}
 			}
 			if srcTaskID > 0 {
 				out["inherited"] = true

@@ -27,6 +27,7 @@ import type { EgressReport, LLMProfile, Settings, WorkerPool } from "@/lib/types
 
 import { useEgressIp } from "../../_components/egress-ip-banner";
 import { BasicAuthCard } from "./_components/basic-auth-card";
+import { PlannerOverviewPreview } from "./_components/planner-overview-preview";
 import { UpdateCard } from "./_components/update-card";
 
 export default function SystemSettingsPage() {
@@ -84,6 +85,8 @@ export default function SystemSettingsPage() {
   const [injectWorker, setInjectWorker] = React.useState(true);
   // 实验功能:noa 上下文压缩(默认关)。
   const [noaCompaction, setNoaCompaction] = React.useState(false);
+  const [plannerCompactOverview, setPlannerCompactOverview] = React.useState(true);
+  const [workerCompactContext, setWorkerCompactContext] = React.useState(false);
   // 纯前端偏好：不走 /api/settings，直接读写 localStorage。
   const sendMode = useChatSendMode();
   const {
@@ -117,6 +120,8 @@ export default function SystemSettingsPage() {
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
+    setPlannerCompactOverview(s.planner_compact_overview !== false);
+    setWorkerCompactContext(!!s.worker_compact_context);
   }, []);
 
   const saveWorkers = () => {
@@ -338,6 +343,34 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => {
         setNoaCompaction(!v); // revert on failure
+        toast.error(`保存失败：${(e as Error).message}`);
+      });
+  };
+
+  const togglePlannerCompactOverview = (v: boolean) => {
+    setPlannerCompactOverview(v);
+    api
+      .setSettings({ planner_compact_overview: v })
+      .then((s) => {
+        apply(s);
+        toast.success(v ? "已开启 Planner 紧凑态势视图" : "已关闭转换器，Planner 将读取完整 JSON");
+      })
+      .catch((e) => {
+        setPlannerCompactOverview(!v);
+        toast.error(`保存失败：${(e as Error).message}`);
+      });
+  };
+
+  const toggleWorkerCompactContext = (v: boolean) => {
+    setWorkerCompactContext(v);
+    api
+      .setSettings({ worker_compact_context: v })
+      .then((s) => {
+        apply(s);
+        toast.success(v ? "已开启 Worker Intent 相关上下文" : "已恢复 Worker 完整全局图 JSON");
+      })
+      .catch((e) => {
+        setWorkerCompactContext(!v);
         toast.error(`保存失败：${(e as Error).message}`);
       });
   };
@@ -909,7 +942,7 @@ export default function SystemSettingsPage() {
             </Card>
 
             <Card
-              className={`${isSettingVisible("agent", "实验 noa 压缩") ? "" : "hidden"} mb-4 break-inside-avoid md:mb-6`}
+              className={`${isSettingVisible("agent", "实验 noa 压缩 Planner Worker Intent 紧凑态势") ? "" : "hidden"} mb-4 break-inside-avoid md:mb-6`}
             >
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
@@ -917,24 +950,57 @@ export default function SystemSettingsPage() {
                   实验功能
                 </CardTitle>
                 <CardDescription>
-                  尚在验证中的机制，默认关闭。可能改变 Agent 行为或影响稳定性，请在了解影响后启用。
+                  尚在验证中的机制，可能改变 Agent 行为或影响稳定性。
                   <br />
-                  <b>noa 上下文压缩</b>：由模型主动压缩长对话历史（norma v0.4.0）。开启后平台接入的四类 Agent（
+                  <b>noa 上下文压缩</b>：由模型主动压缩长对话历史（norma v0.4.0），默认关闭。开启后平台接入的四类 Agent（
                   <b>规划者 / 执行者 / 主 Agent / 对话</b>）改用 noa 接管上下文，取代内置压缩，
-                  压缩原文会归档到任务工作目录下便于回溯。切换即时生效（对之后启动的运行生效），无需重建 Agent；
-                  关闭后立即恢复内置压缩。
+                  压缩原文会归档到任务工作目录下便于回溯。
+                  <br />
+                  <b>Planner 紧凑态势视图</b>：默认开启，把预取的 graph_overview 转为紧凑文本并保留 Digest
+                  决策字段与回源入口。关闭后恢复完整 JSON，仅改变 Planner 输入格式，不关闭 Lineage 冷压缩。
+                  <br />
+                  <b>Worker Intent 相关上下文</b>：默认关闭。开启后不再向 Worker 注入完整全局图 JSON，只保留当前 Intent、
+                  同资产或直接血缘相关的历史，完整人工提示及只读回源工具。不改变 Worker 工具结果、轮数或写回逻辑。
+                  这些开关都在下一轮运行时生效，无需重建 Agent。
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex items-center justify-between gap-4">
-                <Label htmlFor="noa-compaction" className="text-sm font-normal text-muted-foreground">
-                  noa 上下文压缩{noaCompaction ? " · 已开启" : " · 已关闭"}
-                </Label>
-                <Switch
-                  id="noa-compaction"
-                  checked={noaCompaction}
-                  disabled={!loaded}
-                  onCheckedChange={toggleNoaCompaction}
-                />
+              <CardContent className="flex flex-col gap-4">
+                <div className="flex items-center justify-between gap-4">
+                  <Label htmlFor="noa-compaction" className="text-sm font-normal text-muted-foreground">
+                    noa 上下文压缩{noaCompaction ? " · 已开启" : " · 已关闭"}
+                  </Label>
+                  <Switch
+                    id="noa-compaction"
+                    checked={noaCompaction}
+                    disabled={!loaded}
+                    onCheckedChange={toggleNoaCompaction}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <Label htmlFor="planner-compact-overview" className="text-sm font-normal text-muted-foreground">
+                    Planner 紧凑态势视图{plannerCompactOverview ? " · 已开启" : " · 已关闭（完整 JSON）"}
+                  </Label>
+                  <Switch
+                    id="planner-compact-overview"
+                    checked={plannerCompactOverview}
+                    disabled={!loaded}
+                    onCheckedChange={togglePlannerCompactOverview}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <Label htmlFor="worker-compact-context" className="text-sm font-normal text-muted-foreground">
+                    Worker Intent 相关上下文{workerCompactContext ? " · 已开启" : " · 已关闭（完整全局图）"}
+                  </Label>
+                  <Switch
+                    id="worker-compact-context"
+                    checked={workerCompactContext}
+                    disabled={!loaded}
+                    onCheckedChange={toggleWorkerCompactContext}
+                  />
+                </div>
+                <div className="border-t pt-4">
+                  <PlannerOverviewPreview />
+                </div>
               </CardContent>
             </Card>
 

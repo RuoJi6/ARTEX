@@ -294,6 +294,10 @@ const (
 	// agent(planner/worker/主 agent/对话)由 noa 接管上下文压缩,取代内置 compaction。
 	// 每 run 读一次,切换只影响之后启动的 run。
 	settingNoaCompaction = "noa_compaction"
+	// Planner 态势转换器。默认开启；关闭后仍预取同一份 graph_overview，但注入完整 JSON。
+	settingPlannerCompactOverview = "planner_compact_overview"
+	// Worker 启动上下文筛选。默认关闭，保留完整全局图 JSON；开启后只注入 Intent 相关历史。
+	settingWorkerCompactContext = "worker_compact_context"
 	// defaultWebSearchBackend is used when web search is on but no backend was picked.
 	defaultWebSearchBackend = "ddgs"
 	// deepSeekWebSearchBackend borrows the active LLM profile instead of its own
@@ -683,6 +687,24 @@ func (m *Manager) NoaCompactionEnabled() bool {
 // the resolver reads it per run, so no rebuild is needed.
 func (m *Manager) SetNoaCompaction(on bool) error {
 	return m.pg.SetBool(settingNoaCompaction, on)
+}
+
+// PlannerCompactOverviewEnabled controls only how the prefetched graph is rendered.
+// Lineage compaction and the complete graph_overview tool remain available either way.
+func (m *Manager) PlannerCompactOverviewEnabled() bool {
+	return m.pg.GetBool(settingPlannerCompactOverview, true)
+}
+
+func (m *Manager) SetPlannerCompactOverview(on bool) error {
+	return m.pg.SetBool(settingPlannerCompactOverview, on)
+}
+
+func (m *Manager) WorkerCompactContextEnabled() bool {
+	return m.pg.GetBool(settingWorkerCompactContext, false)
+}
+
+func (m *Manager) SetWorkerCompactContext(on bool) error {
+	return m.pg.SetBool(settingWorkerCompactContext, on)
 }
 
 // LLMPoolEnabled reports whether LLM failover ("轮询") is on (默认关；
