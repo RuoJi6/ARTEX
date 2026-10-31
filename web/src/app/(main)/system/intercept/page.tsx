@@ -207,6 +207,7 @@ const defaultJudge = (): JudgeConfig => ({
   ask_timeout_seconds: 300,
   ask_timeout_action: "deny",
   incomplete_script_action: "model",
+  confidence_threshold: 0.55,
 });
 
 function JudgeCard() {
@@ -344,7 +345,7 @@ function JudgeCard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">审批提示词</p>
-                  <p className="text-xs text-muted-foreground">模型据此判定 ALLOW / ASK / DENY，可直接编辑</p>
+                  <p className="text-xs text-muted-foreground">模型据此判定 ALLOW / ASK / DENY，可直接编辑；选 Jev 时会作为 System One 的 policy/instructions</p>
                 </div>
                 <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={restorePrompt} disabled={saving}>
                   恢复默认模板
@@ -373,11 +374,25 @@ function JudgeCard() {
                       <SelectItem value={FOLLOW_ACTIVE}>跟随激活配置</SelectItem>
                       {profiles.map((p) => (
                         <SelectItem key={p.id} value={p.id}>
-                          {p.name}（{p.model}）
+                          {p.name}（{p.model}）{p.format === "jev" ? " · Jev / System One" : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                </Field>
+                <Field label="Jev 低置信度阈值">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={cfg.confidence_threshold ?? 0.55}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (Number.isFinite(n) && n >= 0 && n <= 1) patch({ confidence_threshold: n });
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">仅 Jev / System One 生效；置信度低于此值自动转人工，默认 0.55。</p>
                 </Field>
                 <Field label="每次模型判定超时（秒）">
                   <Input

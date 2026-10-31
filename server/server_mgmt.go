@@ -386,6 +386,10 @@ func (s *Server) pgSaveAgentConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := pg.SetAgentLLMProfile(a.Key, id); err != nil {
+			if errors.Is(err, db.ErrJevProfileJudgeOnly) {
+				writeErr(w, 400, err.Error())
+				return
+			}
 			writeErr(w, 500, err.Error())
 			return
 		}
@@ -487,6 +491,9 @@ func (s *Server) pgGetAgent(w http.ResponseWriter, r *http.Request) {
 	profs, _ := pg.ListProfiles()
 	llmProfiles := make([]map[string]any, 0, len(profs))
 	for _, p := range profs {
+		if p.Format == "jev" {
+			continue
+		}
 		llmProfiles = append(llmProfiles, map[string]any{
 			"id": p.ID, "name": p.Name, "model": p.Model, "is_default": p.IsDefault,
 		})
@@ -1935,6 +1942,14 @@ func (s *Server) pgActivateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := pg.SetActiveProfile(body.ID); err != nil {
+		if errors.Is(err, db.ErrJevProfileJudgeOnly) {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		if errors.Is(err, db.ErrLLMProfileNotFound) {
+			writeErr(w, 404, "LLM 配置不存在")
+			return
+		}
 		writeErr(w, 500, err.Error())
 		return
 	}

@@ -183,6 +183,25 @@ func TestConfigStores(t *testing.T) {
 	d.DeleteMCP(mid)
 }
 
+func TestJevProfileCannotBeActivatedOrAgentBound(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+	id, err := d.SaveProfile(&LLMProfile{Name: "t-jev-only", Format: "jev", Model: "jev-latest", APIKey: "jev-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM llm_profiles WHERE id=$1`, id) })
+	if err := d.SetActiveProfile(id); !errors.Is(err, ErrJevProfileJudgeOnly) {
+		t.Fatalf("activate Jev error=%v, want %v", err, ErrJevProfileJudgeOnly)
+	}
+	if err := d.SetAgentLLMProfile("planner", &id); !errors.Is(err, ErrJevProfileJudgeOnly) {
+		t.Fatalf("bind Jev error=%v, want %v", err, ErrJevProfileJudgeOnly)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (indexOf(s, sub) >= 0)
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/guard"
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/intercept/jev"
 	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/norma/llm"
 )
@@ -43,6 +44,17 @@ func (s *Server) wireInterceptReviewer() {
 		}
 		if profileID == 0 {
 			return intercept.Decision{}, fmt.Errorf("未配置可用的裁判模型")
+		}
+		profile, err := s.m.pg.ProfileByID(profileID)
+		if err != nil || profile == nil {
+			return intercept.Decision{ProfileID: profileID}, fmt.Errorf("裁判模型 profile %d 不可用", profileID)
+		}
+		if profile.Format == "jev" {
+			if strings.TrimSpace(profile.APIKey) == "" {
+				return intercept.Decision{ProfileID: profileID}, fmt.Errorf("Jev 判定模型未设置 API Key")
+			}
+			ctx = llmrec.WithWorker(ctx, judgeWorkerLane)
+			return jev.Config{BaseURL: profile.BaseURL, APIKey: profile.APIKey, Model: profile.Model}.Review(ctx, input, prompt, s.m.interceptor.GetJudgeConfig().ConfidenceThreshold, profileID)
 		}
 		prov, _, ok := s.providerForProfile(profileID)
 		if !ok {
@@ -477,6 +489,9 @@ func (s *Server) interceptSetJudgeConfig(w http.ResponseWriter, r *http.Request)
 	if err := req.ValidateRetry(); err != nil {
 		writeErr(w, 400, err.Error())
 		return
+	}
+	if req.ConfidenceThreshold <= 0 || req.ConfidenceThreshold > 1 {
+		req.ConfidenceThreshold = 0.55
 	}
 	if err := s.m.interceptor.SetJudgeConfig(req); err != nil {
 		writeErr(w, 500, err.Error())
