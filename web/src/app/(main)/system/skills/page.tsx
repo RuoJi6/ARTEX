@@ -15,6 +15,7 @@ import {
   AlertTriangleIcon,
 } from "lucide-react";
 
+import { TablePagination } from "@/components/table-pagination";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -146,11 +147,13 @@ type PendingDelete =
 // requests — this is pure aggregation over props.
 function SkillsOverview({
   skills,
-  missing,
+  missingTotal,
+  missingCalls,
   onSelect,
 }: {
   skills: SkillItem[];
-  missing: MissingSkill[];
+  missingTotal: number;
+  missingCalls: number;
   onSelect: (name: string) => void;
 }) {
   const agg = React.useMemo(() => {
@@ -162,7 +165,6 @@ function SkillsOverview({
       .filter((s) => s.last_used)
       .sort((a, b) => (a.last_used! < b.last_used! ? 1 : -1))
       .slice(0, 6);
-    const missingCalls = missing.reduce((n, m) => n + m.calls, 0);
     return {
       totalCalls,
       usedCount: used.length,
@@ -170,9 +172,8 @@ function SkillsOverview({
       topCalls: ranked[0]?.calls ?? 0,
       neverUsed,
       recent,
-      missingCalls,
     };
-  }, [skills, missing]);
+  }, [skills]);
 
   if (skills.length === 0) {
     return (
@@ -186,7 +187,7 @@ function SkillsOverview({
     { label: "Skill 总数", value: skills.length, hint: `${agg.usedCount} 个被调用过` },
     { label: "累计调用", value: agg.totalCalls },
     { label: "未使用", value: agg.neverUsed.length, hint: agg.neverUsed.length > 0 ? "从未被任何 agent 加载" : "全部用过" },
-    { label: "未命中调用", value: agg.missingCalls, hint: missing.length > 0 ? `${missing.length} 个不存在的 skill` : "无" },
+    { label: "未命中调用", value: missingCalls, hint: missingTotal > 0 ? `${missingTotal} 个不存在的 skill` : "无" },
   ];
 
   return (
@@ -339,12 +340,16 @@ export default function SkillsPage() {
   const [usageCalls, setUsageCalls] = React.useState<SkillCall[]>([]);
   const [usageLoading, setUsageLoading] = React.useState(false);
   const [missing, setMissing] = React.useState<MissingSkill[]>([]);
+  const [missingPage, setMissingPage] = React.useState(1);
+  const [missingTotal, setMissingTotal] = React.useState(0);
+  const [missingCalls, setMissingCalls] = React.useState(0);
+  const [missingRevision, setMissingRevision] = React.useState(0);
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const load = React.useCallback(() => {
+    setMissingRevision((value) => value + 1);
     api.agents().then(setAgents).catch(() => {});
     api.mcpServers().then(setMcpOptions).catch(() => {});
-    api.missingSkills().then(setMissing).catch(() => {});
     api.skills().then((ss) => {
       setSkills(ss);
       ss.forEach((s) =>
@@ -356,6 +361,24 @@ export default function SkillsPage() {
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
+
+  React.useEffect(() => {
+    if (missingRevision === 0) return;
+    let active = true;
+    api.missingSkills(missingPage)
+      .then((result) => {
+        if (!active) return;
+        setMissing(result.missing);
+        setMissingTotal(result.total);
+        setMissingCalls(result.totalCalls);
+      })
+      .catch(() => {
+        // Keep the last successful summary until the next refresh.
+      });
+    return () => {
+      active = false;
+    };
+  }, [missingPage, missingRevision]);
 
   // ── Upload a .zip skill ───────────────────────────────────────────────────
   async function uploadZip(file: File, overwrite = false) {
@@ -708,19 +731,19 @@ export default function SkillsPage() {
           <p className="text-muted-foreground text-xs">技能库 · agentskills.io 规范 · 按 Agent 授权可见</p>
         </div>
         {/* 缺口清单：agent 点名调用、但库里没有的 skill —— 直接是该补什么的依据。 */}
-        {missing.length > 0 && (
+        {missingTotal > 0 && (
           <Popover>
             <PopoverTrigger asChild>
               <Button size="sm" variant="outline" className="ml-auto">
                 <AlertTriangleIcon className="size-3.5 text-amber-500" />
-                {missing.length} 个未命中调用
+                {missingTotal} 个未命中技能
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-80">
               <p className="mb-2 text-xs text-muted-foreground">
                 Agent 点名调用、但技能库里不存在的 skill。按被点名次数排序。
               </p>
-              <div className="space-y-1">
+              <div className="max-h-80 space-y-1 overflow-y-auto">
                 {missing.map((m) => (
                   <div key={m.skill} className="flex items-center gap-2 text-sm">
                     <code className="min-w-0 flex-1 truncate font-mono text-xs" title={m.skill}>{m.skill}</code>
@@ -729,6 +752,14 @@ export default function SkillsPage() {
                   </div>
                 ))}
               </div>
+              <TablePagination
+                page={missingPage}
+                pageSize={20}
+                total={missingTotal}
+                onPageChange={setMissingPage}
+                onPageSizeChange={() => setMissingPage(1)}
+                pageSizeOptions={[20]}
+              />
             </PopoverContent>
           </Popover>
         )}
@@ -838,7 +869,8 @@ export default function SkillsPage() {
           {!selected && (
             <SkillsOverview
               skills={skills}
-              missing={missing}
+              missingTotal={missingTotal}
+              missingCalls={missingCalls}
               onSelect={(name) => setSelected({ skill: name, path: null })}
             />
           )}

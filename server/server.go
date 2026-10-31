@@ -1097,23 +1097,23 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	}
 	out["llm_configured"] = s.engine.ReadyFor(t)
 
-	st, _ := t.Store.Stats()
+	st, err := t.Store.Stats()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
 	out["exploration"] = st
 
 	// per-task running state + heartbeat (distinct from "LLM configured").
-	intents, _ := t.Store.ListByKind(db.KindIntent, 100000)
-	inFlight := 0
-	for _, in := range intents {
-		if in.State == "running" {
-			inFlight++
-		}
+	_, inFlight, err := t.Store.NodesPage(db.NodeFilter{Kinds: []string{db.KindIntent}, States: []string{"running"}}, 1, 1)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
 	}
-	goals, _ := t.Store.ListByKind(db.KindGoal, 10000)
-	goalsMet := 0
-	for _, g := range goals {
-		if g.State == "met" {
-			goalsMet++
-		}
+	_, goalsMet, err := t.Store.NodesPage(db.NodeFilter{Kinds: []string{db.KindGoal}, States: []string{"met"}}, 1, 1)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
 	}
 	last := s.engine.LastActivity(t.ID)
 	paused := s.engine.IsPaused(t.ID)
@@ -1144,7 +1144,7 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		"llm_in_flight": activeCalls,
 		"last_activity": last,
 		"stalled":       stalled,
-		"goals_total":   len(goals),
+		"goals_total":   st[db.KindGoal],
 		"goals_met":     goalsMet,
 	}
 	writeJSON(w, 200, out)
@@ -2097,7 +2097,15 @@ func (s *Server) findings(w http.ResponseWriter, r *http.Request) {
 	}
 	t := s.m.ResolveTask(taskParam)
 	if t == nil {
+		if q.Get("page") != "" || q.Get("limit") != "" {
+			writeErr(w, 404, "task not found")
+			return
+		}
 		writeJSON(w, 200, []any{})
+		return
+	}
+	if q.Get("page") != "" || q.Get("limit") != "" {
+		s.taskFindingsPage(w, r, t)
 		return
 	}
 	f, err := t.Store.ListByKind(db.KindFinding, 200)
@@ -2830,18 +2838,29 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 	}
 	since := int64(atoiDefault(r.URL.Query().Get("since"), 0))
 	limit := atoiDefault(r.URL.Query().Get("limit"), 300)
+	latest := r.URL.Query().Get("latest") == "1"
 	var intentPtr *int64
 	if iv := r.URL.Query().Get("intent"); iv != "" {
 		if n, err := strconv.ParseInt(iv, 10, 64); err == nil {
 			intentPtr = &n
 		}
 	}
+	if latest && (since != 0 || r.URL.Query().Get("intent") != "") {
+		writeErr(w, 400, "latest cannot be combined with since or intent")
+		return
+	}
 	var (
 		items  []db.Activity
 		cursor int64
 		err    error
 	)
-	if intentPtr != nil {
+	if latest {
+		limit = max(1, min(limit, 500))
+		items, _, err = t.Store.ActivityPage(db.ActivitySessionFilter{}, 0, limit)
+		if len(items) > 0 {
+			cursor = items[len(items)-1].ID
+		}
+	} else if intentPtr != nil {
 		items, cursor, err = t.Store.ActivityListWithSources(*intentPtr, since, limit)
 	} else {
 		items, cursor, err = t.Store.ActivityList(nil, since, limit)
@@ -4189,9 +4208,17 @@ func (s *Server) fallbackChat(t *Task, msg string) string {
 		for _, c := range assetCounts {
 			assets += c
 		}
-		fnd, _ := t.Store.ListByKind(db.KindFinding, 1000)
-		fr, _ := t.Store.Frontier(1000)
-		return fmt.Sprintf("（规则模式，未配置 LLM）当前态势：资产 %d，待领意图 %d，确认发现 %d。\n可用指令：以\"意图 ...\"注入意图，\"提示 ...\"给规划者提示。", assets, len(fr), len(fnd))
+		counts, err := t.Store.Stats()
+		if err != nil {
+			log.Printf("[fallback-chat] task=%s count nodes: %v", t.ID, err)
+			return "（规则模式，未配置 LLM）无法读取任务统计，请稍后重试。"
+		}
+		open, err := t.Store.CountOpenIntents()
+		if err != nil {
+			log.Printf("[fallback-chat] task=%s count open intents: %v", t.ID, err)
+			return "（规则模式，未配置 LLM）无法读取任务统计，请稍后重试。"
+		}
+		return fmt.Sprintf("（规则模式，未配置 LLM）当前态势：资产 %d，待领意图 %d，确认发现 %d。\n可用指令：以\"意图 ...\"注入意图，\"提示 ...\"给规划者提示。", assets, open, counts[db.KindFinding])
 	}
 }
 
@@ -4201,12 +4228,29 @@ func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "no active task")
 		return
 	}
-	findings, _ := t.Store.ListByKind(db.KindFinding, 1000) // 纯漏洞（事实是独立的 KindFact，不进报告）
+	var findings []*db.Node
+	var before int64
+	for {
+		page, more, err := t.Store.ListByKindPage(db.KindFinding, before, 500)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		findings = append(findings, page...)
+		if !more {
+			break
+		}
+		before = page[len(page)-1].ID
+	}
+	assetCounts, err := s.m.Assets().CountsByType()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
 	counts := map[string]int{}
 	for _, ty := range []string{"root_domain", "ip", "subdomain", "app", "service", "endpoint"} {
-		ns, _ := s.m.Assets().QueryByType(ty, 100000, 0)
-		if len(ns) > 0 {
-			counts[ty] = len(ns)
+		if assetCounts[ty] > 0 {
+			counts[ty] = assetCounts[ty]
 		}
 	}
 	md := report.Markdown(report.Input{

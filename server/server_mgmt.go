@@ -1053,12 +1053,16 @@ func (s *Server) fsMissingSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	missing, err := pg.MissingSkillStats(limit)
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	page := findingPaginationParam(r.URL.Query().Get("page"), 1, 0)
+	missing, total, calls, err := pg.MissingSkillStatsPage(limit, page)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"missing": missing})
+	writeJSON(w, 200, map[string]any{"missing": missing, "total": total, "total_calls": calls, "page": page, "page_size": limit})
 }
 
 // cleanStrs trims each string and drops empties.

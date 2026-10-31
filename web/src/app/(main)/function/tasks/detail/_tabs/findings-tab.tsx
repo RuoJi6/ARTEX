@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { FindingCaseList } from "@/components/finding-case-list";
 import { StatusBadge } from "@/components/status-badge";
+import { TablePagination } from "@/components/table-pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,10 +17,10 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api } from "@/lib/api";
-import { type FindingSortField, filterAndSortFindings } from "@/lib/finding-severity";
+import type { FindingSortField } from "@/lib/finding-severity";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import { SEVERITY_FILTER_OPTIONS, statusMeta } from "@/lib/status";
-import type { Finding, FindingStatus, Severity } from "@/lib/types";
+import type { Finding, FindingStatus, FindingsPage, Severity } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const FINDING_SORT_FIELDS: readonly FindingSortField[] = ["time", "severity"];
@@ -137,7 +138,8 @@ function Row({
 }
 
 export function FindingsTab({ taskId }: { taskId: string }) {
-  const [findings, setFindings] = React.useState<Finding[]>([]);
+  const [sources, setSources] = React.useState<string[]>([]);
+  const [rawOpen, setRawOpen] = React.useState(false);
   const [severity, setSeverity] = React.useState<"all" | Severity>("all");
   const [search, setSearch] = React.useState("");
   const [query, setQuery] = React.useState("");
@@ -153,8 +155,17 @@ export function FindingsTab({ taskId }: { taskId: string }) {
     const load = () => {
       api
         .findings(taskId)
-        .then((fs) => {
-          if (active) setFindings(fs);
+        .then((findings) => {
+          if (active) {
+            setSources([
+              ...new Set(
+                findings
+                  .filter((f) => f.inherited)
+                  .map((f) => f.source_task_id)
+                  .filter((id): id is string => !!id),
+              ),
+            ]);
+          }
         })
         .catch(() => {
           // Keep the last successful snapshot during transient refresh failures.
@@ -167,23 +178,6 @@ export function FindingsTab({ taskId }: { taskId: string }) {
       clearInterval(t);
     };
   }, [taskId]);
-
-  const onStatus = React.useCallback(async (f: Finding, next: FindingStatus) => {
-    if (f.inherited || !f.finding_id || next === f.status) return;
-    const prev = f.status;
-    setFindings((cur) => cur.map((x) => (x.id === f.id ? { ...x, status: next } : x)));
-    try {
-      await api.setFindingStatus(f.finding_id, next);
-      toast.success(`已标记为「${statusMeta("finding", next).label}」`);
-    } catch (e) {
-      setFindings((cur) => cur.map((x) => (x.id === f.id ? { ...x, status: prev } : x)));
-      toast.error("更新失败：" + (e as Error).message);
-    }
-  }, []);
-
-  // Discover inherited sources before filtering; finding-cases owns folder matching.
-  const taskFindings = findings.filter((f) => f.task_id === taskId || f.inherited);
-  const items = filterAndSortFindings(taskFindings, severity, sortPreference, query);
 
   return (
     <div className="flex flex-col gap-4">
@@ -272,14 +266,7 @@ export function FindingsTab({ taskId }: { taskId: string }) {
         }}
         contextTask={taskId}
       />
-      {[
-        ...new Set(
-          taskFindings
-            .filter((f) => f.inherited)
-            .map((f) => f.source_task_id)
-            .filter((id): id is string => !!id),
-        ),
-      ].map((source) => (
+      {sources.map((source) => (
         <div key={source}>
           <p className="mb-2 text-sm text-muted-foreground">继承任务 #{source} · 只读</p>
           <FindingCaseList
@@ -295,7 +282,7 @@ export function FindingsTab({ taskId }: { taskId: string }) {
           />
         </div>
       ))}
-      <details>
+      <details onToggle={(event) => setRawOpen(event.currentTarget.open)}>
         <summary className="cursor-pointer text-sm text-muted-foreground">查看原始上报列表</summary>
         <Card className="overflow-hidden py-0">
           <CardContent className="px-0">
@@ -312,19 +299,101 @@ export function FindingsTab({ taskId }: { taskId: string }) {
                 )}
               </span>
             </div>
-            {items.map((f) => (
-              <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
-            ))}
-            {items.length === 0 && (
-              <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-                {severity !== "all" || query
-                  ? "当前筛选与搜索条件下暂无原始上报。"
-                  : "本任务及直接关联任务暂无确认发现。"}
-              </p>
+            {rawOpen && (
+              <TaskFindingRows
+                key={JSON.stringify([taskId, severity, query, sortPreference])}
+                taskId={taskId}
+                severity={severity}
+                query={query}
+                sort={sortPreference.field}
+                order={sortPreference.direction}
+              />
             )}
           </CardContent>
         </Card>
       </details>
     </div>
+  );
+}
+
+function TaskFindingRows({
+  taskId,
+  severity,
+  query,
+  sort,
+  order,
+}: {
+  taskId: string;
+  severity: "all" | Severity;
+  query: string;
+  sort: FindingSortField;
+  order: "asc" | "desc";
+}) {
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(20);
+  const [data, setData] = React.useState<FindingsPage | null>(null);
+  const [error, setError] = React.useState(false);
+
+  React.useEffect(() => {
+    let active = true;
+    let loading = false;
+    const load = async () => {
+      if (loading) return;
+      loading = true;
+      try {
+        const result = await api.taskFindingsPage(taskId, page, pageSize, { severity, query, sort, order });
+        if (active) {
+          setData(result);
+          setError(false);
+        }
+      } catch {
+        if (active) setError(true);
+      } finally {
+        loading = false;
+      }
+    };
+    void load();
+    const timer = setInterval(load, 3000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [taskId, page, pageSize, severity, query, sort, order]);
+
+  const onStatus = React.useCallback(async (f: Finding, next: FindingStatus) => {
+    if (f.inherited || !f.finding_id || next === f.status) return;
+    const prev = f.status;
+    setData((cur) => cur && { ...cur, items: cur.items.map((x) => (x.id === f.id ? { ...x, status: next } : x)) });
+    try {
+      await api.setFindingStatus(f.finding_id, next);
+      toast.success(`已标记为「${statusMeta("finding", next).label}」`);
+    } catch (e) {
+      setData((cur) => cur && { ...cur, items: cur.items.map((x) => (x.id === f.id ? { ...x, status: prev } : x)) });
+      toast.error("更新失败：" + (e as Error).message);
+    }
+  }, []);
+
+  return (
+    <section>
+      {data?.items.map((finding) => (
+        <Row key={finding.id} f={finding} contextTaskId={taskId} onStatus={onStatus} />
+      ))}
+      {data?.total === 0 && (
+        <p className="px-4 py-8 text-center text-sm text-muted-foreground">当前筛选下暂无原始上报。</p>
+      )}
+      {!data && <p className="px-4 py-8 text-center text-sm text-muted-foreground">{error ? "加载失败" : "加载中"}</p>}
+      {data && (
+        <TablePagination
+          page={page}
+          pageSize={pageSize}
+          total={data.total}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+        />
+      )}
+    </section>
   );
 }

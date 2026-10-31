@@ -1619,6 +1619,24 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       request_id: result.requestId ?? "",
     };
   }
+  if (seg[0] === "tasks" && seg[2] === "intents" && seg[4] === "rerun" && m === "POST") {
+    const intent = mockIntents.find((item) => item.id === seg[3]);
+    if (!intent || intent.inherited || !["blocked", "exhausted", "stopped"].includes(intent.state)) {
+      throw new Error("该意图不是可重跑状态");
+    }
+    intent.state = "open";
+    return { id: seg[1], reopened: Number(intent.id.replace(/\D/g, "")) || 0 };
+  }
+  if (seg[0] === "tasks" && seg[2] === "intents" && seg[3] === "rerun-blocked" && m === "POST") {
+    let reopened = 0;
+    for (const intent of mockIntents) {
+      if (!intent.inherited && intent.state === "blocked") {
+        intent.state = "open";
+        reopened++;
+      }
+    }
+    return { id: seg[1], reopened };
+  }
   if (seg[0] === "tasks" && seg.length === 3 && seg[2] === "control" && m === "POST") {
     const action = b.action === "resume" ? "resume" : "pause";
     const result = controlMockTask(seg[1], action);
@@ -1739,7 +1757,12 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
 
   // ── stats ──
   if (path === "/stats") {
-    return D.stats(task, { tasks: mockTasks, findings: mockFindings, activeTask: mockActiveTask });
+    return D.stats(task, {
+      tasks: mockTasks,
+      findings: mockFindings,
+      intents: mockIntents,
+      activeTask: mockActiveTask,
+    });
   }
 
   // ── assets ──
@@ -2265,6 +2288,40 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     if (task) {
       const owner = mockTasks.find((item) => item.id === task);
       const sources = new Set(owner?.source_task_ids ?? []);
+      if (q.has("page") || q.has("limit")) {
+        if (!owner) throw new Error("task not found");
+        const page = Math.max(1, Math.floor(Number(q.get("page")) || 1));
+        const pageSize = Math.min(200, Math.max(1, Math.floor(Number(q.get("limit")) || 20)));
+        const direction = q.get("order") === "asc" ? 1 : -1;
+        const severity = q.get("severity");
+        const keyword = (q.get("q") ?? "").trim().toLowerCase();
+        const rank = { critical: 4, high: 3, medium: 2, low: 1 } as const;
+        const list = mockFindings
+          .filter((f) => f.task_id === task || (!!f.task_id && sources.has(f.task_id)))
+          .filter((f) => !severity || severity === "all" || f.severity === severity)
+          .filter(
+            (f) =>
+              !keyword ||
+              [f.name, f.vulnclass, f.summary, f.evidence].some((v) => (v ?? "").toLowerCase().includes(keyword)),
+          )
+          .sort((a, b) => {
+            const severityOrder = q.get("sort") === "severity" ? rank[b.severity] - rank[a.severity] : 0;
+            return (
+              severityOrder ||
+              direction * (Date.parse(a.ts) - Date.parse(b.ts)) ||
+              b.id.localeCompare(a.id, undefined, { numeric: true })
+            );
+          });
+        return {
+          items: list.slice((page - 1) * pageSize, page * pageSize).map((f) => ({
+            ...withFid(f),
+            ...(f.task_id !== task ? { inherited: true, source_task_id: f.task_id } : {}),
+          })),
+          total: list.length,
+          page,
+          page_size: pageSize,
+        };
+      }
       return mockFindings
         .filter((f) => f.task_id === task || (!!f.task_id && sources.has(f.task_id)))
         .map((f) => ({
@@ -2311,7 +2368,7 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   // 播报板:和后端 /exploration/nodes 同语义 —— 按创建顺序(mock 里用 ts + id)分页,
   // 并带上这一页涉及的边与边另一端的节点。
   if (path === "/exploration/nodes") {
-    const all = D.explorationGraph.nodes;
+    const all = [...D.explorationGraph.nodes.filter((node) => node.type !== "intent"), ...mockIntents];
     const kinds = new Set((q.get("kind") ?? "").split(",").filter(Boolean));
     const states = new Set((q.get("state") ?? "").split(",").filter(Boolean));
     const needle = (q.get("q") ?? "").trim().toLowerCase();
@@ -2353,6 +2410,11 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/exploration/activity" && seg.length === 2) {
     const since = Number(q.get("since") ?? 0);
     const limit = Math.max(1, Number(q.get("limit") ?? 300));
+    if (q.get("latest") === "1") {
+      if (since !== 0 || q.has("intent")) throw new Error("latest cannot be combined with since or intent");
+      const items = mockActivity.slice(-Math.min(limit, 500));
+      return { items, cursor: items.length ? items[items.length - 1].seq : 0 };
+    }
     const items = mockActivity.filter((item) => item.seq > since).slice(0, limit);
     return { items, cursor: items.length ? items[items.length - 1].seq : since };
   }
@@ -2572,7 +2634,17 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
 
   // ── skills ──
   if (path === "/skills" && m === "GET") return { skills: D.skills };
-  if (path === "/skills/missing") return { missing: D.missingSkills };
+  if (path === "/skills/missing") {
+    const page = Math.max(1, Math.floor(Number(q.get("page")) || 1));
+    const limit = Math.min(200, Math.max(1, Math.floor(Number(q.get("limit")) || 20)));
+    return {
+      missing: D.missingSkills.slice((page - 1) * limit, page * limit),
+      total: D.missingSkills.length,
+      total_calls: D.missingSkills.reduce((sum, item) => sum + item.calls, 0),
+      page,
+      page_size: limit,
+    };
+  }
   if (seg[0] === "skills" && seg[2] === "usage") return { calls: D.skillCalls };
   if (path === "/skills" && m === "POST") return { name: String(b.name ?? "new-skill") };
   if (seg[0] === "skills" && seg[2] === "files" && seg.length === 3) return { files: ["SKILL.md"] };

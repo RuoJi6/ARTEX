@@ -21,6 +21,22 @@ func (s *Server) listGoals(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "task not found")
 		return
 	}
+	q := r.URL.Query()
+	if q.Get("page") != "" || q.Get("limit") != "" {
+		page := findingPaginationParam(q.Get("page"), 1, 0)
+		size := findingPaginationParam(q.Get("limit"), 20, 200)
+		if page > int(^uint(0)>>1)/size {
+			writeErr(w, 400, "page is too large")
+			return
+		}
+		goals, total, err := t.Store.NodesPage(db.NodeFilter{Kinds: []string{db.KindGoal}}, page, size)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"goals": goalDTOs(goals), "total": total, "page": page, "page_size": size})
+		return
+	}
 	goals, err := t.Store.ListByKind(db.KindGoal, 10000)
 	if err != nil {
 		writeErr(w, 500, err.Error())

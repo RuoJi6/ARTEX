@@ -480,9 +480,11 @@ export const api = {
   // 全局 llm_usage 聚合（仪表盘新版 token 视图）：按 profile 总量 + 按天分桶。
   usageStats: (days = 365) => get<UsageStats>(`/tokens/usage?days=${days}`),
   // ---- 目标管理（总览）----
-  // 本任务全部目标（text/vulnclass/state）。
-  taskGoals: (id: string) =>
-    get<{ goals: TaskGoal[] | null }>(`/tasks/${id}/goals`).then((response) => ({ goals: arr(response.goals) })),
+  // 本任务目标（text/vulnclass/state），服务端分页。
+  taskGoals: (id: string, page: number, pageSize: number) =>
+    get<{ goals: TaskGoal[] | null; total: number }>(`/tasks/${id}/goals?page=${page}&limit=${pageSize}`).then(
+      (response) => ({ goals: arr(response.goals), total: response.total ?? 0 }),
+    ),
   // 人工新增目标：写入图谱并通知 planner、复活任务。
   addGoal: (id: string, text: string, vulnclass?: string) =>
     post<TaskGoal>(`/tasks/${id}/goals`, { text, vulnclass: vulnclass ?? "" }),
@@ -640,6 +642,28 @@ export const api = {
   // ---- exploration (per task) ----
   frontier: (task?: string) => get<TaskNode[]>(`/exploration/frontier${tq(task)}`).then(arr),
   findings: (task?: string) => get<Finding[]>(`/exploration/findings${tq(task)}`).then(arr),
+  taskFindingsPage: (
+    task: string,
+    page: number,
+    pageSize: number,
+    filters: {
+      severity: "all" | Severity;
+      query: string;
+      sort: "time" | "severity";
+      order: "asc" | "desc";
+    },
+  ) => {
+    const q = new URLSearchParams({
+      task,
+      page: String(page),
+      limit: String(pageSize),
+      sort: filters.sort,
+      order: filters.order,
+    });
+    if (filters.severity !== "all") q.set("severity", filters.severity);
+    if (filters.query.trim()) q.set("q", filters.query.trim());
+    return get<FindingsPage>(`/exploration/findings?${q}`);
+  },
   findingsPage: (q: FindingQuery) => {
     const p = findingFilterParams(q);
     p.set("page", String(q.page));
@@ -868,12 +892,13 @@ export const api = {
       assets: r.assets ?? {},
     }));
   },
-  activity: (task?: string, opts?: { intent?: string; since?: number; limit?: number }) => {
+  activity: (task?: string, opts?: { intent?: string; since?: number; limit?: number; latest?: boolean }) => {
     const q = new URLSearchParams();
     if (task) q.set("task", task);
     if (opts?.intent) q.set("intent", opts.intent);
     if (opts?.since) q.set("since", String(opts.since));
     if (opts?.limit) q.set("limit", String(opts.limit));
+    if (opts?.latest) q.set("latest", "1");
     return get<{ items: Activity[]; cursor: number }>(`/exploration/activity?${q.toString()}`).then((r) => ({
       items: arr(r.items),
       cursor: r.cursor ?? 0,
@@ -1348,8 +1373,10 @@ export const api = {
   deleteSkillPath: (skill: string, path: string) => del<{ deleted: string }>(`/skills/${skill}/files/${path}`),
   skillUsage: (name: string, limit = 50) =>
     get<{ calls: SkillCall[] }>(`/skills/${name}/usage?limit=${limit}`).then((r) => arr(r.calls)),
-  missingSkills: (limit = 20) =>
-    get<{ missing: MissingSkill[] }>(`/skills/missing?limit=${limit}`).then((r) => arr(r.missing)),
+  missingSkills: (page = 1, limit = 20) =>
+    get<{ missing: MissingSkill[]; total: number; total_calls: number }>(
+      `/skills/missing?page=${page}&limit=${limit}`,
+    ).then((r) => ({ missing: arr(r.missing), total: r.total ?? 0, totalCalls: r.total_calls ?? 0 })),
 
   // ---- visibility (MCP resource side) ---- (agent ids are strings per spec)
   resourceVisibility: (kind: string, id: number) =>
