@@ -3,10 +3,12 @@ package jev
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/intercept"
@@ -29,6 +31,22 @@ func TestBuildRequestMapsReviewInputAndChoiceCriteria(t *testing.T) {
 	}
 	if len(b) > maxStateBytes+2000 {
 		t.Fatalf("state exceeded bound: %d", len(b))
+	}
+}
+
+func TestBuildRequestUsesCompactPolicyForDefaultPrompts(t *testing.T) {
+	for _, prompt := range []string{"", intercept.DefaultJudgePrompt, intercept.EffectiveJudgePrompt(intercept.DefaultJudgePrompt)} {
+		req, err := BuildRequest(intercept.ReviewInput{Version: 5, Tool: "Bash", Arguments: json.RawMessage(`{"cmd":"cat /etc/shadow"}`)}, prompt, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		instructions := req.Questions["decision"].Instructions
+		if !strings.Contains(instructions, "漏洞利用 payload") || !strings.Contains(instructions, "其余默认 allow") {
+			t.Fatalf("default policy lost authorized-pentest semantics: %s", instructions)
+		}
+		if strings.Contains(instructions, intercept.JudgeContextBoundary) || strings.Contains(instructions, intercept.JudgeOutputContract) {
+			t.Fatalf("default prompt was copied into Jev instructions: %s", instructions)
+		}
 	}
 }
 
@@ -103,6 +121,20 @@ func TestReviewForcesAskWhenEvidenceWasTruncated(t *testing.T) {
 	}
 }
 
+func TestReviewLowConfidenceTruncatedEvidenceKeepsBothReasons(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"answers":{"decision":{"choice":"allow","confidence":0.2,"probabilities":{"allow":0.8,"ask":0.1,"deny":0.1}}}}`))
+	}))
+	defer srv.Close()
+	args := json.RawMessage(`{"payload":"` + strings.Repeat("x", 50000) + `"}`)
+	d, _, err := (Config{BaseURL: srv.URL, APIKey: "secret", Client: srv.Client()}).ReviewWithUsage(
+		context.Background(), intercept.ReviewInput{Version: 5, Tool: "Bash", Arguments: args}, "", 0.55, 8)
+	if err != nil || d.Action != "ask" || !strings.Contains(d.Message, "置信度") || !strings.Contains(d.Message, "证据已截断") {
+		t.Fatalf("decision=%#v err=%v", d, err)
+	}
+}
+
 func TestReviewForcesAskForIncompleteScriptEvidence(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -143,6 +175,24 @@ func TestSystemOneUsesConfiguredProxy(t *testing.T) {
 		t.Fatalf("proxy test latency=%v err=%v", lat, err)
 	}
 }
+
+func TestTestConnectionAddsThirtySecondDeadline(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		deadline, ok := req.Context().Deadline()
+		if !ok || time.Until(deadline) > 30*time.Second || time.Until(deadline) < 29*time.Second {
+			return nil, fmt.Errorf("unexpected deadline: %v", deadline)
+		}
+		return nil, context.DeadlineExceeded
+	})}
+	_, _, err := (Config{BaseURL: "http://target.invalid", APIKey: "secret", Client: client}).TestConnection(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("expected context deadline error, got %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestSystemOneReviewAndConnectionTest(t *testing.T) {
 	var gotAuth string

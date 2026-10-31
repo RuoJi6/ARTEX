@@ -4,14 +4,10 @@
 package llmhttp
 
 import (
-	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
-
-	"golang.org/x/net/proxy"
 )
 
 // NewClient builds an HTTP client for an LLM endpoint. Supported proxies are
@@ -27,22 +23,8 @@ func NewClient(rawProxy string) (*http.Client, error) {
 			return nil, fmt.Errorf("llm: invalid proxy %q: %w", rawProxy, err)
 		}
 		switch proxyURL.Scheme {
-		case "http", "https":
+		case "http", "https", "socks5":
 			transport.Proxy = http.ProxyURL(proxyURL)
-		case "socks5":
-			auth := proxy.Auth{}
-			if user := proxyURL.User; user != nil {
-				auth.User = user.Username()
-				auth.Password, _ = user.Password()
-			}
-			dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, &auth, proxy.Direct)
-			if err != nil {
-				return nil, fmt.Errorf("llm: invalid socks5 proxy %q: %w", rawProxy, err)
-			}
-			transport.Proxy = nil
-			transport.DialContext = func(_ context.Context, network, address string) (net.Conn, error) {
-				return dialer.Dial(network, address)
-			}
 		case "":
 			return nil, fmt.Errorf("llm: proxy %q missing scheme (use http://, https:// or socks5://)", rawProxy)
 		default:

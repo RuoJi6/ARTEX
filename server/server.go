@@ -1580,7 +1580,9 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 				proxy = p.Proxy
 			}
 		}
-		lat, reply, err := (jev.Config{BaseURL: baseURL, APIKey: apiKey, Model: model, Proxy: proxy}).TestConnection(r.Context())
+		testCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		lat, reply, err := (jev.Config{BaseURL: baseURL, APIKey: apiKey, Model: model, Proxy: proxy}).TestConnection(testCtx)
 		if err != nil {
 			writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
 			return

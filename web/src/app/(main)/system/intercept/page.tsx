@@ -379,7 +379,7 @@ function JudgeCard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">审批提示词</p>
-                  <p className="text-xs text-muted-foreground">模型据此判定 ALLOW / ASK / DENY，可直接编辑；选 Jev 时会作为 System One 的 policy/instructions</p>
+                  <p className="text-xs text-muted-foreground">模型据此判定 ALLOW / ASK / DENY，可直接编辑；选 Jev 时，自定义内容会作为 System One 的补充 policy/instructions，默认模板使用内置 Jev 口径</p>
                 </div>
                 <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={restorePrompt} disabled={saving}>
                   恢复默认模板
