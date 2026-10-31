@@ -136,6 +136,9 @@ type Server struct {
 type provEntry struct {
 	prov llm.Provider
 	cfg  agent.Config
+	// jev is retained in the cache entry so a cached chat provider can be
+	// returned without consulting the DB on every hot-path resolution.
+	jev bool
 }
 
 // triggeredRun is one queued P3 trigger fire awaiting its turn for an agent.
@@ -364,6 +367,9 @@ func (s *Server) loadLLMConfig() (agent.Config, bool) {
 	if err != nil || p == nil {
 		return agent.Config{}, false
 	}
+	if p.Format == "jev" {
+		return agent.Config{}, false
+	}
 	cfg := agent.ConfigFrom(p.Format, p.Model, p.BaseURL, p.APIKey, p.Proxy)
 	cfg.RatePerSecond, cfg.RatePerMinute = p.RatePerSecond, p.RatePerMinute
 	cfg.ContextWindowK = p.ContextWindowK
@@ -384,6 +390,9 @@ func (s *Server) loadLLMConfig() (agent.Config, bool) {
 
 // saveLLMConfig persists the LLM config as the active "default" profile in PG.
 func (s *Server) saveLLMConfig(cfg agent.Config) error {
+	if cfg.Jev || cfg.Provider() == "jev" {
+		return db.ErrJevProfileJudgeOnly
+	}
 	// cfg.Provider() returns one of the chat format strings
 	// (anthropic / openai / openai-responses), matching the DB CHECK constraint;
 	// Jev is intentionally handled by the dedicated intercept path.
@@ -539,6 +548,13 @@ func (s *Server) loadProfileConfig(id int64) (agent.Config, bool) {
 	if err != nil || p == nil {
 		return agent.Config{}, false
 	}
+	return s.profileConfig(p)
+}
+
+func (s *Server) profileConfig(p *db.LLMProfile) (agent.Config, bool) {
+	if p == nil {
+		return agent.Config{}, false
+	}
 	if p.Format == "jev" {
 		return agent.Config{}, false
 	}
@@ -607,27 +623,52 @@ func (s *Server) chatUnavailableReason() string {
 // ok=false when the profile is missing/invalid; pinned callers surface that error
 // while legacy callers retain their existing fallback behavior.
 func (s *Server) providerForProfile(id int64) (llm.Provider, agent.Config, bool) {
-	if p, err := s.m.pg.ProfileByID(id); err != nil || p == nil || p.Format == "jev" {
-		return nil, agent.Config{}, false
-	}
 	s.provCacheMu.Lock()
 	if e := s.provByProfile[id]; e != nil {
+		if e.jev {
+			s.provCacheMu.Unlock()
+			return nil, agent.Config{}, false
+		}
 		s.provCacheMu.Unlock()
 		return e.prov, e.cfg, true
 	}
 	generation := s.provCacheGen
 	s.provCacheMu.Unlock()
-	cfg, ok := s.loadProfileConfig(id)
+	// Only a cache miss reaches the DB. This preserves an already-built chat
+	// provider during a transient profile lookup failure and avoids a query for
+	// every agent/task resolution.
+	profile, err := s.m.pg.ProfileByID(id)
+	if err != nil || profile == nil {
+		return nil, agent.Config{}, false
+	}
+	if profile.Format == "jev" {
+		// Cache the negative result too. Profile writes/activation invalidate this
+		// generation, while a transient DB error on a cached chat profile above
+		// still returns that already-built provider.
+		s.provCacheMu.Lock()
+		if generation == s.provCacheGen {
+			if s.provByProfile == nil {
+				s.provByProfile = map[int64]*provEntry{}
+			}
+			s.provByProfile[id] = &provEntry{jev: true}
+		}
+		s.provCacheMu.Unlock()
+		return nil, agent.Config{}, false
+	}
+	cfg, ok := s.profileConfig(profile)
 	if !ok {
 		return nil, agent.Config{}, false
 	}
-	profile, _ := s.m.pg.ProfileByID(id)
 	s.provCacheMu.Lock()
 	if generation != s.provCacheGen {
 		s.provCacheMu.Unlock()
 		return s.providerForProfile(id)
 	}
 	if e := s.provByProfile[id]; e != nil { // lost the race → keep the winner
+		if e.jev {
+			s.provCacheMu.Unlock()
+			return nil, agent.Config{}, false
+		}
 		s.provCacheMu.Unlock()
 		return e.prov, e.cfg, true
 	}
@@ -644,7 +685,7 @@ func (s *Server) providerForProfile(id int64) (llm.Provider, agent.Config, bool)
 		prov = llmrec.Wrap(prov, s.m.PG(), cfg.Model, profile.Name, cfg.ThinkingType, cfg.ReasoningEffort, s.m.LLMRecordEnabled)
 		prov = bindSideProvider(prov, cfg, id, profile.Name)
 	}
-	s.provByProfile[id] = &provEntry{prov: prov, cfg: cfg}
+	s.provByProfile[id] = &provEntry{prov: prov, cfg: cfg, jev: false}
 	log.Printf("[engine] built provider for LLM profile %d (%s / %s)", id, cfg.Provider(), cfg.Model)
 	s.provCacheMu.Unlock()
 	return prov, cfg, true
@@ -1533,7 +1574,13 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 		if model == "" {
 			model = jev.DefaultModel
 		}
-		lat, reply, err := (jev.Config{BaseURL: baseURL, APIKey: apiKey, Model: model}).TestConnection(r.Context())
+		proxy := strings.TrimSpace(req.Proxy)
+		if proxy == "" && req.ProfileID != nil {
+			if p, err := s.m.pg.ProfileByID(*req.ProfileID); err == nil && p != nil {
+				proxy = p.Proxy
+			}
+		}
+		lat, reply, err := (jev.Config{BaseURL: baseURL, APIKey: apiKey, Model: model, Proxy: proxy}).TestConnection(r.Context())
 		if err != nil {
 			writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
 			return

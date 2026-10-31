@@ -158,6 +158,9 @@ ORDER BY is_default DESC, priority DESC, id ASC`)
 
 // SaveProfile inserts (id==0) or updates a profile. Empty apiKey on update keeps existing.
 func (d *DB) SaveProfile(p *LLMProfile) (int64, error) {
+	if p.Format == "jev" && p.IsDefault {
+		return 0, ErrJevProfileJudgeOnly
+	}
 	if p.Format == "jev" && p.ID != 0 {
 		var active bool
 		if err := d.QueryRow(`SELECT is_default FROM llm_profiles WHERE id=$1`, p.ID).Scan(&active); err == nil && active {

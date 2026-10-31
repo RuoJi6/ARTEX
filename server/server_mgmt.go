@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/llmhttp"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/skill"
 )
@@ -1832,6 +1832,10 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := pg.SaveProfile(&p)
 	if err != nil {
+		if errors.Is(err, db.ErrJevProfileJudgeOnly) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeErr(w, 500, err.Error())
 		return
 	}
@@ -2008,6 +2012,11 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	provider := strings.TrimSpace(req.Provider)
+	if provider == "jev" {
+		writeErr(w, http.StatusBadRequest, "Jev / System One 不提供模型列表，请直接使用默认模型 jev-latest")
+		return
+	}
 	// Resolve API key: form input > profile stored key.
 	apiKey := strings.TrimSpace(req.APIKey)
 	if apiKey == "" && req.ProfileID != nil {
@@ -2021,7 +2030,6 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
-	provider := strings.TrimSpace(req.Provider)
 
 	// Candidate endpoints to try in order. Some Anthropic-compatible providers
 	// (e.g. DeepSeek) implement /v1/messages under an /anthropic path but expose
@@ -2069,14 +2077,13 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build HTTP client with optional proxy.
-	transport := &http.Transport{}
-	if p := strings.TrimSpace(req.Proxy); p != "" {
-		if pu, err := url.Parse(p); err == nil {
-			transport.Proxy = http.ProxyURL(pu)
-		}
+	// Build HTTP client with the same profile proxy semantics as LLM calls.
+	client, err := llmhttp.NewClient(req.Proxy)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	client.Timeout = 30 * time.Second
 
 	// Try each candidate; return the first that yields a non-empty model list.
 	var lastErr string

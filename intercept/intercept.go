@@ -370,7 +370,7 @@ func (i *Interceptor) judgeConfig() JudgeConfig {
 	if c.AskTimeoutSeconds <= 0 {
 		c.AskTimeoutSeconds = defaultJudgeAskTimeoutSecs
 	}
-	if c.ConfidenceThreshold <= 0 || c.ConfidenceThreshold > 1 {
+	if c.ConfidenceThreshold < 0 || c.ConfidenceThreshold > 1 {
 		c.ConfidenceThreshold = defaultJudgeConfidence
 	}
 	return c
@@ -424,6 +424,9 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 	if err := c.ValidateRetry(); err != nil {
 		return err
 	}
+	if c.ConfidenceThreshold < 0 || c.ConfidenceThreshold > 1 {
+		return fmt.Errorf("confidence_threshold 必须在 0 到 1 之间")
+	}
 	if err := i.db.SetBool(settingJudgeEnabled, c.Enabled); err != nil {
 		return err
 	}
@@ -459,9 +462,6 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 	}
 	if err := i.db.SetSetting(settingJudgeIncompleteScript, c.IncompleteScriptAction); err != nil {
 		return err
-	}
-	if c.ConfidenceThreshold <= 0 || c.ConfidenceThreshold > 1 {
-		c.ConfidenceThreshold = defaultJudgeConfidence
 	}
 	if err := i.db.SetSetting(settingJudgeConfidence, strconv.FormatFloat(c.ConfidenceThreshold, 'f', 4, 64)); err != nil {
 		return err

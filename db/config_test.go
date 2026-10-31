@@ -202,6 +202,17 @@ func TestJevProfileCannotBeActivatedOrAgentBound(t *testing.T) {
 	}
 }
 
+func TestJevProfileCannotBeSavedAsDefault(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+	if _, err := d.SaveProfile(&LLMProfile{Name: "t-jev-default", Format: "jev", Model: "jev-latest", APIKey: "jev-key", IsDefault: true}); !errors.Is(err, ErrJevProfileJudgeOnly) {
+		t.Fatalf("SaveProfile Jev default error=%v, want %v", err, ErrJevProfileJudgeOnly)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (indexOf(s, sub) >= 0)
 }

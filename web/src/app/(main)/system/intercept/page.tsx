@@ -5,7 +5,9 @@ import { toast } from "sonner";
 import {
   BotIcon,
   ListFilterIcon,
+  Loader2Icon,
   PencilIcon,
+  PlugZapIcon,
   PlusIcon,
   ShieldAlertIcon,
   Trash2Icon,
@@ -216,6 +218,7 @@ function JudgeCard() {
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [usage, setUsage] = React.useState<JudgeUsage | null>(null);
+  const [testing, setTesting] = React.useState(false);
 
   // 审批用量统计:失败不打断配置页,仅在开启时拉取。
   const loadUsage = React.useCallback(async () => {
@@ -250,6 +253,37 @@ function JudgeCard() {
 
   function patch(p: Partial<JudgeConfig>) {
     setCfg((c) => ({ ...c, ...p }));
+  }
+
+  const selectedProfile = cfg.profile_id
+    ? profiles.find((p) => Number(p.id) === cfg.profile_id)
+    : profiles.find((p) => p.is_default);
+  const selectedIsJev = selectedProfile?.format === "jev";
+
+  async function testSelectedJev() {
+    if (!selectedProfile || !selectedIsJev || testing) return;
+    setTesting(true);
+    try {
+      const r = await api.testLLM(
+        "jev",
+        selectedProfile.model || "jev-latest",
+        selectedProfile.base_url ?? "",
+        "",
+        selectedProfile.proxy ?? "",
+        "",
+        "",
+        Number(selectedProfile.id),
+      );
+      if (r.ok) {
+        toast.success(`Jev 连接成功 · ${r.latency_ms ?? "?"}ms`, { description: r.reply ? `判定结果：${r.reply}` : undefined });
+      } else {
+        toast.error(`Jev 连接失败：${r.error ?? "未知"}`);
+      }
+    } catch (e) {
+      toast.error(`Jev 测试出错：${(e as Error).message}`);
+    } finally {
+      setTesting(false);
+    }
   }
 
   async function save() {
@@ -379,21 +413,29 @@ function JudgeCard() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {selectedIsJev && (
+                    <Button type="button" variant="outline" size="sm" onClick={() => void testSelectedJev()} disabled={testing}>
+                      {testing ? <Loader2Icon className="animate-spin" /> : <PlugZapIcon />}
+                      {testing ? "测试中…" : "测试连通"}
+                    </Button>
+                  )}
                 </Field>
-                <Field label="Jev 低置信度阈值">
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={cfg.confidence_threshold ?? 0.55}
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      if (Number.isFinite(n) && n >= 0 && n <= 1) patch({ confidence_threshold: n });
-                    }}
-                  />
-                  <p className="text-xs text-muted-foreground">仅 Jev / System One 生效；置信度低于此值自动转人工，默认 0.55。</p>
-                </Field>
+                {selectedIsJev && (
+                  <Field label="Jev 低置信度阈值">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={cfg.confidence_threshold ?? 0.55}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (Number.isFinite(n) && n >= 0 && n <= 1) patch({ confidence_threshold: n });
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground">置信度低于此值自动转人工；0 表示不因置信度转人工，默认 0.55。</p>
+                  </Field>
+                )}
                 <Field label="每次模型判定超时（秒）">
                   <Input
                     type="number"

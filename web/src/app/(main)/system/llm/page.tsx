@@ -341,7 +341,7 @@ function ProfileSheet({
     if (!open) return;
     setName(profile?.name ?? "");
     setFormat(profile?.format === "openai" || profile?.format === "openai-responses" || profile?.format === "jev" ? profile.format : "anthropic");
-    setModel(profile?.model ?? "");
+    setModel(profile?.model ?? (profile?.format === "jev" ? "jev-latest" : ""));
     setBaseUrl(profile?.base_url ?? "");
     setProxy(profile?.proxy ?? "");
     setRps(String(profile?.rate_per_second ?? 0));
@@ -492,7 +492,11 @@ function ProfileSheet({
             </div>
             <div className="grid gap-2">
               <Label>格式</Label>
-              <Select value={format} onValueChange={(v) => setFormat(v as "anthropic" | "openai" | "openai-responses" | "jev")}>
+              <Select value={format} onValueChange={(v) => {
+                const next = v as "anthropic" | "openai" | "openai-responses" | "jev";
+                setFormat(next);
+                if (next === "jev" && !model.trim()) setModel("jev-latest");
+              }}>
                 <SelectTrigger>
                   <SelectValue placeholder="选择格式" />
                 </SelectTrigger>
@@ -525,9 +529,9 @@ function ProfileSheet({
                     variant="outline"
                     size="icon"
                     className="shrink-0"
-                    disabled={loadingModels}
+                    disabled={loadingModels || format === "jev"}
                     onClick={loadModels}
-                    title="从 API 加载可用模型"
+                    title={format === "jev" ? "Jev 使用固定默认模型 jev-latest，不提供模型列表" : "从 API 加载可用模型"}
                   >
                     {loadingModels ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
                   </Button>
@@ -551,6 +555,9 @@ function ProfileSheet({
                 )}
               </Popover>
             </div>
+            {format === "jev" && (
+              <p className="text-muted-foreground text-xs">Jev / System One 不提供模型列表，默认模型为 <code className="font-mono">jev-latest</code>。</p>
+            )}
           </div>
 
           <div className="grid gap-2">
