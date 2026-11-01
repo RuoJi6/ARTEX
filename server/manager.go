@@ -588,7 +588,9 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
 	if fp, ferr := newDynamicForwardProxy(func() string { return m.GlobalProxy() }); ferr == nil {
 		m.forwardProxy = fp
-		fp.direct = func() bool { return !m.proxyPoolConfigured.Load() }
+		// An empty runtime route means direct egress, even when the persisted
+		// pool still contains disabled or blank entries.
+		fp.direct = func() bool { return strings.TrimSpace(m.GlobalProxy()) == "" }
 	} else {
 		log.Printf("[proxy] local forwarder disabled: %v", ferr)
 	}

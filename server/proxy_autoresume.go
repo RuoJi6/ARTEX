@@ -255,6 +255,9 @@ func (s *Server) runProxyReconnect(ctx context.Context) {
 
 func (s *Server) proxyReconnectTick() {
 	if strings.TrimSpace(s.m.GlobalProxy()) == "" {
+		// Clearing the runtime route is a successful direct transition. Reuse the
+		// generation gate so only eligible, non-exhausted proxy pauses resume.
+		s.proxyReconnectSuccess()
 		return
 	}
 	if s.m.proxyPool != nil && len(s.m.proxyPoolEntries()) > 0 {

@@ -43,10 +43,10 @@ func TestProxyPoolSnapshotMasksCredentialsAndDisabledHealth(t *testing.T) {
 
 func TestProxyPoolSequentialSkipsUnhealthyAndDisabled(t *testing.T) {
 	m := &Manager{proxyPool: &proxyPoolState{active: "a", entries: []proxyPoolEntry{
-		{ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}},
-		{ProxyPoolEntry: ProxyPoolEntry{ID: "b", Enabled: false, Health: "healthy"}},
-		{ProxyPoolEntry: ProxyPoolEntry{ID: "c", Enabled: true, Health: "unhealthy-cooling"}},
-		{ProxyPoolEntry: ProxyPoolEntry{ID: "d", Enabled: true, Health: "healthy"}},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://a"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "b", Enabled: false, Health: "healthy"}, RawURL: "http://b"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "c", Enabled: true, Health: "unhealthy-cooling"}, RawURL: "http://c"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "d", Enabled: true, Health: "healthy"}, RawURL: "http://d"},
 	}}}
 	if got := m.selectHealthyLocked("a"); got != "d" {
 		t.Fatalf("selected %q", got)
@@ -299,6 +299,77 @@ func TestProxyPoolDisableOrClearActiveRoutesAway(t *testing.T) {
 	})
 }
 
+func TestProxyPoolClearOrDeleteLastMemberRecoversOnlyEligibleProxyPauses(t *testing.T) {
+	run := func(t *testing.T, deleteLast bool) {
+		m := proxyTestManager(t)
+		m.globalProxy = "http://a"
+		m.proxyPool = &proxyPoolState{active: "a", entries: []proxyPoolEntry{{
+			ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://a",
+		}}}
+		eligible, err := m.CreateTask("eligible", "goal", nil, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		exhausted, err := m.CreateTask("exhausted", "goal", nil, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		userPaused, err := m.CreateTask("user paused", "goal", nil, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			_, _ = m.DeleteTask(eligible.ID, DeleteTaskOptions{})
+			_, _ = m.DeleteTask(exhausted.ID, DeleteTaskOptions{})
+			_, _ = m.DeleteTask(userPaused.ID, DeleteTaskOptions{})
+		}()
+		for _, task := range []*Task{eligible, exhausted} {
+			if err := m.ApplyProxyPause(task.ID); err != nil {
+				t.Fatal(err)
+			}
+			task.updateLifecycle(func(v *taskLifecycleState) { v.ReconnectGeneration = 7 })
+		}
+		exhausted.updateLifecycle(func(v *taskLifecycleState) {
+			v.ReconnectAttempt, v.ReconnectExhausted = 3, true
+		})
+		if err := m.ApplyTaskPauseOrigin(userPaused.ID, false); err != nil {
+			t.Fatal(err)
+		}
+		s := newAdmissionTestServer(m, nil)
+		for _, task := range []*Task{eligible, exhausted, userPaused} {
+			s.engine.Pause(task.ID, agent.AbortPausedByProxy)
+		}
+		if deleteLast {
+			r := httptest.NewRequest(http.MethodDelete, "/api/settings/proxy-pool/a", nil)
+			r.SetPathValue("id", "a")
+			w := httptest.NewRecorder()
+			s.deleteProxyPool(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("delete status=%d body=%s", w.Code, w.Body.String())
+			}
+		} else {
+			r := httptest.NewRequest(http.MethodPatch, "/api/settings/proxy-pool/a", strings.NewReader(`{"url":""}`))
+			r.SetPathValue("id", "a")
+			w := httptest.NewRecorder()
+			s.updateProxyPool(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("clear status=%d body=%s", w.Code, w.Body.String())
+			}
+		}
+		if got := eligible.lifecycleSnapshot(); got.PauseReason != "" || got.Paused {
+			t.Fatalf("eligible proxy pause was not recovered: %+v", got)
+		}
+		if got := exhausted.lifecycleSnapshot(); got.PauseReason != "paused_by_proxy" || !got.ReconnectExhausted {
+			t.Fatalf("exhausted proxy pause was recovered: %+v", got)
+		}
+		if got := userPaused.lifecycleSnapshot(); got.PauseReason != "paused_by_user" {
+			t.Fatalf("user pause was recovered: %+v", got)
+		}
+	}
+	t.Run("clear", func(t *testing.T) { run(t, false) })
+	t.Run("delete", func(t *testing.T) { run(t, true) })
+}
+
 func TestProxyPoolCaptureOffUsesLocalForwarder(t *testing.T) {
 	fp, err := newDynamicForwardProxy(func() string { return "" })
 	if err != nil {
@@ -310,6 +381,31 @@ func TestProxyPoolCaptureOffUsesLocalForwarder(t *testing.T) {
 	got := m.ProxyAddr()
 	if !strings.HasPrefix(got, "http://127.0.0.1:") {
 		t.Fatalf("capture-off proxy address=%q, want local forwarder", got)
+	}
+}
+
+func TestProxyPoolClearedRuntimeForwarderFallsBackToDirect(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "direct-ok")
+	}))
+	defer target.Close()
+	m := proxyTestManager(t)
+	// A configured pool can remain persisted after its last usable member is
+	// disabled or cleared. The runtime route is still direct in that state.
+	m.proxyPoolConfigured.Store(true)
+	proxyURL, err := url.Parse(m.ProxyAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	resp, err := client.Get(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "direct-ok" {
+		t.Fatalf("cleared runtime route status=%d body=%q", resp.StatusCode, body)
 	}
 }
 
@@ -338,14 +434,34 @@ func TestProxyPoolRandomSelectionStillExcludesDisabledAndCooling(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.proxyPool = &proxyPoolState{entries: []proxyPoolEntry{
-		{ProxyPoolEntry: ProxyPoolEntry{ID: "disabled", Enabled: false, Health: "healthy"}},
-		{ProxyPoolEntry: ProxyPoolEntry{ID: "cooling", Enabled: true, Health: "unhealthy-cooling"}},
-		{ProxyPoolEntry: ProxyPoolEntry{ID: "good", Enabled: true, Health: "healthy"}},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "disabled", Enabled: false, Health: "healthy"}, RawURL: "http://disabled"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "cooling", Enabled: true, Health: "unhealthy-cooling"}, RawURL: "http://cooling"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "empty", Enabled: true, Health: "healthy"}},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "good", Enabled: true, Health: "healthy"}, RawURL: "http://good"},
 	}}
 	for i := 0; i < 20; i++ {
 		if got := m.selectHealthyLocked(""); got != "good" {
 			t.Fatalf("random selected %q", got)
 		}
+	}
+}
+
+func TestProxyPoolProbeSkipsEnabledEmptyURL(t *testing.T) {
+	m := proxyTestManager(t)
+	m.globalProxy = "http://good"
+	m.proxyPool = &proxyPoolState{active: "good", entries: []proxyPoolEntry{
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "empty", Enabled: true, Health: "healthy"}},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "good", Enabled: true, Health: "healthy"}, RawURL: "http://good"},
+	}}
+	s := &Server{m: m, ctx: context.Background(), proxyPoolProbeSem: make(chan struct{}, proxyPoolMaxProbeConcurrency)}
+	calls := 0
+	s.proxyProbe = func(context.Context, string, string, []string, time.Duration) egressProbeResult {
+		calls++
+		return egressProbeResult{OK: true}
+	}
+	s.proxyPoolTickLocked(true)
+	if calls != 1 {
+		t.Fatalf("probe calls=%d, want only non-empty enabled member", calls)
 	}
 }
 
