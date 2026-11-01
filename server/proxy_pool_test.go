@@ -1,12 +1,19 @@
 package server
 
 import (
+	"bufio"
+	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autumn-27/artex/traffic"
 )
@@ -68,12 +75,205 @@ func TestProxyPoolURLKeyNormalizesHostCase(t *testing.T) {
 	}
 }
 
-func TestMergeMaskedProxyURLPreservesOnlyPassword(t *testing.T) {
-	got, err := mergeMaskedProxyURL("http://newuser:***@NEW.example:9090", "http://old:secret@old.example:8080")
+func TestProxyPoolHealthThresholdCooldownAndRecovery(t *testing.T) {
+	m := &Manager{proxyPool: &proxyPoolState{entries: []proxyPoolEntry{{ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://a"}}}}
+	fail := egressProbeResult{Error: "http://user:pass@proxy: connection refused"}
+	for i := 0; i < defaultProxyHealthThreshold-1; i++ {
+		m.markProxyProbe("a", fail)
+		if got := m.proxyPool.entries[0].Health; got != "healthy" {
+			t.Fatalf("failure %d moved to %s before threshold", i+1, got)
+		}
+	}
+	m.markProxyProbe("a", fail)
+	if got := m.proxyPool.entries[0]; got.Health != "unhealthy-cooling" || got.ConsecutiveFailures != defaultProxyHealthThreshold {
+		t.Fatalf("threshold state=%+v", got)
+	}
+	if got := m.proxyPool.entries[0].LastError; strings.Contains(got, "pass") || !strings.Contains(got, "***@") {
+		t.Fatalf("failure was not masked: %q", got)
+	}
+	m.markProxyProbe("a", egressProbeResult{OK: true, ExitIP: "203.0.113.9"})
+	if got := m.proxyPool.entries[0]; got.Health != "healthy" || got.ConsecutiveFailures != 0 || got.EgressIP != "203.0.113.9" {
+		t.Fatalf("recovery state=%+v", got)
+	}
+}
+
+func TestProxyReconnectGuardsGateExhaustedAutomaticResume(t *testing.T) {
+	task := &Task{ID: "exhausted", PauseReason: "paused_by_proxy", ReconnectGeneration: 4, ReconnectAttempt: 3, ReconnectExhausted: true}
+	m := &Manager{tasks: map[string]*Task{task.ID: task}}
+	s := &Server{m: m}
+	if got := s.snapshotProxyReconnectGuards(false); len(got) != 0 {
+		t.Fatalf("automatic guards included exhausted task: %+v", got)
+	}
+	if got := s.snapshotProxyReconnectGuardsWithExhausted(false, true); len(got) != 1 {
+		t.Fatalf("manual guards did not include exhausted task: %+v", got)
+	}
+}
+
+func TestProxyPoolSettingsRejectTooShortInterval(t *testing.T) {
+	m := &Manager{}
+	if err := m.SetProxyPoolSettings(true, minProxyRotateInterval-1, true, "sequential", 3, 60, 30); err == nil {
+		t.Fatal("interval below lower bound was accepted")
+	}
+}
+
+func TestProxyPoolRandomSelectionStillExcludesDisabledAndCooling(t *testing.T) {
+	m := proxyTestManager(t)
+	if err := m.pg.SetSetting(settingProxyRotateStrategy, "random"); err != nil {
+		t.Fatal(err)
+	}
+	m.proxyPool = &proxyPoolState{entries: []proxyPoolEntry{
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "disabled", Enabled: false, Health: "healthy"}},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "cooling", Enabled: true, Health: "unhealthy-cooling"}},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "good", Enabled: true, Health: "healthy"}},
+	}}
+	for i := 0; i < 20; i++ {
+		if got := m.selectHealthyLocked(""); got != "good" {
+			t.Fatalf("random selected %q", got)
+		}
+	}
+}
+
+func TestProxyPoolFailureMarksOriginalMemberAfterConcurrentSwitch(t *testing.T) {
+	m := &Manager{globalProxy: "http://a", proxyPool: &proxyPoolState{active: "a", entries: []proxyPoolEntry{
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://a"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "b", Enabled: true, Health: "healthy"}, RawURL: "http://b"},
+	}}}
+	s := &Server{m: m, ctx: context.Background(), proxyPoolWake: make(chan struct{}, 1)}
+	s.proxyProbe = func(context.Context, string, string, []string, time.Duration) egressProbeResult {
+		m.mu.Lock()
+		m.globalProxy = "http://b"
+		m.mu.Unlock()
+		return egressProbeResult{Error: "proxy connection refused"}
+	}
+	if !s.handleProxyPoolFailure(fmt.Errorf("proxyconnect tcp: connection refused")) {
+		t.Fatal("failure after concurrent switch was not consumed")
+	}
+	if got := m.proxyPool.entries[0].ConsecutiveFailures; got != 1 {
+		t.Fatalf("original member failure count=%d", got)
+	}
+}
+
+func TestProxyPoolAllMembersUnhealthyKeepsProxyConfigured(t *testing.T) {
+	m := &Manager{globalProxy: "http://a", proxyPool: &proxyPoolState{active: "a", entries: []proxyPoolEntry{
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "unhealthy-cooling", ConsecutiveFailures: defaultProxyHealthThreshold, LastCheckedAt: time.Now().Add(-2 * time.Minute)}, RawURL: "http://a"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "b", Enabled: true, Health: "unhealthy-cooling", ConsecutiveFailures: defaultProxyHealthThreshold, LastCheckedAt: time.Now().Add(-2 * time.Minute)}, RawURL: "http://b"},
+	}}}
+	s := &Server{m: m, ctx: context.Background(), proxyPoolProbeSem: make(chan struct{}, proxyPoolMaxProbeConcurrency)}
+	s.proxyProbe = func(context.Context, string, string, []string, time.Duration) egressProbeResult {
+		return egressProbeResult{Error: "proxy down"}
+	}
+	s.proxyPoolTickLocked(true)
+	if got := m.GlobalProxy(); got != "http://a" {
+		t.Fatalf("all unhealthy members fell back to direct: %q", got)
+	}
+	if got := m.proxyPoolActiveID(); got != "a" {
+		t.Fatalf("active member changed without a healthy replacement: %q", got)
+	}
+}
+
+func TestProxyPoolMaskedEditHotCutsCoolingActiveMember(t *testing.T) {
+	m := &Manager{globalProxy: "http://old:secret@old.example:8080", proxyPool: &proxyPoolState{active: "a", entries: []proxyPoolEntry{{
+		ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "unhealthy-cooling", ConsecutiveFailures: 3},
+		RawURL:         "http://old:secret@old.example:8080",
+	}}}}
+	s := &Server{m: m}
+	r := httptest.NewRequest(http.MethodPatch, "/api/settings/proxy-pool/a", strings.NewReader(`{"url":"http://***@new.example:9090"}`))
+	r.SetPathValue("id", "a")
+	w := httptest.NewRecorder()
+	s.updateProxyPool(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := m.GlobalProxy(); got != "http://old:secret@new.example:9090" {
+		t.Fatalf("active proxy=%q", got)
+	}
+	if got := m.proxyPool.entries[0].Health; got != "healthy" {
+		t.Fatalf("edited active member health=%q", got)
+	}
+}
+
+func TestProxyPoolDeleteNeverRetainsDeletedRuntimeURL(t *testing.T) {
+	m := &Manager{globalProxy: "http://a", proxyPool: &proxyPoolState{active: "a", entries: []proxyPoolEntry{
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://a"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "b", Enabled: true, Health: "healthy"}, RawURL: "http://b"},
+	}}}
+	s := &Server{m: m}
+	deleteEntry := func(id string) {
+		r := httptest.NewRequest(http.MethodDelete, "/api/settings/proxy-pool/"+id, nil)
+		r.SetPathValue("id", id)
+		w := httptest.NewRecorder()
+		s.deleteProxyPool(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("delete %s status=%d body=%s", id, w.Code, w.Body.String())
+		}
+	}
+	deleteEntry("a")
+	if got := m.GlobalProxy(); got != "http://b" {
+		t.Fatalf("surviving pool member was not activated: %q", got)
+	}
+	deleteEntry("b")
+	if got := m.GlobalProxy(); got != "" || m.proxyPool.active != "" {
+		t.Fatalf("deleted last member left runtime proxy=%q active=%q", got, m.proxyPool.active)
+	}
+}
+
+func TestSetGlobalProxyIsReadOnlyWhenPoolManaged(t *testing.T) {
+	m := &Manager{globalProxy: "http://pool.example:8080", proxyPool: &proxyPoolState{entries: []proxyPoolEntry{{
+		ProxyPoolEntry: ProxyPoolEntry{ID: "pool", Enabled: true, Health: "healthy"}, RawURL: "http://pool.example:8080",
+	}}}}
+	if err := m.SetGlobalProxy("http://other.example:8080"); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.GlobalProxy(); got != "http://pool.example:8080" {
+		t.Fatalf("managed pool runtime changed through legacy setting: %q", got)
+	}
+}
+
+func TestProxyPoolEmptyPersistenceDoesNotResurrectLegacyProxy(t *testing.T) {
+	dir := t.TempDir()
+	m, err := NewManager(dir, "")
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) - skipping", err)
+	}
+	m.proxyPool = &proxyPoolState{active: "a", entries: []proxyPoolEntry{{
+		ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://deleted.example:8080",
+	}}}
+	m.globalProxy = "http://deleted.example:8080"
+	if err := m.persistProxyPoolLocked(); err != nil {
+		_ = m.Close()
+		t.Fatal(err)
+	}
+	s := &Server{m: m}
+	r := httptest.NewRequest(http.MethodDelete, "/api/settings/proxy-pool/a", nil)
+	r.SetPathValue("id", "a")
+	w := httptest.NewRecorder()
+	s.deleteProxyPool(w, r)
+	if w.Code != http.StatusOK {
+		_ = m.Close()
+		t.Fatalf("delete status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := m.GlobalProxy(); got != "" {
+		t.Fatalf("delete left runtime proxy=%q", got)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m2, err := NewManager(dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "http://newuser:secret@NEW.example:9090" {
+	defer m2.Close()
+	if got := m2.GlobalProxy(); got != "" || len(m2.proxyPoolEntries()) != 0 {
+		t.Fatalf("empty persisted pool resurrected proxy=%q entries=%d", got, len(m2.proxyPoolEntries()))
+	}
+}
+
+func TestMergeMaskedProxyURLPreservesOnlyPassword(t *testing.T) {
+	got, err := mergeMaskedProxyURL("http://***@NEW.example:9090", "http://old:secret@old.example:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://old:secret@NEW.example:9090" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -103,5 +303,157 @@ func TestDynamicForwardProxyUsesCurrentUpstream(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+func TestDynamicForwardProxyConnectAuthenticatedUpstreamAndBufferedBytes(t *testing.T) {
+	const user, pass = "alice", "s3cret"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "connect required", http.StatusMethodNotAllowed)
+			return
+		}
+		want := "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+		if r.Header.Get("Proxy-Authorization") != want {
+			w.Header().Set("Proxy-Authenticate", `Basic realm="test"`)
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		h, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "no hijack", 500)
+			return
+		}
+		c, rw, err := h.Hijack()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\nupstream-buffer")
+		_ = rw.Flush()
+	}))
+	defer upstream.Close()
+	up, _ := url.Parse(upstream.URL)
+	up.User = url.UserPassword(user, pass)
+	fp, err := newDynamicForwardProxy(func() string { return up.String() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fp.Close()
+
+	c, err := net.Dial("tcp", strings.TrimPrefix(fp.Addr(), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = fmt.Fprintf(c, "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n")
+	rd := bufio.NewReader(c)
+	resp, err := http.ReadResponse(rd, &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("local CONNECT status %s", resp.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(rd, int64(len("upstream-buffer"))))
+	if err != nil || string(b) != "upstream-buffer" {
+		t.Fatalf("buffered bytes=%q err=%v", b, err)
+	}
+}
+
+func TestDynamicForwardProxyConnectForwardsHijackBufferedClientBytes(t *testing.T) {
+	targetLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer targetLn.Close()
+	go func() {
+		c, err := targetLn.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, len("hello"))
+		if _, err := io.ReadFull(c, buf); err == nil {
+			_, _ = c.Write([]byte("target"))
+		}
+	}()
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "connect required", 405)
+			return
+		}
+		c, err := net.Dial("tcp", targetLn.Addr().String())
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		h, _ := w.(http.Hijacker)
+		client, rw, err := h.Hijack()
+		if err != nil {
+			_ = c.Close()
+			return
+		}
+		defer client.Close()
+		defer c.Close()
+		_, _ = rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
+		_ = rw.Flush()
+		buf := make([]byte, len("hello"))
+		if _, err := io.ReadFull(rw.Reader, buf); err != nil {
+			return
+		}
+		_, _ = c.Write(buf)
+		response := make([]byte, len("target"))
+		if _, err := io.ReadFull(c, response); err == nil {
+			_, _ = client.Write(response)
+		}
+	}))
+	defer proxyServer.Close()
+	fp, err := newDynamicForwardProxy(func() string { return proxyServer.URL })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fp.Close()
+	c, err := net.Dial("tcp", strings.TrimPrefix(fp.Addr(), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\nhello", targetLn.Addr().String(), targetLn.Addr().String())
+	rd := bufio.NewReader(c)
+	resp, err := http.ReadResponse(rd, &http.Request{Method: http.MethodConnect})
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT response=%v status=%v", err, resp)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	b, err := io.ReadAll(io.LimitReader(rd, int64(len("target"))))
+	if err != nil || string(b) != "target" {
+		t.Fatalf("target response=%q err=%v", b, err)
+	}
+}
+
+func TestDialHTTPConnectBlackholeHonorsContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			defer c.Close()
+			_, _ = io.Copy(io.Discard, c)
+		}
+	}()
+	u, _ := url.Parse("http://" + ln.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err = dialHTTPConnect(ctx, u, "example.test:443")
+	if err == nil {
+		t.Fatal("blackholed CONNECT unexpectedly succeeded")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("context cancellation took %s", elapsed)
 	}
 }

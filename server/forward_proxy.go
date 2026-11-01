@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/proxy"
 )
@@ -24,6 +25,10 @@ type dynamicForwardProxy struct {
 	direct  func() bool
 	server  *http.Server
 	once    sync.Once
+	mu      sync.Mutex
+	conns   map[net.Conn]struct{}
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 func newDynamicForwardProxy(current func() string) (*dynamicForwardProxy, error) {
@@ -31,8 +36,9 @@ func newDynamicForwardProxy(current func() string) (*dynamicForwardProxy, error)
 	if err != nil {
 		return nil, err
 	}
-	p := &dynamicForwardProxy{ln: ln, addr: "http://" + ln.Addr().String(), current: current, direct: func() bool { return true }}
-	p.server = &http.Server{Handler: http.HandlerFunc(p.serveHTTP)}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &dynamicForwardProxy{ln: ln, addr: "http://" + ln.Addr().String(), current: current, direct: func() bool { return true }, conns: map[net.Conn]struct{}{}, ctx: ctx, cancel: cancel}
+	p.server = &http.Server{Handler: http.HandlerFunc(p.serveHTTP), BaseContext: func(net.Listener) context.Context { return ctx }}
 	go p.server.Serve(ln)
 	return p, nil
 }
@@ -47,8 +53,29 @@ func (p *dynamicForwardProxy) Close() error {
 	if p == nil {
 		return nil
 	}
-	p.once.Do(func() { _ = p.server.Close() })
+	p.once.Do(func() {
+		p.cancel()
+		p.mu.Lock()
+		for c := range p.conns {
+			_ = c.Close()
+		}
+		p.conns = nil
+		p.mu.Unlock()
+		_ = p.server.Close()
+	})
 	return nil
+}
+
+func (p *dynamicForwardProxy) track(c net.Conn) func() {
+	if c == nil {
+		return func() {}
+	}
+	p.mu.Lock()
+	if p.conns != nil {
+		p.conns[c] = struct{}{}
+	}
+	p.mu.Unlock()
+	return func() { p.mu.Lock(); delete(p.conns, c); p.mu.Unlock() }
 }
 
 func (p *dynamicForwardProxy) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +101,9 @@ func (p *dynamicForwardProxy) serveHTTP(w http.ResponseWriter, r *http.Request) 
 				http.Error(w, "proxy unavailable", 502)
 				return
 			}
-			tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) { return d.Dial(network, addr) }
+			tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialProxyContext(ctx, d, network, addr)
+			}
 		} else {
 			tr.Proxy = http.ProxyURL(u)
 		}
@@ -117,7 +146,7 @@ func (p *dynamicForwardProxy) serveConnect(w http.ResponseWriter, r *http.Reques
 	var conn net.Conn
 	var err error
 	if up == "" {
-		conn, err = (&net.Dialer{}).DialContext(r.Context(), "tcp", target)
+		conn, err = (&net.Dialer{Timeout: 10 * time.Second}).DialContext(r.Context(), "tcp", target)
 	} else {
 		u, e := url.Parse(up)
 		if e != nil {
@@ -127,7 +156,7 @@ func (p *dynamicForwardProxy) serveConnect(w http.ResponseWriter, r *http.Reques
 			if e != nil {
 				err = e
 			} else {
-				conn, err = d.Dial("tcp", target)
+				conn, err = dialProxyContext(r.Context(), d, "tcp", target)
 			}
 		} else {
 			conn, err = dialHTTPConnect(r.Context(), u, target)
@@ -137,7 +166,6 @@ func (p *dynamicForwardProxy) serveConnect(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "proxy unavailable", 502)
 		return
 	}
-	defer conn.Close()
 	h, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "proxy unavailable", 500)
@@ -147,11 +175,22 @@ func (p *dynamicForwardProxy) serveConnect(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		return
 	}
+	removeClient := p.track(client)
+	defer removeClient()
+	removeUpstream := p.track(conn)
+	defer removeUpstream()
 	defer client.Close()
+	defer conn.Close()
 	_, _ = rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
 	_ = rw.Flush()
-	go io.Copy(conn, client)
-	_, _ = io.Copy(client, conn)
+	clientReader := io.Reader(client)
+	if rw.Reader != nil && rw.Reader.Buffered() > 0 {
+		clientReader = io.MultiReader(rw.Reader, client)
+	}
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(conn, clientReader); _ = conn.Close(); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(client, conn); _ = client.Close(); done <- struct{}{} }()
+	<-done
 }
 
 func socksDialer(u *url.URL) (proxy.Dialer, error) {
@@ -160,11 +199,42 @@ func socksDialer(u *url.URL) (proxy.Dialer, error) {
 		pw, _ := u.User.Password()
 		auth = &proxy.Auth{User: u.User.Username(), Password: pw}
 	}
-	return proxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{})
+	return proxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{Timeout: 10 * time.Second})
 }
 
+func dialProxyContext(ctx context.Context, d proxy.Dialer, network, addr string) (net.Conn, error) {
+	if cd, ok := d.(proxy.ContextDialer); ok {
+		return cd.DialContext(ctx, network, addr)
+	}
+	type result struct {
+		c   net.Conn
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() { c, err := d.Dial(network, addr); ch <- result{c, err} }()
+	select {
+	case r := <-ch:
+		return r.c, r.err
+	case <-ctx.Done():
+		go func() {
+			r := <-ch
+			if r.c != nil {
+				_ = r.c.Close()
+			}
+		}()
+		return nil, ctx.Err()
+	}
+}
+
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
+
 func dialHTTPConnect(ctx context.Context, u *url.URL, target string) (net.Conn, error) {
-	d := &net.Dialer{}
+	d := &net.Dialer{Timeout: 10 * time.Second}
 	addr := u.Host
 	if !strings.Contains(addr, ":") {
 		addr += ":80"
@@ -185,14 +255,33 @@ func dialHTTPConnect(ctx context.Context, u *url.URL, target string) (net.Conn, 
 	if u.User != nil {
 		req := &http.Request{Header: http.Header{}}
 		req.SetBasicAuth(u.User.Username(), func() string { p, _ := u.User.Password(); return p }())
-		fmt.Fprintf(br, "Proxy-Authorization: %s\r\n", req.Header.Get("Proxy-Authorization"))
+		fmt.Fprintf(br, "Proxy-Authorization: %s\r\n", req.Header.Get("Authorization"))
 	}
 	fmt.Fprint(br, "\r\n")
 	if err := br.Flush(); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
-	resp, err := http.ReadResponse(br.Reader, &http.Request{Method: http.MethodConnect})
+	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	type responseResult struct {
+		resp *http.Response
+		err  error
+	}
+	readDone := make(chan responseResult, 1)
+	go func() {
+		resp, err := http.ReadResponse(br.Reader, &http.Request{Method: http.MethodConnect})
+		readDone <- responseResult{resp: resp, err: err}
+	}()
+	var rr responseResult
+	select {
+	case rr = <-readDone:
+	case <-readCtx.Done():
+		_ = conn.Close()
+		<-readDone
+		return nil, readCtx.Err()
+	}
+	resp, err := rr.resp, rr.err
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -201,5 +290,5 @@ func dialHTTPConnect(ctx context.Context, u *url.URL, target string) (net.Conn, 
 		_ = conn.Close()
 		return nil, fmt.Errorf("upstream CONNECT: %s", resp.Status)
 	}
-	return conn, nil
+	return &bufferedConn{Conn: conn, reader: br.Reader}, nil
 }

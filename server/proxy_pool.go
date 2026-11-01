@@ -137,9 +137,10 @@ type proxyPoolState struct {
 
 func (m *Manager) initProxyPool() {
 	m.proxyPool = &proxyPoolState{}
-	if raw, ok, _ := m.pg.GetSetting(settingProxyPool); ok && strings.TrimSpace(raw) != "" {
+	persistedPool, poolSettingPresent, _ := m.pg.GetSetting(settingProxyPool)
+	if poolSettingPresent && strings.TrimSpace(persistedPool) != "" {
 		var p proxyPoolPersist
-		if json.Unmarshal([]byte(raw), &p) == nil {
+		if json.Unmarshal([]byte(persistedPool), &p) == nil {
 			m.proxyPool.entries, m.proxyPool.active = p.Entries, p.Active
 		}
 	}
@@ -148,17 +149,54 @@ func (m *Manager) initProxyPool() {
 			m.proxyPool.active = strings.TrimSpace(v)
 		}
 	}
-	if len(m.proxyPool.entries) == 0 && strings.TrimSpace(m.globalProxy) != "" {
+	if len(m.proxyPool.entries) == 0 && !poolSettingPresent && strings.TrimSpace(m.globalProxy) != "" {
 		m.proxyPool.entries = []proxyPoolEntry{{ProxyPoolEntry: ProxyPoolEntry{ID: "proxy-legacy", URL: maskSecrets(m.globalProxy), Enabled: true, Health: "healthy"}, RawURL: m.globalProxy}}
 		m.proxyPool.active = "proxy-legacy"
 		_ = m.persistProxyPoolLocked()
 	}
-	if m.proxyPool.active != "" {
+	if len(m.proxyPool.entries) == 0 && poolSettingPresent {
+		m.globalProxy = ""
+		m.proxyPool.active = ""
+		_ = m.pg.SetSetting(settingGlobalProxy, "")
+		_ = m.pg.SetSetting(settingProxyPoolActive, "")
+	} else if len(m.proxyPool.entries) > 0 {
+		chosen := ""
 		for _, e := range m.proxyPool.entries {
-			if e.ID == m.proxyPool.active {
-				m.globalProxy = e.RawURL
+			if e.ID == m.proxyPool.active && e.Enabled {
+				chosen = e.ID
 				break
 			}
+		}
+		if chosen == "" {
+			for _, e := range m.proxyPool.entries {
+				if e.Enabled && e.Health == "healthy" {
+					chosen = e.ID
+					break
+				}
+			}
+		}
+		if chosen == "" {
+			for _, e := range m.proxyPool.entries {
+				if e.Enabled && e.RawURL != "" {
+					chosen = e.ID
+					break
+				}
+			}
+		}
+		if chosen == "" {
+			m.globalProxy, m.proxyPool.active = "", ""
+			_ = m.pg.SetSetting(settingGlobalProxy, "")
+			_ = m.pg.SetSetting(settingProxyPoolActive, "")
+		} else {
+			m.proxyPool.active = chosen
+			for _, e := range m.proxyPool.entries {
+				if e.ID == chosen {
+					m.globalProxy = e.RawURL
+					break
+				}
+			}
+			_ = m.pg.SetSetting(settingProxyPoolActive, chosen)
+			_ = m.pg.SetSetting(settingGlobalProxy, m.globalProxy)
 		}
 	}
 	m.proxyPoolConfigured.Store(len(m.proxyPool.entries) > 0)
@@ -226,6 +264,14 @@ func (m *Manager) setProxyPoolEntries(entries []proxyPoolEntry, active string) e
 				return m.applyActiveProxyLocked(e.ID, "reconnect")
 			}
 		}
+		for _, e := range entries {
+			if e.Enabled && e.RawURL != "" {
+				return m.applyActiveProxyLockedWithHealth(e.ID, "reconnect", true)
+			}
+		}
+		if strings.TrimSpace(m.GlobalProxy()) != "" {
+			return m.applyActiveProxyLocked("", "reconnect")
+		}
 		return nil
 	}
 	for _, e := range entries {
@@ -237,9 +283,13 @@ func (m *Manager) setProxyPoolEntries(entries []proxyPoolEntry, active string) e
 }
 
 func (m *Manager) applyActiveProxyLocked(id, reason string) error {
+	return m.applyActiveProxyLockedWithHealth(id, reason, false)
+}
+
+func (m *Manager) applyActiveProxyLockedWithHealth(id, reason string, allowUnhealthy bool) error {
 	var next string
 	for _, e := range m.proxyPool.entries {
-		if e.ID == id && e.Enabled && e.Health == "healthy" {
+		if e.ID == id && e.Enabled && (allowUnhealthy || e.Health == "healthy") {
 			next = e.RawURL
 			break
 		}
@@ -355,7 +405,10 @@ func (m *Manager) markProxyProbeLocked(id string, res egressProbeResult) {
 		} else {
 			e.ConsecutiveFailures++
 			e.LastError = maskSecrets(res.Error)
-			threshold := proxyIntSetting(m.pg, settingProxyHealthThreshold, defaultProxyHealthThreshold)
+			threshold := defaultProxyHealthThreshold
+			if m.pg != nil {
+				threshold = proxyIntSetting(m.pg, settingProxyHealthThreshold, defaultProxyHealthThreshold)
+			}
 			if e.ConsecutiveFailures >= threshold {
 				e.Health = "unhealthy-cooling"
 			}
@@ -488,7 +541,7 @@ func (s *Server) proxyPoolTickLocked(forceHealth bool) {
 	}
 	s.m.proxyPool.mu.Unlock()
 	if !healthDue && !forceHealth {
-		s.reconcileProxyPoolAfterProbe()
+		s.reconcileProxyPoolAfterProbe(false)
 		return
 	}
 	entries := s.m.proxyPoolEntries()
@@ -496,6 +549,9 @@ func (s *Server) proxyPoolTickLocked(forceHealth bool) {
 	if sem == nil {
 		sem = make(chan struct{}, proxyPoolMaxProbeConcurrency)
 	}
+	activeAtProbe := s.m.proxyPoolActiveID()
+	probeResults := make(map[string]bool, len(entries))
+	var probeMu sync.Mutex
 	var wg sync.WaitGroup
 	for _, e := range entries {
 		if !e.Enabled {
@@ -516,13 +572,19 @@ func (s *Server) proxyPoolTickLocked(forceHealth bool) {
 			defer func() { <-sem }()
 			res := s.runProxyProbe(s.ctx, e.RawURL, "", defaultEgressProbes, proxyPoolProbeTimeout)
 			s.m.markProxyProbe(e.ID, res)
+			probeMu.Lock()
+			probeResults[e.ID] = res.OK
+			probeMu.Unlock()
 		}()
 	}
 	wg.Wait()
-	s.reconcileProxyPoolAfterProbe()
+	probeMu.Lock()
+	confirmed := probeResults[activeAtProbe]
+	probeMu.Unlock()
+	s.reconcileProxyPoolAfterProbe(confirmed)
 }
 
-func (s *Server) reconcileProxyPoolAfterProbe() {
+func (s *Server) reconcileProxyPoolAfterProbe(activeConfirmed bool) {
 	entries := s.m.proxyPoolEntries()
 	activeID := s.m.proxyPoolActiveID()
 	activeHealthy := false
@@ -532,8 +594,11 @@ func (s *Server) reconcileProxyPoolAfterProbe() {
 			break
 		}
 	}
-	if activeHealthy {
+	if activeHealthy && activeConfirmed {
 		s.proxyReconnectSuccess()
+		return
+	}
+	if activeHealthy {
 		return
 	}
 	s.m.proxyPool.mu.Lock()
@@ -585,15 +650,16 @@ func (s *Server) handleProxyPoolFailure(cause error) bool {
 	defer s.proxyPoolTickMu.Unlock()
 	s.m.proxyPool.mu.Lock()
 	defer s.m.proxyPool.mu.Unlock()
-	if s.m.GlobalProxy() != cur {
-		return false
-	}
 	active := s.m.proxyPool.active
+	currentChanged := s.m.GlobalProxy() != cur
 	for _, e := range s.m.proxyPool.entries {
-		if e.ID == active && e.RawURL == cur {
+		if e.RawURL == cur {
 			s.m.markProxyProbeLocked(e.ID, res)
 			break
 		}
+	}
+	if currentChanged {
+		return true
 	}
 	if onFailure {
 		if id := s.m.selectHealthyLocked(active); id != "" && id != active {
@@ -733,13 +799,23 @@ func mergeMaskedProxyURL(raw, old string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s", maskSecrets(err.Error()))
 	}
-	if ou, _ := traffic.ValidateProxyURL(old); ou != nil && nu.User != nil {
-		pw, _ := nu.User.Password()
-		if strings.Contains(pw, "***") || strings.Contains(pw, "******") {
-			if oldpw, ok := ou.User.Password(); ok {
-				nu.User = url.UserPassword(nu.User.Username(), oldpw)
+	if ou, _ := traffic.ValidateProxyURL(old); ou != nil && nu.User != nil && ou.User != nil {
+		newUser := nu.User.Username()
+		newPW, hasNewPW := nu.User.Password()
+		maskedUser := newUser == "***" || newUser == "******"
+		maskedPW := hasNewPW && (strings.Contains(newPW, "***") || strings.Contains(newPW, "******"))
+		if maskedUser {
+			oldPW, hasOldPW := ou.User.Password()
+			if hasOldPW {
+				nu.User = url.UserPassword(ou.User.Username(), oldPW)
 			} else {
-				nu.User = url.User(nu.User.Username())
+				nu.User = url.User(ou.User.Username())
+			}
+		} else if maskedPW {
+			if oldPW, hasOldPW := ou.User.Password(); hasOldPW {
+				nu.User = url.UserPassword(newUser, oldPW)
+			} else {
+				nu.User = url.User(newUser)
 			}
 		}
 	}
@@ -769,6 +845,7 @@ func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 		if e.ID != id {
 			continue
 		}
+		oldEntry := *e
 		oldRaw := e.RawURL
 		if req.URL != nil {
 			raw, err := mergeMaskedProxyURL(*req.URL, oldRaw)
@@ -778,6 +855,11 @@ func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			e.RawURL, e.URL = raw, maskSecrets(raw)
+			if e.ID == s.m.proxyPool.active && e.Enabled && raw != "" {
+				// A validated edit replaces the endpoint and starts a fresh health round,
+				// including when the old endpoint was cooling down.
+				e.Health, e.ConsecutiveFailures, e.LastError = "healthy", 0, ""
+			}
 		}
 		if req.Name != nil {
 			e.Name = strings.TrimSpace(*req.Name)
@@ -796,8 +878,8 @@ func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 		if s.m.proxyPool.active == id {
 			if req.URL != nil || req.Enabled != nil {
 				if e.Enabled && e.RawURL != "" {
-					if err := s.m.applyActiveProxyLocked(id, "manual"); err != nil {
-						e.RawURL, e.URL = oldRaw, maskSecrets(oldRaw)
+					if err := s.m.applyActiveProxyLockedWithHealth(id, "manual", req.URL != nil); err != nil {
+						*e = oldEntry
 						s.m.proxyPool.mu.Unlock()
 						writeErr(w, 400, maskSecrets(err.Error()))
 						return
@@ -866,8 +948,30 @@ func (s *Server) deleteProxyPool(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			s.m.proxyPool.active = ""
-			needPause = true
+			// Keep runtime traffic attached to a surviving pool member even when
+			// every remaining member is cooling down; never retain the deleted URL.
+			next := ""
+			for _, e := range s.m.proxyPool.entries {
+				if e.Enabled && e.RawURL != "" {
+					next = e.ID
+					break
+				}
+			}
+			if next != "" {
+				if err := s.m.applyActiveProxyLockedWithHealth(next, "manual", true); err != nil {
+					s.m.proxyPool.mu.Unlock()
+					writeErr(w, 500, maskSecrets(err.Error()))
+					return
+				}
+				needPause = true
+			} else {
+				if err := s.m.applyActiveProxyLocked("", "manual"); err != nil {
+					s.m.proxyPool.mu.Unlock()
+					writeErr(w, 500, maskSecrets(err.Error()))
+					return
+				}
+				needPause = true
+			}
 		}
 	}
 	if err := s.m.persistProxyPoolLocked(); err != nil {
@@ -900,7 +1004,7 @@ func (s *Server) testProxyPoolEntry(w http.ResponseWriter, r *http.Request) {
 			res := s.runProxyProbe(r.Context(), e.RawURL, "", defaultEgressProbes, proxyPoolProbeTimeout)
 			s.m.markProxyProbe(id, res)
 			if res.OK {
-				s.reconcileProxyPoolAfterProbe()
+				s.reconcileProxyPoolAfterProbe(id == s.m.proxyPoolActiveID())
 			}
 			writeJSON(w, 200, map[string]any{"ok": res.OK, "result": res})
 			return

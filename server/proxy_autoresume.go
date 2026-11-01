@@ -65,6 +65,10 @@ type proxyReconnectGuard struct {
 }
 
 func (s *Server) snapshotProxyReconnectGuards(checkAttempt bool) map[string]proxyReconnectGuard {
+	return s.snapshotProxyReconnectGuardsWithExhausted(checkAttempt, false)
+}
+
+func (s *Server) snapshotProxyReconnectGuardsWithExhausted(checkAttempt, includeExhausted bool) map[string]proxyReconnectGuard {
 	guards := make(map[string]proxyReconnectGuard)
 	if s == nil || s.m == nil {
 		return guards
@@ -72,6 +76,9 @@ func (s *Server) snapshotProxyReconnectGuards(checkAttempt bool) map[string]prox
 	for _, t := range s.m.List() {
 		st := t.lifecycleSnapshot()
 		if st.PauseReason != "paused_by_proxy" {
+			continue
+		}
+		if st.ReconnectExhausted && !includeExhausted {
 			continue
 		}
 		guards[t.ID] = proxyReconnectGuard{
@@ -252,22 +259,15 @@ func (s *Server) proxyReconnectTick() {
 	}
 	if s.m.proxyPool != nil && len(s.m.proxyPoolEntries()) > 0 {
 		active := s.m.proxyPoolActiveID()
-		found := false
-		for _, e := range s.m.proxyPoolEntries() {
-			if e.ID == active && e.Enabled && e.Health == "healthy" {
-				found = true
-				break
-			}
-			if e.ID == active {
-				found = true
-				s.proxyPoolTick()
-				return
-			}
-		}
-		if !found {
-			s.proxyPoolTick()
-			return
-		}
+		// Pool-managed reconnects are driven by a confirmed pool probe. Do not
+		// run the per-task reconnect loop against an entry that merely still says
+		// healthy: that would resume exhausted tasks without a fresh probe and
+		// reset their attempt budget on the next failure. The pool tick also
+		// handles a missing/cooling active member and can switch to another
+		// confirmed healthy member before calling the guarded resume path.
+		_ = active
+		s.proxyPoolTick()
+		return
 	}
 	now := time.Now().Unix()
 	max, interval := s.proxyReconnectConfig()
@@ -424,7 +424,7 @@ func (s *Server) testTaskProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxy := strings.TrimSpace(s.m.GlobalProxy())
-	guards := s.snapshotProxyReconnectGuards(false)
+	guards := s.snapshotProxyReconnectGuardsWithExhausted(false, true)
 	if proxy == "" {
 		writeJSON(w, 200, map[string]any{"ok": true, "direct": true})
 		s.proxyReconnectSuccessWithGuards(guards, nil)

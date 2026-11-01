@@ -445,6 +445,10 @@ export default function SystemSettingsPage() {
   };
 
   const saveGlobalProxy = () => {
+    if (proxyPool.length > 0) {
+      toast.info("代理池非空时，全局代理输入框仅用于回显，请在代理池中编辑或切换");
+      return;
+    }
     setSavingGlobalProxy(true);
     api
       .setSettings({ global_proxy: globalProxyInput.trim() })
@@ -490,6 +494,7 @@ export default function SystemSettingsPage() {
     api
       .testEgressProxy({
         global_proxy: globalProxyInput.trim(),
+        resume: true,
 
         ...(egressProbeUrl.trim() ? { probe_url: egressProbeUrl.trim() } : {}),
       })

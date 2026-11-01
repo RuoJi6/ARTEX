@@ -341,6 +341,7 @@ func (s *Server) testEgressProxy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GlobalProxy string `json:"global_proxy"`
 		ProbeURL    string `json:"probe_url"` // 可选：覆盖默认探测地址
+		Resume      bool   `json:"resume"`    // manual settings probe may release paused_by_proxy tasks
 	}
 	// 请求体只有一个地址，给个上限，免得被塞大 payload。
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
@@ -369,7 +370,10 @@ func (s *Server) testEgressProxy(w http.ResponseWriter, r *http.Request) {
 	// 整体上限 40s：单次 Timeout 只兜一次，不兜总量；前端 fetch 没有超时。
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
-	proxyGuards := s.snapshotProxyReconnectGuards(false)
+	var proxyGuards map[string]proxyReconnectGuard
+	if req.Resume {
+		proxyGuards = s.snapshotProxyReconnectGuardsWithExhausted(false, true)
+	}
 
 	configuredProxy := strings.TrimSpace(req.GlobalProxy)
 	if strings.Contains(configuredProxy, "***") || strings.Contains(configuredProxy, "******") {
@@ -420,10 +424,10 @@ func (s *Server) testEgressProxy(w http.ResponseWriter, r *http.Request) {
 
 	rep.OK = judgeEgress(rep)
 	rep.Warnings = egressWarnings(rep, pending, savedProxy)
-	if rep.OK && !pending {
-		// The settings page uses this endpoint for its manual "测试代理" action.
-		// A successful probe is the same signal as an automatic reconnect success,
-		// but it must never consume an automatic attempt.
+	if req.Resume && rep.OK && !pending {
+		// The navbar uses the same probe endpoint for display-only polling but
+		// omits resume. Only an explicit settings-page test can release the
+		// guarded paused_by_proxy tasks.
 		s.proxyReconnectSuccessWithGuards(proxyGuards, nil)
 	}
 	writeJSON(w, 200, rep)
