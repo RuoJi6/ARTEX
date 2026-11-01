@@ -103,7 +103,9 @@ func ParseProxyBatch(raw string) ([]ProxyPoolEntry, []ProxyImportError) {
 		if len(parts) > 2 {
 			remark = strings.TrimSpace(parts[2])
 		}
-		out = append(out, ProxyPoolEntry{ID: fmt.Sprintf("proxy-%d-%d", time.Now().UnixNano(), n+1), URL: rawURL, Name: name, Remark: remark, Enabled: true, Health: "unhealthy-cooling"})
+		// New entries have not failed yet.  Keep them available until a probe
+		// establishes a consecutive-failure streak.
+		out = append(out, ProxyPoolEntry{ID: fmt.Sprintf("proxy-%d-%d", time.Now().UnixNano(), n+1), URL: rawURL, Name: name, Remark: remark, Enabled: true, Health: "unknown"})
 	}
 	return out, errs
 }
@@ -135,6 +137,11 @@ type proxyPoolState struct {
 	lastHealth time.Time
 }
 
+type proxyPoolTickOutcome struct {
+	confirmed bool
+	switched  bool
+}
+
 func (m *Manager) initProxyPool() {
 	m.proxyPool = &proxyPoolState{}
 	persistedPool, poolSettingPresent, _ := m.pg.GetSetting(settingProxyPool)
@@ -160,6 +167,11 @@ func (m *Manager) initProxyPool() {
 		_ = m.pg.SetSetting(settingGlobalProxy, "")
 		_ = m.pg.SetSetting(settingProxyPoolActive, "")
 	} else if len(m.proxyPool.entries) > 0 {
+		for i := range m.proxyPool.entries {
+			if strings.TrimSpace(m.proxyPool.entries[i].RawURL) != "" && m.proxyPool.entries[i].Health == "" {
+				m.proxyPool.entries[i].Health = "unknown"
+			}
+		}
 		chosen := ""
 		for _, e := range m.proxyPool.entries {
 			if e.ID == m.proxyPool.active && e.Enabled {
@@ -169,7 +181,7 @@ func (m *Manager) initProxyPool() {
 		}
 		if chosen == "" {
 			for _, e := range m.proxyPool.entries {
-				if e.Enabled && e.Health == "healthy" {
+				if e.Enabled && e.RawURL != "" && e.Health != "unhealthy-cooling" {
 					chosen = e.ID
 					break
 				}
@@ -260,7 +272,7 @@ func (m *Manager) setProxyPoolEntries(entries []proxyPoolEntry, active string) e
 	}
 	if active == "" {
 		for _, e := range entries {
-			if e.Enabled && e.Health == "healthy" {
+			if e.Enabled && e.RawURL != "" && e.Health != "unhealthy-cooling" {
 				return m.applyActiveProxyLocked(e.ID, "reconnect")
 			}
 		}
@@ -289,7 +301,7 @@ func (m *Manager) applyActiveProxyLocked(id, reason string) error {
 func (m *Manager) applyActiveProxyLockedWithHealth(id, reason string, allowUnhealthy bool) error {
 	var next string
 	for _, e := range m.proxyPool.entries {
-		if e.ID == id && e.Enabled && (allowUnhealthy || e.Health == "healthy") {
+		if e.ID == id && e.Enabled && e.RawURL != "" && (allowUnhealthy || e.Health != "unhealthy-cooling") {
 			next = e.RawURL
 			break
 		}
@@ -338,13 +350,13 @@ func (m *Manager) selectHealthyLocked(exclude string) string {
 	}
 	pool := make([]string, 0)
 	for _, e := range m.proxyPool.entries {
-		if e.Enabled && e.Health == "healthy" && e.ID != exclude {
+		if e.Enabled && e.Health != "unhealthy-cooling" && e.ID != exclude {
 			pool = append(pool, e.ID)
 		}
 	}
 	if len(pool) == 0 && exclude != "" {
 		for _, e := range m.proxyPool.entries {
-			if e.Enabled && e.Health == "healthy" {
+			if e.Enabled && e.Health != "unhealthy-cooling" {
 				pool = append(pool, e.ID)
 			}
 		}
@@ -364,7 +376,7 @@ func (m *Manager) selectHealthyLocked(exclude string) string {
 	}
 	for n := 0; n < len(m.proxyPool.entries); n++ {
 		e := m.proxyPool.entries[(start+n)%len(m.proxyPool.entries)]
-		if e.Enabled && e.Health == "healthy" && e.ID != exclude {
+		if e.Enabled && e.Health != "unhealthy-cooling" && e.ID != exclude {
 			return e.ID
 		}
 	}
@@ -507,22 +519,91 @@ func (s *Server) runProxyPoolSupervisor(ctx context.Context) {
 	}
 }
 
-func (s *Server) proxyPoolTick() {
+func (s *Server) proxyPoolTick() proxyPoolTickOutcome {
 	if s == nil {
-		return
+		return proxyPoolTickOutcome{}
 	}
 	s.proxyPoolTickMu.Lock()
 	defer s.proxyPoolTickMu.Unlock()
-	s.proxyPoolTickLocked(false)
+	return s.proxyPoolTickLocked(false)
 }
 
-func (s *Server) proxyPoolTickLocked(forceHealth bool) {
+func (s *Server) proxyPoolTickLocked(forceHealth bool) proxyPoolTickOutcome {
+	var outcome proxyPoolTickOutcome
 	if s.m == nil || s.m.proxyPool == nil {
-		return
+		return outcome
 	}
 	now := time.Now()
+	threshold, cooldown, healthInterval := s.m.proxyHealthConfig()
+	s.m.proxyPool.mu.Lock()
+	healthDue := s.m.proxyPool.lastHealth.IsZero() || now.Sub(s.m.proxyPool.lastHealth) >= healthInterval
+	if !healthDue {
+		// A cooling member becomes probe-eligible at its own cooldown deadline;
+		// do not make it wait for the next full health-check interval.
+		for _, e := range s.m.proxyPool.entries {
+			if e.Enabled && e.Health == "unhealthy-cooling" && (e.LastCheckedAt.IsZero() || now.Sub(e.LastCheckedAt) >= cooldown) {
+				healthDue = true
+				break
+			}
+		}
+	}
+	if healthDue {
+		s.m.proxyPool.lastHealth = now
+	}
+	s.m.proxyPool.mu.Unlock()
+	if healthDue || forceHealth {
+		entries := s.m.proxyPoolEntries()
+		sem := s.proxyPoolProbeSem
+		if sem == nil {
+			sem = make(chan struct{}, proxyPoolMaxProbeConcurrency)
+		}
+		activeAtProbe := s.m.proxyPoolActiveID()
+		probeResults := make(map[string]bool, len(entries))
+		var probeMu sync.Mutex
+		var wg sync.WaitGroup
+		for _, e := range entries {
+			if !e.Enabled {
+				continue
+			}
+			if !forceHealth && e.Health == "unhealthy-cooling" && e.ConsecutiveFailures >= threshold && !e.LastCheckedAt.IsZero() && now.Sub(e.LastCheckedAt) < cooldown {
+				continue
+			}
+			e := e
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+				case <-serverContext(s).Done():
+					return
+				}
+				defer func() { <-sem }()
+				res := s.runProxyProbe(serverContext(s), e.RawURL, "", defaultEgressProbes, proxyPoolProbeTimeout)
+				s.m.markProxyProbe(e.ID, res)
+				probeMu.Lock()
+				probeResults[e.ID] = res.OK
+				probeMu.Unlock()
+			}()
+		}
+		wg.Wait()
+		probeMu.Lock()
+		confirmed := probeResults[activeAtProbe]
+		probeMu.Unlock()
+		if confirmed {
+			outcome.confirmed = true
+		}
+		if s.reconcileProxyPoolAfterProbe(confirmed) {
+			outcome.switched = true
+		}
+	}
+
+	// Health reconciliation runs before timed rotation. This matters when an
+	// import starts a fresh probe round: tasks are not paused or rerouted until
+	// the new members have been checked. A successful recovery switch already
+	// selected the best available member for this round, so avoid immediately
+	// rotating away from it.
 	timed, rotateInterval, _, _ := s.m.proxyRotateConfig()
-	if timed {
+	if timed && !outcome.switched {
 		s.m.proxyPool.mu.Lock()
 		due := s.m.proxyPool.lastTimed.IsZero() || now.Sub(s.m.proxyPool.lastTimed) >= rotateInterval
 		if due {
@@ -530,76 +611,39 @@ func (s *Server) proxyPoolTickLocked(forceHealth bool) {
 		}
 		s.m.proxyPool.mu.Unlock()
 		if due {
-			_ = s.m.rotateProxy("timed")
-		}
-	}
-	threshold, cooldown, healthInterval := s.m.proxyHealthConfig()
-	s.m.proxyPool.mu.Lock()
-	healthDue := s.m.proxyPool.lastHealth.IsZero() || now.Sub(s.m.proxyPool.lastHealth) >= healthInterval
-	if healthDue {
-		s.m.proxyPool.lastHealth = now
-	}
-	s.m.proxyPool.mu.Unlock()
-	if !healthDue && !forceHealth {
-		s.reconcileProxyPoolAfterProbe(false)
-		return
-	}
-	entries := s.m.proxyPoolEntries()
-	sem := s.proxyPoolProbeSem
-	if sem == nil {
-		sem = make(chan struct{}, proxyPoolMaxProbeConcurrency)
-	}
-	activeAtProbe := s.m.proxyPoolActiveID()
-	probeResults := make(map[string]bool, len(entries))
-	var probeMu sync.Mutex
-	var wg sync.WaitGroup
-	for _, e := range entries {
-		if !e.Enabled {
-			continue
-		}
-		if !forceHealth && e.Health == "unhealthy-cooling" && e.ConsecutiveFailures >= threshold && !e.LastCheckedAt.IsZero() && now.Sub(e.LastCheckedAt) < cooldown {
-			continue
-		}
-		e := e
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-s.ctx.Done():
-				return
+			before := s.m.proxyPoolActiveID()
+			if s.m.rotateProxy("timed") && before != s.m.proxyPoolActiveID() {
+				outcome.switched = true
+				s.proxyReconnectSuccess()
 			}
-			defer func() { <-sem }()
-			res := s.runProxyProbe(s.ctx, e.RawURL, "", defaultEgressProbes, proxyPoolProbeTimeout)
-			s.m.markProxyProbe(e.ID, res)
-			probeMu.Lock()
-			probeResults[e.ID] = res.OK
-			probeMu.Unlock()
-		}()
+		}
 	}
-	wg.Wait()
-	probeMu.Lock()
-	confirmed := probeResults[activeAtProbe]
-	probeMu.Unlock()
-	s.reconcileProxyPoolAfterProbe(confirmed)
+	return outcome
 }
 
-func (s *Server) reconcileProxyPoolAfterProbe(activeConfirmed bool) {
+func serverContext(s *Server) context.Context {
+	if s != nil && s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
+}
+
+func (s *Server) reconcileProxyPoolAfterProbe(activeConfirmed bool) bool {
 	entries := s.m.proxyPoolEntries()
 	activeID := s.m.proxyPoolActiveID()
-	activeHealthy := false
+	activeAvailable := false
 	for _, e := range entries {
-		if e.ID == activeID && e.Enabled && e.Health == "healthy" {
-			activeHealthy = true
+		if e.ID == activeID && e.Enabled && e.RawURL != "" && e.Health != "unhealthy-cooling" {
+			activeAvailable = true
 			break
 		}
 	}
-	if activeHealthy && activeConfirmed {
+	if activeAvailable && activeConfirmed {
 		s.proxyReconnectSuccess()
-		return
+		return false
 	}
-	if activeHealthy {
-		return
+	if activeAvailable {
+		return false
 	}
 	s.m.proxyPool.mu.Lock()
 	id := s.m.selectHealthyLocked(activeID)
@@ -610,15 +654,25 @@ func (s *Server) reconcileProxyPoolAfterProbe(activeConfirmed bool) {
 	s.m.proxyPool.mu.Unlock()
 	if err == nil && id != "" {
 		s.proxyReconnectSuccess()
-		return
+		return true
 	}
-	if err != nil {
-		s.pauseAllProxyTasks(err)
-		return
+	allCooling := false
+	enabled := 0
+	for _, e := range entries {
+		if e.Enabled && e.RawURL != "" {
+			enabled++
+			if e.Health == "unhealthy-cooling" {
+				allCooling = true
+			} else {
+				allCooling = false
+				break
+			}
+		}
 	}
-	if id == "" && (activeID != "" || strings.TrimSpace(s.m.GlobalProxy()) != "") {
+	if id == "" && enabled > 0 && allCooling && (activeID != "" || strings.TrimSpace(s.m.GlobalProxy()) != "") {
 		s.pauseAllProxyTasks(errors.New("代理池暂无健康成员"))
 	}
+	return false
 }
 
 func (m *Manager) activateProxyID(id, reason string) error {
@@ -641,15 +695,13 @@ func (s *Server) handleProxyPoolFailure(cause error) bool {
 	if cur == "" {
 		return false
 	}
-	res := s.runProxyProbe(s.ctx, cur, "", defaultEgressProbes, proxyPoolProbeTimeout)
+	res := s.runProxyProbe(serverContext(s), cur, "", defaultEgressProbes, proxyPoolProbeTimeout)
 	if res.OK {
 		return false
 	}
 	_, _, onFailure, _ := s.m.proxyRotateConfig()
 	s.proxyPoolTickMu.Lock()
-	defer s.proxyPoolTickMu.Unlock()
 	s.m.proxyPool.mu.Lock()
-	defer s.m.proxyPool.mu.Unlock()
 	active := s.m.proxyPool.active
 	currentChanged := s.m.GlobalProxy() != cur
 	for _, e := range s.m.proxyPool.entries {
@@ -659,11 +711,16 @@ func (s *Server) handleProxyPoolFailure(cause error) bool {
 		}
 	}
 	if currentChanged {
+		s.m.proxyPool.mu.Unlock()
+		s.proxyPoolTickMu.Unlock()
 		return true
 	}
 	if onFailure {
 		if id := s.m.selectHealthyLocked(active); id != "" && id != active {
 			if err := s.m.applyActiveProxyLocked(id, "failure"); err == nil {
+				s.m.proxyPool.mu.Unlock()
+				s.proxyPoolTickMu.Unlock()
+				s.proxyReconnectSuccess()
 				return true
 			}
 		}
@@ -672,13 +729,15 @@ func (s *Server) handleProxyPoolFailure(cause error) bool {
 	case s.proxyPoolWake <- struct{}{}:
 	default:
 	}
+	s.m.proxyPool.mu.Unlock()
+	s.proxyPoolTickMu.Unlock()
 	return false
 }
 
 func (s *Server) pauseAllProxyTasks(cause error) {
 	for _, t := range s.m.List() {
 		st := t.lifecycleSnapshot()
-		if isTerminalStatus(st.Status) || st.Paused || s.engine.IsDeleting(t.ID) {
+		if isTerminalStatus(st.Status) || st.Paused || (s.engine != nil && s.engine.IsDeleting(t.ID)) {
 			continue
 		}
 		s.pauseProxyTask(t.ID, cause)
@@ -772,11 +831,10 @@ func (s *Server) importProxyPool(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err.Error())
 			return
 		}
-		select {
-		case s.proxyPoolWake <- struct{}{}:
-		default:
-		}
 	}
+	// Probe imported/unchecked entries before any pool-wide pause decision. The
+	// task state is untouched until this round has completed.
+	s.proxyPoolTick()
 	entriesOut, activeOut, logs := s.m.ProxyPoolSnapshot()
 	writeJSON(w, 200, map[string]any{"entries": entriesOut, "active_id": activeOut, "switch_log": logs, "errors": errs})
 }
@@ -839,6 +897,8 @@ func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	needPause := false
+	switched := false
+	routed := false
 	s.m.proxyPool.mu.Lock()
 	for i := range s.m.proxyPool.entries {
 		e := &s.m.proxyPool.entries[i]
@@ -884,14 +944,53 @@ func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 						writeErr(w, 400, maskSecrets(err.Error()))
 						return
 					}
+					routed = true
 				} else if next := s.m.selectHealthyLocked(id); next != "" {
-					if err := s.m.applyActiveProxyLocked(next, "manual"); err != nil {
-						s.m.proxyPool.mu.Unlock()
-						writeErr(w, 400, maskSecrets(err.Error()))
-						return
+					for _, candidate := range s.m.proxyPool.entries {
+						if candidate.ID == next && candidate.RawURL == "" {
+							next = ""
+							break
+						}
 					}
-				} else {
-					needPause = true
+					if next == "" {
+						// Fall through to the enabled-member fallback below.
+					} else {
+						if err := s.m.applyActiveProxyLocked(next, "manual"); err != nil {
+							s.m.proxyPool.mu.Unlock()
+							writeErr(w, 400, maskSecrets(err.Error()))
+							return
+						}
+						switched = true
+						routed = true
+					}
+				}
+				if !routed {
+					// A disabled or cleared active member must never remain the
+					// runtime route. Keep traffic on any surviving enabled member,
+					// including a cooling one, until the normal reconnect loop can
+					// establish a healthy route.
+					next := ""
+					for _, candidate := range s.m.proxyPool.entries {
+						if candidate.ID != id && candidate.Enabled && candidate.RawURL != "" {
+							next = candidate.ID
+							break
+						}
+					}
+					if next != "" {
+						if err := s.m.applyActiveProxyLockedWithHealth(next, "manual", true); err != nil {
+							s.m.proxyPool.mu.Unlock()
+							writeErr(w, 400, maskSecrets(err.Error()))
+							return
+						}
+						needPause = true
+					} else {
+						if err := s.m.applyActiveProxyLocked("", "manual"); err != nil {
+							s.m.proxyPool.mu.Unlock()
+							writeErr(w, 400, maskSecrets(err.Error()))
+							return
+						}
+						needPause = false
+					}
 				}
 			}
 		}
@@ -909,6 +1008,9 @@ func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 		if needPause {
 			s.pauseAllProxyTasks(errors.New("代理池暂无健康成员"))
 		}
+		if switched {
+			s.proxyReconnectSuccess()
+		}
 		writeJSON(w, 200, map[string]any{"entry": out})
 		return
 	}
@@ -923,6 +1025,7 @@ func (s *Server) deleteProxyPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	needPause := false
+	switched := false
 	s.m.proxyPool.mu.Lock()
 	found := false
 	out := s.m.proxyPool.entries[:0]
@@ -947,6 +1050,7 @@ func (s *Server) deleteProxyPool(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, 500, maskSecrets(err.Error()))
 				return
 			}
+			switched = true
 		} else {
 			// Keep runtime traffic attached to a surviving pool member even when
 			// every remaining member is cooling down; never retain the deleted URL.
@@ -970,7 +1074,15 @@ func (s *Server) deleteProxyPool(w http.ResponseWriter, r *http.Request) {
 					writeErr(w, 500, maskSecrets(err.Error()))
 					return
 				}
-				needPause = true
+				// Clearing the last usable route leaves no proxy to recover.
+				// Only an enabled member that is actually cooling warrants the
+				// pool-wide proxy pause barrier.
+				for _, candidate := range s.m.proxyPool.entries {
+					if candidate.Enabled && candidate.RawURL != "" && candidate.Health == "unhealthy-cooling" {
+						needPause = true
+						break
+					}
+				}
 			}
 		}
 	}
@@ -983,14 +1095,21 @@ func (s *Server) deleteProxyPool(w http.ResponseWriter, r *http.Request) {
 	if needPause {
 		s.pauseAllProxyTasks(errors.New("代理池暂无健康成员"))
 	}
+	if switched {
+		s.proxyReconnectSuccess()
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *Server) activateProxyPool(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	before := s.m.proxyPoolActiveID()
 	if err := s.m.activateProxyID(id, "manual"); err != nil {
 		writeErr(w, 400, err.Error())
 		return
+	}
+	if before != id {
+		s.proxyReconnectSuccess()
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "active_id": id, "active_proxy": maskSecrets(s.m.GlobalProxy())})
 }

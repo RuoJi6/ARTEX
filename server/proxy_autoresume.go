@@ -258,16 +258,14 @@ func (s *Server) proxyReconnectTick() {
 		return
 	}
 	if s.m.proxyPool != nil && len(s.m.proxyPoolEntries()) > 0 {
-		active := s.m.proxyPoolActiveID()
-		// Pool-managed reconnects are driven by a confirmed pool probe. Do not
-		// run the per-task reconnect loop against an entry that merely still says
-		// healthy: that would resume exhausted tasks without a fresh probe and
-		// reset their attempt budget on the next failure. The pool tick also
-		// handles a missing/cooling active member and can switch to another
-		// confirmed healthy member before calling the guarded resume path.
-		_ = active
-		s.proxyPoolTick()
-		return
+		// A pool tick may confirm the active route or switch to another available
+		// member. If it cannot confirm either, retain the original #106 per-task
+		// attempt/backoff/exhaustion loop (especially for a one-member legacy
+		// pool).
+		outcome := s.proxyPoolTick()
+		if outcome.confirmed || outcome.switched {
+			return
+		}
 	}
 	now := time.Now().Unix()
 	max, interval := s.proxyReconnectConfig()

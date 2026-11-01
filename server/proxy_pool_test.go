@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/traffic"
 )
 
@@ -94,6 +96,220 @@ func TestProxyPoolHealthThresholdCooldownAndRecovery(t *testing.T) {
 	m.markProxyProbe("a", egressProbeResult{OK: true, ExitIP: "203.0.113.9"})
 	if got := m.proxyPool.entries[0]; got.Health != "healthy" || got.ConsecutiveFailures != 0 || got.EgressIP != "203.0.113.9" {
 		t.Fatalf("recovery state=%+v", got)
+	}
+}
+
+func TestProxyPoolUncheckedMemberDoesNotPauseBeforeFailureThreshold(t *testing.T) {
+	m := proxyTestManager(t)
+	task, err := m.CreateTask("unchecked proxy", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = m.DeleteTask(task.ID, DeleteTaskOptions{}) }()
+	m.globalProxy = "http://a"
+	m.proxyPool = &proxyPoolState{active: "a", entries: []proxyPoolEntry{{
+		ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "unknown"}, RawURL: "http://a",
+	}}}
+	s := &Server{m: m, ctx: context.Background(), proxyPoolProbeSem: make(chan struct{}, proxyPoolMaxProbeConcurrency)}
+	s.proxyProbe = func(context.Context, string, string, []string, time.Duration) egressProbeResult {
+		return egressProbeResult{Error: "proxy down"}
+	}
+	s.proxyPoolTickLocked(true)
+	if st := task.lifecycleSnapshot(); st.Paused || st.PauseReason == "paused_by_proxy" {
+		t.Fatalf("unchecked member paused the task: %+v", st)
+	}
+	if got := m.proxyPool.entries[0].Health; got != "unknown" {
+		t.Fatalf("single failure changed unchecked member to %q", got)
+	}
+}
+
+func TestProxyPoolCoolingWindowSkipsProbeUntilExpiry(t *testing.T) {
+	m := proxyTestManager(t)
+	m.globalProxy = "http://a"
+	m.proxyPool = &proxyPoolState{active: "a", entries: []proxyPoolEntry{{
+		ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "unhealthy-cooling", ConsecutiveFailures: 3, LastCheckedAt: time.Now()}, RawURL: "http://a",
+	}}}
+	s := &Server{m: m, ctx: context.Background(), proxyPoolProbeSem: make(chan struct{}, proxyPoolMaxProbeConcurrency)}
+	calls := 0
+	s.proxyProbe = func(context.Context, string, string, []string, time.Duration) egressProbeResult {
+		calls++
+		return egressProbeResult{OK: true, ExitIP: "203.0.113.5"}
+	}
+	s.proxyPoolTickLocked(false)
+	if calls != 0 {
+		t.Fatalf("cooling member was probed before cooldown expiry: calls=%d", calls)
+	}
+	m.proxyPool.entries[0].LastCheckedAt = time.Now().Add(-2 * time.Minute)
+	s.proxyPoolTickLocked(false)
+	if calls != 1 || m.proxyPool.entries[0].Health != "healthy" {
+		t.Fatalf("expired cooling member did not recover: calls=%d entry=%+v", calls, m.proxyPool.entries[0])
+	}
+}
+
+func TestProxyPoolTimedRotationUsesAvailableMembersAndRecoversTasks(t *testing.T) {
+	m := proxyTestManager(t)
+	if err := m.SetProxyPoolSettings(true, minProxyRotateInterval, true, "sequential", 3, 60, 30); err != nil {
+		t.Fatal(err)
+	}
+	m.globalProxy = "http://a"
+	m.proxyPool = &proxyPoolState{active: "a", lastTimed: time.Now().Add(-time.Minute), lastHealth: time.Now(), entries: []proxyPoolEntry{
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://a"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "b", Enabled: true, Health: "healthy"}, RawURL: "http://b"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "c", Enabled: true, Health: "unhealthy-cooling"}, RawURL: "http://c"},
+	}}
+	s := &Server{m: m, ctx: context.Background()}
+	s.proxyPoolTickLocked(false)
+	if got := m.GlobalProxy(); got != "http://b" {
+		t.Fatalf("timed rotation selected %q", got)
+	}
+	if len(m.proxyPool.logs) == 0 || m.proxyPool.logs[len(m.proxyPool.logs)-1].Reason != "timed" {
+		t.Fatalf("timed rotation was not logged: %+v", m.proxyPool.logs)
+	}
+}
+
+func TestProxyPoolFailureSwitchRecoversOnlyEligibleTasks(t *testing.T) {
+	m := proxyTestManager(t)
+	if err := m.SetProxyPoolSettings(false, minProxyRotateInterval, true, "sequential", 3, 60, 30); err != nil {
+		t.Fatal(err)
+	}
+	m.globalProxy = "http://a"
+	m.proxyPool = &proxyPoolState{active: "a", entries: []proxyPoolEntry{
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://a"},
+		{ProxyPoolEntry: ProxyPoolEntry{ID: "b", Enabled: true, Health: "healthy"}, RawURL: "http://b"},
+	}}
+	eligible, err := m.CreateTask("eligible", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exhausted, err := m.CreateTask("exhausted", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = m.DeleteTask(eligible.ID, DeleteTaskOptions{})
+		_, _ = m.DeleteTask(exhausted.ID, DeleteTaskOptions{})
+	}()
+	for _, task := range []*Task{eligible, exhausted} {
+		if err := m.ApplyProxyPause(task.ID); err != nil {
+			t.Fatal(err)
+		}
+		task.updateLifecycle(func(v *taskLifecycleState) { v.ReconnectGeneration = 7; v.ReconnectMax = 3 })
+	}
+	exhausted.updateLifecycle(func(v *taskLifecycleState) { v.ReconnectAttempt, v.ReconnectExhausted = 3, true })
+	s := newAdmissionTestServer(m, nil)
+	m.SetTaskControlMutex(&s.concMu)
+	s.proxyPoolWake = make(chan struct{}, 1)
+	s.proxyPoolProbeSem = make(chan struct{}, proxyPoolMaxProbeConcurrency)
+	s.proxyProbe = func(context.Context, string, string, []string, time.Duration) egressProbeResult {
+		return egressProbeResult{Error: "proxy down"}
+	}
+	s.engine.Pause(eligible.ID, agent.AbortPausedByProxy)
+	s.engine.Pause(exhausted.ID, agent.AbortPausedByProxy)
+	if !s.handleProxyPoolFailure(errors.New("proxyconnect tcp: connection refused")) {
+		t.Fatal("confirmed failure did not switch to the available member")
+	}
+	if got := m.GlobalProxy(); got != "http://b" {
+		t.Fatalf("failure switch selected %q", got)
+	}
+	if st := eligible.lifecycleSnapshot(); st.PauseReason != "" || st.Paused {
+		t.Fatalf("eligible task did not recover: %+v", st)
+	}
+	if st := exhausted.lifecycleSnapshot(); st.PauseReason != "paused_by_proxy" || !st.ReconnectExhausted {
+		t.Fatalf("exhausted task was automatically resumed: %+v", st)
+	}
+}
+
+func TestProxyPoolReconnectKeepsAttemptsAndDoesNotAutoResumeExhausted(t *testing.T) {
+	m := proxyTestManager(t)
+	if err := m.pg.SetSetting(settingProxyReconnectMax, "2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.pg.SetSetting(settingProxyReconnectInterval, "1"); err != nil {
+		t.Fatal(err)
+	}
+	m.globalProxy = "http://legacy"
+	m.proxyPool = &proxyPoolState{active: "legacy", entries: []proxyPoolEntry{{
+		ProxyPoolEntry: ProxyPoolEntry{ID: "legacy", Enabled: true, Health: "healthy"}, RawURL: "http://legacy",
+	}}}
+	task, err := m.CreateTask("legacy reconnect", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = m.DeleteTask(task.ID, DeleteTaskOptions{}) }()
+	if err := m.ApplyProxyPause(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	task.updateLifecycle(func(v *taskLifecycleState) { v.ReconnectGeneration = 3 })
+	s := &Server{m: m, ctx: context.Background(), proxyPoolProbeSem: make(chan struct{}, proxyPoolMaxProbeConcurrency)}
+	s.proxyProbe = func(context.Context, string, string, []string, time.Duration) egressProbeResult {
+		return egressProbeResult{Error: "proxy down"}
+	}
+	s.proxyReconnectTick()
+	first := task.lifecycleSnapshot()
+	if first.ReconnectAttempt != 1 || first.ReconnectExhausted {
+		t.Fatalf("first pool reconnect attempt=%+v", first)
+	}
+	task.updateLifecycle(func(v *taskLifecycleState) { v.ReconnectNextAt = 0 })
+	s.proxyReconnectTick()
+	second := task.lifecycleSnapshot()
+	if second.ReconnectAttempt != 2 || !second.ReconnectExhausted || second.PauseReason != "paused_by_proxy" {
+		t.Fatalf("second pool reconnect did not exhaust: %+v", second)
+	}
+	s.proxyReconnectTick()
+	third := task.lifecycleSnapshot()
+	if third.ReconnectAttempt != second.ReconnectAttempt || !third.ReconnectExhausted || third.PauseReason != "paused_by_proxy" {
+		t.Fatalf("automatic tick revived exhausted task: %+v", third)
+	}
+	guards := s.snapshotProxyReconnectGuardsWithExhausted(false, true)
+	s.proxyReconnectSuccessWithGuards(guards, nil)
+	if got := task.lifecycleSnapshot(); got.PauseReason != "" {
+		t.Fatalf("manual guarded resume did not release exhausted task: %+v", got)
+	}
+}
+
+func TestProxyPoolDisableOrClearActiveRoutesAway(t *testing.T) {
+	newServer := func(entries []proxyPoolEntry) (*Server, *Manager) {
+		m := &Manager{globalProxy: "http://a", proxyPool: &proxyPoolState{active: "a", entries: entries}}
+		return &Server{m: m}, m
+	}
+	t.Run("disable switches to healthy member", func(t *testing.T) {
+		s, m := newServer([]proxyPoolEntry{
+			{ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://a"},
+			{ProxyPoolEntry: ProxyPoolEntry{ID: "b", Enabled: true, Health: "healthy"}, RawURL: "http://b"},
+		})
+		r := httptest.NewRequest(http.MethodPatch, "/api/settings/proxy-pool/a", strings.NewReader(`{"enabled":false}`))
+		r.SetPathValue("id", "a")
+		w := httptest.NewRecorder()
+		s.updateProxyPool(w, r)
+		if w.Code != http.StatusOK || m.GlobalProxy() != "http://b" || m.proxyPoolActiveID() != "b" {
+			t.Fatalf("disable route status=%d proxy=%q active=%q body=%s", w.Code, m.GlobalProxy(), m.proxyPoolActiveID(), w.Body.String())
+		}
+	})
+	t.Run("clear last member clears runtime", func(t *testing.T) {
+		s, m := newServer([]proxyPoolEntry{{
+			ProxyPoolEntry: ProxyPoolEntry{ID: "a", Enabled: true, Health: "healthy"}, RawURL: "http://a",
+		}})
+		r := httptest.NewRequest(http.MethodPatch, "/api/settings/proxy-pool/a", strings.NewReader(`{"url":""}`))
+		r.SetPathValue("id", "a")
+		w := httptest.NewRecorder()
+		s.updateProxyPool(w, r)
+		if w.Code != http.StatusOK || m.GlobalProxy() != "" || m.proxyPoolActiveID() != "" {
+			t.Fatalf("clear route status=%d proxy=%q active=%q body=%s", w.Code, m.GlobalProxy(), m.proxyPoolActiveID(), w.Body.String())
+		}
+	})
+}
+
+func TestProxyPoolCaptureOffUsesLocalForwarder(t *testing.T) {
+	fp, err := newDynamicForwardProxy(func() string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fp.Close()
+	m := &Manager{forwardProxy: fp}
+	m.proxyPoolConfigured.Store(true)
+	got := m.ProxyAddr()
+	if !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("capture-off proxy address=%q, want local forwarder", got)
 	}
 }
 
