@@ -132,6 +132,7 @@ type Server struct {
 	proxyPoolWake     chan struct{}
 	proxyPoolWG       sync.WaitGroup
 	proxyPoolProbeSem chan struct{}
+	proxyPoolTickMu   sync.Mutex
 	// proxyProbe is injectable for deterministic reconnect race tests. Production
 	// servers leave it nil and use probeEgress directly.
 	proxyProbe func(context.Context, string, string, []string, time.Duration) egressProbeResult
@@ -309,6 +310,13 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	}
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
 	return s
+}
+
+// Close waits for proxy pool supervision to stop before Manager closes the DB.
+func (s *Server) Close() {
+	if s != nil {
+		s.proxyPoolWG.Wait()
+	}
 }
 
 // Restored deadline and worker loops must inherit the same context as new tasks,
@@ -3567,6 +3575,7 @@ func (s *Server) settingsPayload() map[string]any {
 		"global_proxy":                         maskSecrets(s.m.GlobalProxy()), // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
 		"proxy_pool":                           func() []ProxyPoolEntry { e, _, _ := s.m.ProxyPoolSnapshot(); return e }(),
 		"proxy_pool_active_id":                 func() string { _, a, _ := s.m.ProxyPoolSnapshot(); return a }(),
+		"proxy_pool_switch_log":                func() []ProxySwitchLog { _, _, l := s.m.ProxyPoolSnapshot(); return l }(),
 		"proxy_rotate_timed_enabled":           s.m.pg.GetBool(settingProxyRotateTimed, false),
 		"proxy_rotate_interval_seconds":        proxyIntSetting(s.m.pg, settingProxyRotateInterval, defaultProxyRotateInterval),
 		"proxy_rotate_on_failure":              s.m.pg.GetBool(settingProxyRotateFailure, false),
@@ -3900,8 +3909,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err.Error())
 			return
 		}
-		changed = true // capture-off egress is baked into agents at build time → rebuild
-		if globalProxyValue == "" {
+		if globalProxyValue == "" && (s.m.proxyPool == nil || len(s.m.proxyPoolEntries()) == 0) {
 			s.proxyReconnectSuccessWithGuards(proxyGuards, nil)
 		}
 	}

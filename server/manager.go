@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
@@ -282,8 +283,10 @@ type Manager struct {
 	// (http/https/socks5, optional user:pass). Empty = direct. When traffic
 	// capture is on it becomes the MITM's upstream; when capture is off it is
 	// injected into agent bash env / WebFetch directly. See ProxyAddr.
-	globalProxy string
-	proxyPool   *proxyPoolState
+	globalProxy         string
+	proxyPool           *proxyPoolState
+	forwardProxy        *dynamicForwardProxy
+	proxyPoolConfigured atomic.Bool
 }
 
 // SetTaskControlMutex lets lifecycle operations that originate in Manager
@@ -583,6 +586,12 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 		log.Printf("[llmusage] create table: %v", err)
 	}
 	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
+	if fp, ferr := newDynamicForwardProxy(func() string { return m.GlobalProxy() }); ferr == nil {
+		m.forwardProxy = fp
+		fp.direct = func() bool { return !m.proxyPoolConfigured.Load() }
+	} else {
+		log.Printf("[proxy] local forwarder disabled: %v", ferr)
+	}
 	if proxyAddr != "" {
 		tr, err := traffic.Open(filepath.Join(dir, "traffic"), proxyAddr)
 		if err != nil {
@@ -1018,8 +1027,12 @@ func (m *Manager) ProxyAddr() string {
 		return m.traffic.ProxyAddr()
 	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.globalProxy
+	global := m.globalProxy
+	m.mu.RUnlock()
+	if (global != "" || m.proxyPoolConfigured.Load()) && m.forwardProxy != nil {
+		return m.forwardProxy.Addr()
+	}
+	return maskSecrets(global)
 }
 
 // ProxyCACert returns the CA cert path agents must trust to verify HTTPS through
@@ -1049,18 +1062,31 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw != "" {
 		if _, err := traffic.ValidateProxyURL(raw); err != nil {
-			return err
+			return fmt.Errorf("%s", maskSecrets(err.Error()))
 		}
 	}
-	poolLocked := false
 	if m.proxyPool != nil {
 		m.proxyPool.mu.Lock()
-		poolLocked = true
-		defer func() {
-			if poolLocked {
+		managed := len(m.proxyPool.entries) > 0
+		if !managed && raw != "" {
+			m.proxyPool.entries = []proxyPoolEntry{{ProxyPoolEntry: ProxyPoolEntry{ID: "proxy-legacy", URL: maskSecrets(raw), Enabled: true, Health: "healthy"}, RawURL: raw}}
+			m.proxyPool.active = "proxy-legacy"
+			m.proxyPoolConfigured.Store(true)
+			if err := m.applyActiveProxyLocked("proxy-legacy", "manual"); err != nil {
+				m.proxyPool.entries = nil
+				m.proxyPool.active = ""
 				m.proxyPool.mu.Unlock()
+				return err
 			}
-		}()
+			m.proxyPool.mu.Unlock()
+			return nil
+		}
+		m.proxyPool.mu.Unlock()
+		if managed {
+			// The legacy field is a read-only echo once a pool exists. Pool API
+			// operations are the sole authority for health, enablement and switching.
+			return nil
+		}
 	}
 	if err := m.pg.SetSetting(settingGlobalProxy, raw); err != nil {
 		return err
@@ -1073,39 +1099,14 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 			return err
 		}
 	}
-	// Keep the browser MCP's egress in sync with the new global proxy too.
 	m.syncBrowserMCPProxy()
-	// Keep the legacy single-proxy setting compatible with the pool. If a pool
-	// exists, update its active entry; otherwise this remains a pool of one.
-	if m.proxyPool != nil {
-		if len(m.proxyPool.entries) == 0 && raw != "" {
-			m.proxyPool.entries = []proxyPoolEntry{{ProxyPoolEntry: ProxyPoolEntry{ID: "proxy-legacy", URL: maskSecrets(raw), Enabled: true, Health: "healthy"}, RawURL: raw}}
-			m.proxyPool.active = "proxy-legacy"
-		} else if len(m.proxyPool.entries) > 0 && raw != "" {
-			found := false
-			for i := range m.proxyPool.entries {
-				if m.proxyPool.entries[i].ID == m.proxyPool.active {
-					m.proxyPool.entries[i].RawURL = raw
-					m.proxyPool.entries[i].URL = maskSecrets(raw)
-					m.proxyPool.entries[i].Enabled = true
-					m.proxyPool.entries[i].Health = "healthy"
-					found = true
-					break
-				}
-			}
-			if !found {
-				m.proxyPool.entries[0].RawURL, m.proxyPool.entries[0].URL, m.proxyPool.entries[0].Enabled, m.proxyPool.entries[0].Health = raw, maskSecrets(raw), true, "healthy"
-				m.proxyPool.active = m.proxyPool.entries[0].ID
-			}
-		} else if raw == "" && len(m.proxyPool.entries) == 0 {
-			m.proxyPool.active = ""
-		}
-		_ = m.persistProxyPoolLocked()
-	}
 	return nil
 }
 
 func (m *Manager) Close() error {
+	if m.forwardProxy != nil {
+		_ = m.forwardProxy.Close()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.traffic != nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -89,7 +90,7 @@ func ParseProxyBatch(raw string) ([]ProxyPoolEntry, []ProxyImportError) {
 			errs = append(errs, ProxyImportError{Line: n + 1, Input: maskSecrets(line), Error: maskSecrets(err.Error())})
 			continue
 		}
-		key := strings.ToLower(u.String())
+		key := proxyURLKey(u)
 		if seen[key] {
 			errs = append(errs, ProxyImportError{Line: n + 1, Input: maskSecrets(line), Error: "重复代理，已跳过"})
 			continue
@@ -102,17 +103,36 @@ func ParseProxyBatch(raw string) ([]ProxyPoolEntry, []ProxyImportError) {
 		if len(parts) > 2 {
 			remark = strings.TrimSpace(parts[2])
 		}
-		out = append(out, ProxyPoolEntry{ID: fmt.Sprintf("proxy-%d", time.Now().UnixNano()+int64(n)), URL: rawURL, Name: name, Remark: remark, Enabled: true, Health: "unhealthy-cooling"})
+		out = append(out, ProxyPoolEntry{ID: fmt.Sprintf("proxy-%d-%d", time.Now().UnixNano(), n+1), URL: rawURL, Name: name, Remark: remark, Enabled: true, Health: "unhealthy-cooling"})
 	}
 	return out, errs
 }
 
+func proxyURLKey(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	v := *u
+	v.Host = strings.ToLower(v.Host)
+	v.Scheme = strings.ToLower(v.Scheme)
+	return v.String()
+}
+
+func proxyURLKeyRaw(raw string) string {
+	u, err := traffic.ValidateProxyURL(raw)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+	return proxyURLKey(u)
+}
+
 type proxyPoolState struct {
-	mu        sync.Mutex
-	entries   []proxyPoolEntry
-	active    string
-	logs      []ProxySwitchLog
-	lastTimed time.Time
+	mu         sync.Mutex
+	entries    []proxyPoolEntry
+	active     string
+	logs       []ProxySwitchLog
+	lastTimed  time.Time
+	lastHealth time.Time
 }
 
 func (m *Manager) initProxyPool() {
@@ -141,6 +161,7 @@ func (m *Manager) initProxyPool() {
 			}
 		}
 	}
+	m.proxyPoolConfigured.Store(len(m.proxyPool.entries) > 0)
 }
 
 func (m *Manager) persistProxyPoolLocked() error {
@@ -195,21 +216,16 @@ func (m *Manager) setProxyPoolEntries(entries []proxyPoolEntry, active string) e
 	m.proxyPool.mu.Lock()
 	defer m.proxyPool.mu.Unlock()
 	m.proxyPool.entries, m.proxyPool.active = entries, active
+	m.proxyPoolConfigured.Store(len(entries) > 0)
 	if err := m.persistProxyPoolLocked(); err != nil {
 		return err
 	}
-	for _, e := range entries {
-		if e.ID == active && e.Enabled && e.Health == "healthy" {
-			m.mu.Lock()
-			m.globalProxy = e.RawURL
-			m.mu.Unlock()
-			if m.pg != nil {
-				_ = m.pg.SetSetting(settingGlobalProxy, e.RawURL)
-			}
-			break
-		}
-	}
 	if active == "" {
+		for _, e := range entries {
+			if e.Enabled && e.Health == "healthy" {
+				return m.applyActiveProxyLocked(e.ID, "reconnect")
+			}
+		}
 		return nil
 	}
 	for _, e := range entries {
@@ -324,6 +340,10 @@ func (m *Manager) markProxyProbe(id string, res egressProbeResult) {
 	}
 	m.proxyPool.mu.Lock()
 	defer m.proxyPool.mu.Unlock()
+	m.markProxyProbeLocked(id, res)
+}
+
+func (m *Manager) markProxyProbeLocked(id string, res egressProbeResult) {
 	for i := range m.proxyPool.entries {
 		e := &m.proxyPool.entries[i]
 		if e.ID != id {
@@ -395,26 +415,39 @@ func (m *Manager) proxyRotateConfig() (bool, time.Duration, bool, string) {
 
 func (s *Server) runProxyPoolSupervisor(ctx context.Context) {
 	for {
-		_, interval, _, _ := s.m.proxyRotateConfig()
+		_, rotateInterval, _, _ := s.m.proxyRotateConfig()
 		_, _, healthInterval := s.m.proxyHealthConfig()
-		if healthInterval > 0 && healthInterval < interval {
-			interval = healthInterval
+		if rotateInterval <= 0 {
+			rotateInterval = defaultProxyRotateInterval * time.Second
 		}
-		if interval < minProxyRotateInterval*time.Second {
-			interval = minProxyRotateInterval * time.Second
+		if healthInterval <= 0 {
+			healthInterval = defaultProxyHealthInterval * time.Second
 		}
-		t := time.NewTimer(interval)
+		d := healthInterval
+		if timed, _, _, _ := s.m.proxyRotateConfig(); timed && rotateInterval < d {
+			d = rotateInterval
+		}
+		if d <= 0 {
+			d = time.Second
+		}
+		t := time.NewTimer(d)
 		select {
 		case <-ctx.Done():
 			if !t.Stop() {
-				<-t.C
+				select {
+				case <-t.C:
+				default:
+				}
 			}
 			return
 		case <-t.C:
 			s.proxyPoolTick()
 		case <-s.proxyPoolWake:
 			if !t.Stop() {
-				<-t.C
+				select {
+				case <-t.C:
+				default:
+				}
 			}
 			s.proxyPoolTick()
 		}
@@ -422,34 +455,53 @@ func (s *Server) runProxyPoolSupervisor(ctx context.Context) {
 }
 
 func (s *Server) proxyPoolTick() {
-	if s == nil || s.m == nil || s.m.proxyPool == nil {
+	if s == nil {
 		return
 	}
+	s.proxyPoolTickMu.Lock()
+	defer s.proxyPoolTickMu.Unlock()
+	s.proxyPoolTickLocked(false)
+}
+
+func (s *Server) proxyPoolTickLocked(forceHealth bool) {
+	if s.m == nil || s.m.proxyPool == nil {
+		return
+	}
+	now := time.Now()
 	timed, rotateInterval, _, _ := s.m.proxyRotateConfig()
 	if timed {
 		s.m.proxyPool.mu.Lock()
-		due := s.m.proxyPool.lastTimed.IsZero() || time.Since(s.m.proxyPool.lastTimed) >= rotateInterval
+		due := s.m.proxyPool.lastTimed.IsZero() || now.Sub(s.m.proxyPool.lastTimed) >= rotateInterval
 		if due {
-			s.m.proxyPool.lastTimed = time.Now()
+			s.m.proxyPool.lastTimed = now
 		}
 		s.m.proxyPool.mu.Unlock()
 		if due {
 			_ = s.m.rotateProxy("timed")
 		}
 	}
-	threshold, cooldown, _ := s.m.proxyHealthConfig()
+	threshold, cooldown, healthInterval := s.m.proxyHealthConfig()
+	s.m.proxyPool.mu.Lock()
+	healthDue := s.m.proxyPool.lastHealth.IsZero() || now.Sub(s.m.proxyPool.lastHealth) >= healthInterval
+	if healthDue {
+		s.m.proxyPool.lastHealth = now
+	}
+	s.m.proxyPool.mu.Unlock()
+	if !healthDue && !forceHealth {
+		s.reconcileProxyPoolAfterProbe()
+		return
+	}
 	entries := s.m.proxyPoolEntries()
 	sem := s.proxyPoolProbeSem
 	if sem == nil {
 		sem = make(chan struct{}, proxyPoolMaxProbeConcurrency)
 	}
 	var wg sync.WaitGroup
-	now := time.Now()
 	for _, e := range entries {
 		if !e.Enabled {
 			continue
 		}
-		if e.Health == "unhealthy-cooling" && e.ConsecutiveFailures >= threshold && !e.LastCheckedAt.IsZero() && now.Sub(e.LastCheckedAt) < cooldown {
+		if !forceHealth && e.Health == "unhealthy-cooling" && e.ConsecutiveFailures >= threshold && !e.LastCheckedAt.IsZero() && now.Sub(e.LastCheckedAt) < cooldown {
 			continue
 		}
 		e := e
@@ -467,9 +519,11 @@ func (s *Server) proxyPoolTick() {
 		}()
 	}
 	wg.Wait()
-	// A successful probe can become the active proxy after the pool was down or
-	// after the previously active entry cooled out.
-	entries = s.m.proxyPoolEntries()
+	s.reconcileProxyPoolAfterProbe()
+}
+
+func (s *Server) reconcileProxyPoolAfterProbe() {
+	entries := s.m.proxyPoolEntries()
 	activeID := s.m.proxyPoolActiveID()
 	activeHealthy := false
 	for _, e := range entries {
@@ -478,17 +532,27 @@ func (s *Server) proxyPoolTick() {
 			break
 		}
 	}
-	if !activeHealthy {
-		for _, e := range entries {
-			if e.Enabled && e.Health == "healthy" {
-				_ = s.m.activateProxyID(e.ID, "reconnect")
-				s.proxyReconnectSuccess()
-				return
-			}
-		}
-		if activeID != "" {
-			_ = s.m.activateProxyID("", "reconnect")
-		}
+	if activeHealthy {
+		s.proxyReconnectSuccess()
+		return
+	}
+	s.m.proxyPool.mu.Lock()
+	id := s.m.selectHealthyLocked(activeID)
+	var err error
+	if id != "" {
+		err = s.m.applyActiveProxyLocked(id, "reconnect")
+	}
+	s.m.proxyPool.mu.Unlock()
+	if err == nil && id != "" {
+		s.proxyReconnectSuccess()
+		return
+	}
+	if err != nil {
+		s.pauseAllProxyTasks(err)
+		return
+	}
+	if id == "" && (activeID != "" || strings.TrimSpace(s.m.GlobalProxy()) != "") {
+		s.pauseAllProxyTasks(errors.New("代理池暂无健康成员"))
 	}
 }
 
@@ -505,32 +569,54 @@ func (m *Manager) activateProxyID(id, reason string) error {
 }
 
 func (s *Server) handleProxyPoolFailure(cause error) bool {
-	if s == nil || s.m == nil || s.m.proxyPool == nil {
+	if s == nil || s.m == nil || s.m.proxyPool == nil || !isGlobalProxyDialFailure(cause) {
 		return false
 	}
-	if !isGlobalProxyDialFailure(cause) || strings.TrimSpace(s.m.GlobalProxy()) == "" {
+	cur := strings.TrimSpace(s.m.GlobalProxy())
+	if cur == "" {
 		return false
 	}
-	cur := s.m.GlobalProxy()
-	res := s.runProxyProbe(context.Background(), cur, "", defaultEgressProbes, proxyPoolProbeTimeout)
+	res := s.runProxyProbe(s.ctx, cur, "", defaultEgressProbes, proxyPoolProbeTimeout)
 	if res.OK {
 		return false
 	}
-	for _, e := range s.m.proxyPoolEntries() {
-		if e.RawURL == cur {
-			s.m.markProxyProbe(e.ID, res)
+	_, _, onFailure, _ := s.m.proxyRotateConfig()
+	s.proxyPoolTickMu.Lock()
+	defer s.proxyPoolTickMu.Unlock()
+	s.m.proxyPool.mu.Lock()
+	defer s.m.proxyPool.mu.Unlock()
+	if s.m.GlobalProxy() != cur {
+		return false
+	}
+	active := s.m.proxyPool.active
+	for _, e := range s.m.proxyPool.entries {
+		if e.ID == active && e.RawURL == cur {
+			s.m.markProxyProbeLocked(e.ID, res)
 			break
 		}
 	}
-	_, _, onFailure, _ := s.m.proxyRotateConfig()
-	if onFailure && s.m.rotateProxy("failure") {
-		return true
+	if onFailure {
+		if id := s.m.selectHealthyLocked(active); id != "" && id != active {
+			if err := s.m.applyActiveProxyLocked(id, "failure"); err == nil {
+				return true
+			}
+		}
 	}
 	select {
 	case s.proxyPoolWake <- struct{}{}:
 	default:
 	}
 	return false
+}
+
+func (s *Server) pauseAllProxyTasks(cause error) {
+	for _, t := range s.m.List() {
+		st := t.lifecycleSnapshot()
+		if isTerminalStatus(st.Status) || st.Paused || s.engine.IsDeleting(t.ID) {
+			continue
+		}
+		s.pauseProxyTask(t.ID, cause)
+	}
 }
 
 func (s *Server) getProxyPool(w http.ResponseWriter, r *http.Request) {
@@ -559,15 +645,21 @@ func (s *Server) importProxyPool(w http.ResponseWriter, r *http.Request) {
 	entries := s.m.proxyPoolEntries()
 	seen := map[string]bool{}
 	for _, e := range entries {
-		seen[e.RawURL] = true
+		seen[proxyURLKeyRaw(e.RawURL)] = true
 	}
 	for _, p := range parsed {
-		if seen[p.URL] {
+		key := proxyURLKeyRaw(p.URL)
+		if seen[key] {
+			line := 0
+			if i := strings.LastIndex(p.ID, "-"); i >= 0 {
+				_, _ = fmt.Sscanf(p.ID[i+1:], "%d", &line)
+			}
+			errs = append(errs, ProxyImportError{Line: line, Input: maskSecrets(p.URL), Error: "重复代理，已跳过"})
 			continue
 		}
 		u, _ := traffic.ValidateProxyURL(p.URL)
 		entries = append(entries, proxyPoolEntry{ProxyPoolEntry: p, RawURL: u.String()})
-		seen[u.String()] = true
+		seen[proxyURLKey(u)] = true
 	}
 	active := s.m.proxyPoolActiveID()
 	if active != "" {
@@ -632,6 +724,28 @@ func (m *Manager) proxyPoolActiveID() string {
 	return m.proxyPool.active
 }
 
+func mergeMaskedProxyURL(raw, old string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	nu, err := traffic.ValidateProxyURL(raw)
+	if err != nil {
+		return "", fmt.Errorf("%s", maskSecrets(err.Error()))
+	}
+	if ou, _ := traffic.ValidateProxyURL(old); ou != nil && nu.User != nil {
+		pw, _ := nu.User.Password()
+		if strings.Contains(pw, "***") || strings.Contains(pw, "******") {
+			if oldpw, ok := ou.User.Password(); ok {
+				nu.User = url.UserPassword(nu.User.Username(), oldpw)
+			} else {
+				nu.User = url.User(nu.User.Username())
+			}
+		}
+	}
+	return nu.String(), nil
+}
+
 func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
@@ -648,43 +762,22 @@ func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "代理池为空")
 		return
 	}
+	needPause := false
 	s.m.proxyPool.mu.Lock()
-	defer s.m.proxyPool.mu.Unlock()
 	for i := range s.m.proxyPool.entries {
 		e := &s.m.proxyPool.entries[i]
 		if e.ID != id {
 			continue
 		}
+		oldRaw := e.RawURL
 		if req.URL != nil {
-			raw := strings.TrimSpace(*req.URL)
-			if strings.Contains(raw, "***") || strings.Contains(raw, "******") {
-				raw = e.RawURL
+			raw, err := mergeMaskedProxyURL(*req.URL, oldRaw)
+			if err != nil {
+				s.m.proxyPool.mu.Unlock()
+				writeErr(w, 400, err.Error())
+				return
 			}
-			if e.ID == s.m.proxyPool.active && e.Enabled && e.RawURL != "" {
-				if s.m.traffic != nil {
-					if err := s.m.traffic.SetUpstreamProxy(e.RawURL); err != nil {
-						writeErr(w, 400, err.Error())
-						return
-					}
-				}
-				s.m.mu.Lock()
-				s.m.globalProxy = e.RawURL
-				s.m.mu.Unlock()
-				if s.m.pg != nil {
-					_ = s.m.pg.SetSetting(settingGlobalProxy, e.RawURL)
-				}
-			}
-			if raw != "" {
-				u, err := traffic.ValidateProxyURL(raw)
-				if err != nil {
-					writeErr(w, 400, err.Error())
-					return
-				}
-				e.RawURL = u.String()
-				e.URL = maskSecrets(e.RawURL)
-			} else {
-				e.RawURL, e.URL = "", ""
-			}
+			e.RawURL, e.URL = raw, maskSecrets(raw)
 		}
 		if req.Name != nil {
 			e.Name = strings.TrimSpace(*req.Name)
@@ -694,21 +787,50 @@ func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Enabled != nil {
 			e.Enabled = *req.Enabled
-			if !e.Enabled && s.m.proxyPool.active == id {
-				_ = s.m.applyActiveProxyLocked("", "manual")
+			if !e.Enabled {
+				e.Health = "disabled"
+			} else if e.Health == "disabled" {
+				e.Health = "healthy"
+			}
+		}
+		if s.m.proxyPool.active == id {
+			if req.URL != nil || req.Enabled != nil {
+				if e.Enabled && e.RawURL != "" {
+					if err := s.m.applyActiveProxyLocked(id, "manual"); err != nil {
+						e.RawURL, e.URL = oldRaw, maskSecrets(oldRaw)
+						s.m.proxyPool.mu.Unlock()
+						writeErr(w, 400, maskSecrets(err.Error()))
+						return
+					}
+				} else if next := s.m.selectHealthyLocked(id); next != "" {
+					if err := s.m.applyActiveProxyLocked(next, "manual"); err != nil {
+						s.m.proxyPool.mu.Unlock()
+						writeErr(w, 400, maskSecrets(err.Error()))
+						return
+					}
+				} else {
+					needPause = true
+				}
 			}
 		}
 		if err := s.m.persistProxyPoolLocked(); err != nil {
+			s.m.proxyPool.mu.Unlock()
 			writeErr(w, 500, err.Error())
 			return
 		}
-		health := e.Health
-		if !e.Enabled {
-			health = "disabled"
+		out := e.ProxyPoolEntry
+		out.URL = maskSecrets(e.RawURL)
+		if !out.Enabled {
+			out.Health = "disabled"
 		}
-		writeJSON(w, 200, map[string]any{"entry": ProxyPoolEntry{ID: e.ID, URL: maskSecrets(e.RawURL), Name: e.Name, Remark: e.Remark, Enabled: e.Enabled, Health: health}})
+		s.m.proxyPool.mu.Unlock()
+		if needPause {
+			s.pauseAllProxyTasks(errors.New("代理池暂无健康成员"))
+		}
+		writeJSON(w, 200, map[string]any{"entry": out})
 		return
 	}
+	s.m.proxyPool.mu.Unlock()
 	writeErr(w, 404, "代理不存在")
 }
 
@@ -718,8 +840,8 @@ func (s *Server) deleteProxyPool(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "代理不存在")
 		return
 	}
+	needPause := false
 	s.m.proxyPool.mu.Lock()
-	defer s.m.proxyPool.mu.Unlock()
 	found := false
 	out := s.m.proxyPool.entries[:0]
 	for _, e := range s.m.proxyPool.entries {
@@ -730,18 +852,33 @@ func (s *Server) deleteProxyPool(w http.ResponseWriter, r *http.Request) {
 		out = append(out, e)
 	}
 	if !found {
+		s.m.proxyPool.mu.Unlock()
 		writeErr(w, 404, "代理不存在")
 		return
 	}
 	s.m.proxyPool.entries = out
+	s.m.proxyPoolConfigured.Store(len(out) > 0)
 	if s.m.proxyPool.active == id {
-		s.m.proxyPool.active = ""
-		if err := s.m.applyActiveProxyLocked("", "manual"); err != nil {
-			writeErr(w, 500, err.Error())
-			return
+		if next := s.m.selectHealthyLocked(id); next != "" {
+			if err := s.m.applyActiveProxyLocked(next, "manual"); err != nil {
+				s.m.proxyPool.mu.Unlock()
+				writeErr(w, 500, maskSecrets(err.Error()))
+				return
+			}
+		} else {
+			s.m.proxyPool.active = ""
+			needPause = true
 		}
 	}
-	_ = s.m.persistProxyPoolLocked()
+	if err := s.m.persistProxyPoolLocked(); err != nil {
+		s.m.proxyPool.mu.Unlock()
+		writeErr(w, 500, err.Error())
+		return
+	}
+	s.m.proxyPool.mu.Unlock()
+	if needPause {
+		s.pauseAllProxyTasks(errors.New("代理池暂无健康成员"))
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -755,14 +892,15 @@ func (s *Server) activateProxyPool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) testProxyPoolEntry(w http.ResponseWriter, r *http.Request) {
+	s.proxyPoolTickMu.Lock()
+	defer s.proxyPoolTickMu.Unlock()
 	id := r.PathValue("id")
 	for _, e := range s.m.proxyPoolEntries() {
 		if e.ID == id {
 			res := s.runProxyProbe(r.Context(), e.RawURL, "", defaultEgressProbes, proxyPoolProbeTimeout)
 			s.m.markProxyProbe(id, res)
-			if res.OK && s.m.GlobalProxy() == "" {
-				_ = s.m.activateProxyID(id, "reconnect")
-				s.proxyReconnectSuccess()
+			if res.OK {
+				s.reconcileProxyPoolAfterProbe()
 			}
 			writeJSON(w, 200, map[string]any{"ok": res.OK, "result": res})
 			return
@@ -772,11 +910,14 @@ func (s *Server) testProxyPoolEntry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) testAllProxyPool(w http.ResponseWriter, r *http.Request) {
-	select {
-	case s.proxyPoolWake <- struct{}{}:
-	default:
+	s.proxyPoolTickMu.Lock()
+	if s.m != nil && s.m.proxyPool != nil {
+		s.m.proxyPool.mu.Lock()
+		s.m.proxyPool.lastHealth = time.Time{}
+		s.m.proxyPool.mu.Unlock()
 	}
-	s.proxyPoolTick()
+	s.proxyPoolTickLocked(true)
+	s.proxyPoolTickMu.Unlock()
 	entries, active, logs := s.m.ProxyPoolSnapshot()
 	writeJSON(w, 200, map[string]any{"entries": entries, "active_id": active, "switch_log": logs})
 }

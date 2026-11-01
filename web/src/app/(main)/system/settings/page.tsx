@@ -134,6 +134,7 @@ export default function SystemSettingsPage() {
     setProxyPoolThreshold(String(s.proxy_health_fail_threshold ?? 3));
     setProxyPoolCooldown(String(s.proxy_health_cooldown_seconds ?? 60));
     setProxyPoolHealthInterval(String(s.proxy_health_check_interval_seconds ?? 30));
+    setProxyPoolLogs(s.proxy_pool_switch_log ?? []);
     setProxyReconnectMax(String(s.proxy_reconnect_max_attempts ?? 5));
     setProxyReconnectInterval(String(s.proxy_reconnect_interval_seconds ?? 30));
     setPyInterp(s.python_interpreter ?? "");
@@ -226,6 +227,11 @@ export default function SystemSettingsPage() {
       .then((s) => {
         apply(s);
         setSettingsLoaded(true);
+        void api.proxyPool().then((pool) => {
+          setProxyPool(pool.entries);
+          setProxyPoolActiveId(pool.active_id);
+          setProxyPoolLogs(pool.switch_log);
+        }).catch(() => undefined);
       })
       .catch(() => {
         setSettingsLoaded(false);
@@ -457,12 +463,18 @@ export default function SystemSettingsPage() {
     api.importProxyPool({ text: proxyPoolText }).then((r) => { setProxyPool(r.entries); setProxyPoolActiveId(r.active_id); setProxyPoolLogs(r.switch_log); setProxyPoolText(""); if (r.errors.length) toast.error(r.errors.map((e) => `第${e.line}行：${e.error}`).join("；")); else toast.success("代理池已导入"); }).catch((e) => toast.error("导入失败：" + (e as Error).message));
   };
   const saveProxyPoolStrategy = () => {
+    const interval = Number(proxyPoolInterval);
+    if (!Number.isFinite(interval) || !Number.isInteger(interval) || interval < 3) {
+      toast.error("定时轮换间隔必须是大于等于 3 秒的整数");
+      return;
+    }
     api.setSettings({ proxy_rotate_timed_enabled: proxyPoolTimed, proxy_rotate_interval_seconds: Number(proxyPoolInterval), proxy_rotate_on_failure: proxyPoolFailure, proxy_rotate_strategy: proxyPoolStrategy, proxy_health_fail_threshold: Number(proxyPoolThreshold), proxy_health_cooldown_seconds: Number(proxyPoolCooldown), proxy_health_check_interval_seconds: Number(proxyPoolHealthInterval) }).then((s) => { apply(s); toast.success("代理池轮换策略已保存"); }).catch((e) => toast.error("保存失败：" + (e as Error).message));
   };
   const testAllProxyPool = () => api.testAllProxyPool().then((r) => { setProxyPool(r.entries); setProxyPoolActiveId(r.active_id); setProxyPoolLogs(r.switch_log); toast.success("已完成全部代理探测"); }).catch((e) => toast.error("探测失败：" + (e as Error).message));
   const testOneProxyPool = (id: string) => api.testProxyPoolEntry(id).then(() => api.proxyPool()).then((r) => { setProxyPool(r.entries); setProxyPoolActiveId(r.active_id); setProxyPoolLogs(r.switch_log); }).catch((e) => toast.error("探测失败：" + (e as Error).message));
-  const toggleProxyPoolEntry = (entry: ProxyPoolEntry) => api.updateProxyPool(entry.id, { enabled: !entry.enabled }).then((r) => setProxyPool((items) => items.map((x) => x.id === entry.id ? r.entry : x))).catch((e) => toast.error("更新失败：" + (e as Error).message));
-  const deleteProxyPoolEntry = (id: string) => api.deleteProxyPool(id).then(() => setProxyPool((items) => items.filter((x) => x.id !== id))).catch((e) => toast.error("删除失败：" + (e as Error).message));
+  const refreshProxyPool = () => api.proxyPool().then((r) => { setProxyPool(r.entries); setProxyPoolActiveId(r.active_id); setProxyPoolLogs(r.switch_log); });
+  const toggleProxyPoolEntry = (entry: ProxyPoolEntry) => api.updateProxyPool(entry.id, { enabled: !entry.enabled }).then(() => refreshProxyPool()).catch((e) => toast.error("更新失败：" + (e as Error).message));
+  const deleteProxyPoolEntry = (id: string) => api.deleteProxyPool(id).then(() => refreshProxyPool()).catch((e) => toast.error("删除失败：" + (e as Error).message));
 
   const saveProxyReconnect = () => {
     api.setSettings({ proxy_reconnect_max_attempts: Number(proxyReconnectMax), proxy_reconnect_interval_seconds: Number(proxyReconnectInterval) })
@@ -925,9 +937,9 @@ export default function SystemSettingsPage() {
                     {proxyPool.length === 0 ? <p className="text-muted-foreground text-xs">暂无代理池条目；单代理仍由上面的全局代理输入框兼容。</p> : proxyPool.map((entry) => (
                       <div key={entry.id} className="flex flex-wrap items-center gap-2 rounded border px-2 py-2 text-xs">
                         <Switch checked={entry.enabled} onCheckedChange={() => toggleProxyPoolEntry(entry)} aria-label="启用代理" />
-                        <span className="min-w-0 flex-1 font-mono">{entry.name || entry.url}</span>
+                        <span className="min-w-0 flex-1 font-mono">{entry.name ? `${entry.name} · ` : ""}{entry.url}{entry.id === proxyPoolActiveId ? " · 当前" : ""}</span>
                         <span className={entry.health === "healthy" ? "text-emerald-600" : entry.health === "disabled" ? "text-muted-foreground" : "text-amber-600"}>{entry.enabled ? entry.health : "disabled"}</span>
-                        <span className="text-muted-foreground">{entry.egress_ip ?? "—"} · {entry.latency_ms ?? "—"}ms · 失败 {entry.consecutive_failures}</span>
+                        <span className="text-muted-foreground">{entry.egress_ip ?? "—"} · {entry.latency_ms ?? "—"}ms · 失败 {entry.consecutive_failures}{entry.last_error ? ` · ${entry.last_error}` : ""}</span>
                         <Button type="button" variant="ghost" size="sm" onClick={() => testOneProxyPool(entry.id)}>测试</Button>
                         <Button type="button" variant="ghost" size="sm" onClick={() => deleteProxyPoolEntry(entry.id)}>删除</Button>
                       </div>

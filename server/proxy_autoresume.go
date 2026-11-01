@@ -135,7 +135,10 @@ func (s *Server) handleProxyFailure(taskID string, cause error) {
 	if strings.TrimSpace(s.m.GlobalProxy()) == "" {
 		return
 	}
-	if probe := probeEgress(context.Background(), s.m.GlobalProxy(), "", defaultEgressProbes, 10*time.Second); probe.OK {
+	if s.handleProxyPoolFailure(cause) {
+		return
+	}
+	if probe := s.runProxyProbe(s.ctx, s.m.GlobalProxy(), "", defaultEgressProbes, 10*time.Second); probe.OK {
 		return
 	}
 	s.pauseProxyTask(taskID, cause)
@@ -246,6 +249,25 @@ func (s *Server) runProxyReconnect(ctx context.Context) {
 func (s *Server) proxyReconnectTick() {
 	if strings.TrimSpace(s.m.GlobalProxy()) == "" {
 		return
+	}
+	if s.m.proxyPool != nil && len(s.m.proxyPoolEntries()) > 0 {
+		active := s.m.proxyPoolActiveID()
+		found := false
+		for _, e := range s.m.proxyPoolEntries() {
+			if e.ID == active && e.Enabled && e.Health == "healthy" {
+				found = true
+				break
+			}
+			if e.ID == active {
+				found = true
+				s.proxyPoolTick()
+				return
+			}
+		}
+		if !found {
+			s.proxyPoolTick()
+			return
+		}
 	}
 	now := time.Now().Unix()
 	max, interval := s.proxyReconnectConfig()

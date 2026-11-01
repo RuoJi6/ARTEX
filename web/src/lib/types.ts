@@ -1006,6 +1006,7 @@ export interface Settings {
   global_proxy?: string;
   proxy_pool?: ProxyPoolEntry[];
   proxy_pool_active_id?: string;
+  proxy_pool_switch_log?: ProxySwitchLog[];
   proxy_rotate_timed_enabled?: boolean;
   proxy_rotate_interval_seconds?: number;
   proxy_rotate_on_failure?: boolean;

@@ -2,8 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/Autumn-27/artex/traffic"
 )
 
 func TestParseProxyBatchValidationAndDedup(t *testing.T) {
@@ -52,5 +57,51 @@ func TestProxyPoolPersistenceKeepsRawURL(t *testing.T) {
 	b, err := json.Marshal(proxyPoolPersist{Entries: []proxyPoolEntry{{ProxyPoolEntry: ProxyPoolEntry{ID: "1", URL: "http://***@host:1"}, RawURL: "http://user:pass@host:1"}}})
 	if err != nil || !strings.Contains(string(b), "raw_url") || !strings.Contains(string(b), "pass") {
 		t.Fatalf("bad persistence encoding: %s", b)
+	}
+}
+
+func TestProxyPoolURLKeyNormalizesHostCase(t *testing.T) {
+	a, _ := traffic.ValidateProxyURL("http://user:pass@HOST:8080")
+	b, _ := traffic.ValidateProxyURL("http://user:pass@host:8080")
+	if proxyURLKey(a) != proxyURLKey(b) {
+		t.Fatalf("keys differ: %q %q", proxyURLKey(a), proxyURLKey(b))
+	}
+}
+
+func TestMergeMaskedProxyURLPreservesOnlyPassword(t *testing.T) {
+	got, err := mergeMaskedProxyURL("http://newuser:***@NEW.example:9090", "http://old:secret@old.example:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://newuser:secret@NEW.example:9090" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestMergeMaskedProxyURLErrorIsMasked(t *testing.T) {
+	_, err := mergeMaskedProxyURL("http://user:secret@", "")
+	if err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("unmasked error: %v", err)
+	}
+}
+
+func TestDynamicForwardProxyUsesCurrentUpstream(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	defer target.Close()
+	up := ""
+	fp, err := newDynamicForwardProxy(func() string { return up })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fp.Close()
+	pu, _ := url.Parse(fp.Addr())
+	c := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu)}}
+	resp, err := c.Get(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
 	}
 }
