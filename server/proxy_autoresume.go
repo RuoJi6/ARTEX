@@ -182,6 +182,9 @@ func (s *Server) pauseProxyTask(taskID string, cause error) {
 }
 
 func (s *Server) handleProxyTrafficFailure(cause error) {
+	if s.handleProxyPoolFailure(cause) {
+		return
+	}
 	if !isGlobalProxyDialFailure(cause) || strings.TrimSpace(s.m.GlobalProxy()) == "" {
 		return
 	}
@@ -200,6 +203,9 @@ func (s *Server) handleProxyTrafficFailure(cause error) {
 }
 
 func (s *Server) handleProxyToolFailure(ctx context.Context, cause error) {
+	if s.handleProxyPoolFailure(cause) {
+		return
+	}
 	if !isGlobalProxyDialFailure(cause) || strings.TrimSpace(s.m.GlobalProxy()) == "" {
 		return
 	}
@@ -215,7 +221,7 @@ func truncateProxyError(err error) string {
 	if err == nil {
 		return ""
 	}
-	s := err.Error()
+	s := maskSecrets(err.Error())
 	if len(s) > 240 {
 		return s[:240] + "…"
 	}

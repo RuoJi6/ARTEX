@@ -283,6 +283,7 @@ type Manager struct {
 	// capture is on it becomes the MITM's upstream; when capture is off it is
 	// injected into agent bash env / WebFetch directly. See ProxyAddr.
 	globalProxy string
+	proxyPool   *proxyPoolState
 }
 
 // SetTaskControlMutex lets lifecycle operations that originate in Manager
@@ -642,6 +643,7 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if v, ok, _ := pg.GetSetting(settingGlobalProxy); ok {
 		m.globalProxy = strings.TrimSpace(v)
 	}
+	m.initProxyPool()
 	if m.traffic != nil {
 		if err := m.traffic.SetUpstreamProxy(m.globalProxy); err != nil {
 			log.Printf("[proxy] 全局代理 %q 无效，已忽略: %v", m.globalProxy, err)
@@ -1050,6 +1052,16 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 			return err
 		}
 	}
+	poolLocked := false
+	if m.proxyPool != nil {
+		m.proxyPool.mu.Lock()
+		poolLocked = true
+		defer func() {
+			if poolLocked {
+				m.proxyPool.mu.Unlock()
+			}
+		}()
+	}
 	if err := m.pg.SetSetting(settingGlobalProxy, raw); err != nil {
 		return err
 	}
@@ -1063,6 +1075,33 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 	}
 	// Keep the browser MCP's egress in sync with the new global proxy too.
 	m.syncBrowserMCPProxy()
+	// Keep the legacy single-proxy setting compatible with the pool. If a pool
+	// exists, update its active entry; otherwise this remains a pool of one.
+	if m.proxyPool != nil {
+		if len(m.proxyPool.entries) == 0 && raw != "" {
+			m.proxyPool.entries = []proxyPoolEntry{{ProxyPoolEntry: ProxyPoolEntry{ID: "proxy-legacy", URL: maskSecrets(raw), Enabled: true, Health: "healthy"}, RawURL: raw}}
+			m.proxyPool.active = "proxy-legacy"
+		} else if len(m.proxyPool.entries) > 0 && raw != "" {
+			found := false
+			for i := range m.proxyPool.entries {
+				if m.proxyPool.entries[i].ID == m.proxyPool.active {
+					m.proxyPool.entries[i].RawURL = raw
+					m.proxyPool.entries[i].URL = maskSecrets(raw)
+					m.proxyPool.entries[i].Enabled = true
+					m.proxyPool.entries[i].Health = "healthy"
+					found = true
+					break
+				}
+			}
+			if !found {
+				m.proxyPool.entries[0].RawURL, m.proxyPool.entries[0].URL, m.proxyPool.entries[0].Enabled, m.proxyPool.entries[0].Health = raw, maskSecrets(raw), true, "healthy"
+				m.proxyPool.active = m.proxyPool.entries[0].ID
+			}
+		} else if raw == "" && len(m.proxyPool.entries) == 0 {
+			m.proxyPool.active = ""
+		}
+		_ = m.persistProxyPoolLocked()
+	}
 	return nil
 }
 

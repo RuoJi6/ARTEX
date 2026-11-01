@@ -366,16 +366,18 @@ func (s *Server) testEgressProxy(w http.ResponseWriter, r *http.Request) {
 	agentCA := s.m.ProxyCACert()    // 捕获开时是 MITM 的 CA 路径；关时为空
 	savedProxy := s.m.GlobalProxy() // 已保存的 global_proxy
 
-	// 表单值 ≠ 已保存值时，② 仍按表单值测，但 agent 走的是已保存值——必须提示。
-	// 归一化再比：尾斜杠不算"未保存"。
-	pending := normalizeProxy(req.GlobalProxy) != normalizeProxy(savedProxy)
-
 	// 整体上限 40s：单次 Timeout 只兜一次，不兜总量；前端 fetch 没有超时。
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	proxyGuards := s.snapshotProxyReconnectGuards(false)
 
 	configuredProxy := strings.TrimSpace(req.GlobalProxy)
+	if strings.Contains(configuredProxy, "***") || strings.Contains(configuredProxy, "******") {
+		configuredProxy = s.m.GlobalProxy()
+	}
+	// 表单值 ≠ 已保存值时，② 仍按表单值测，但 agent 走的是已保存值——必须提示。
+	// 归一化再比：尾斜杠不算"未保存"。
+	pending := normalizeProxy(configuredProxy) != normalizeProxy(savedProxy)
 	rep := egressReport{
 		Capture:    capture,
 		Configured: maskSecrets(configuredProxy),
