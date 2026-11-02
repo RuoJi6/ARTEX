@@ -1,0 +1,31 @@
+name: UI localization
+
+on:
+  pull_request:
+    paths: ["web/**", ".github/workflows/i18n.yml"]
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/i18n.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run i18n:check
+      - run: npm run test:i18n
+      - run: npm run build:static
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:i18n:browser

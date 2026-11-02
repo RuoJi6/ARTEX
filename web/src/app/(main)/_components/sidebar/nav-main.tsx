@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { ChevronRight, MailIcon, PlusCircleIcon } from "lucide-react";
 import { api } from "@/lib/api";
@@ -307,6 +308,7 @@ function NavCollapsibleItem({ item, isActive, defaultOpen, isSubItemActive }: Na
 }
 
 function NavItemBadge({ badge }: { badge?: NavBadge }) {
+  const t = useTranslations("sidebar");
   if (!badge) {
     return null;
   }
@@ -320,7 +322,7 @@ function NavItemBadge({ badge }: { badge?: NavBadge }) {
         badge === "soon" && "border-muted-foreground text-muted-foreground",
       )}
     >
-      {badge}
+      {t(badge)}
     </SidebarMenuBadge>
   );
 }

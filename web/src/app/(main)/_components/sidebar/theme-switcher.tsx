@@ -1,6 +1,7 @@
 "use client";
 
 import { Monitor, Moon, Sun } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import { persistPreference } from "@/lib/preferences/preferences-storage";
@@ -9,6 +10,7 @@ import { usePreferencesStore } from "@/stores/preferences/preferences-provider";
 const THEME_CYCLE = ["light", "dark", "system"] as const;
 
 export function ThemeSwitcher() {
+  const t = useTranslations("preferences");
   const themeMode = usePreferencesStore((s) => s.themeMode);
   const setThemeMode = usePreferencesStore((s) => s.setThemeMode);
 
@@ -21,7 +23,7 @@ export function ThemeSwitcher() {
   };
 
   return (
-    <Button size="icon" onClick={cycleTheme} aria-label={`Current theme: ${themeMode}. Click to cycle themes`}>
+    <Button size="icon" onClick={cycleTheme} aria-label={t("cycleTheme", { theme: t(themeMode) })}>
       {/* SYSTEM */}
       <Monitor className="hidden [html[data-theme-mode=system]_&]:block" />
 

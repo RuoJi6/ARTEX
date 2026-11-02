@@ -5,6 +5,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 
 import { Search } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +19,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import type { NavMainItem } from "@/navigation/sidebar/sidebar-items";
-import { sidebarItems } from "@/navigation/sidebar/sidebar-items";
+import { getSidebarItems } from "@/navigation/sidebar/sidebar-items";
 
 type SearchItem = {
   id: string;
@@ -30,44 +31,9 @@ type SearchItem = {
   newTab?: boolean;
 };
 
-const sidebarGroupLabels = new Set(sidebarItems.flatMap((group) => (group.label ? [group.label] : [])));
-
-function getSubItemGroup(groupLabel: string | undefined, itemTitle: string) {
-  return sidebarGroupLabels.has(itemTitle) ? (groupLabel ?? "Other") : itemTitle;
-}
-
-const searchItems: SearchItem[] = sidebarItems.flatMap((group) =>
-  group.items.flatMap((item) => {
-    if (item.subItems) {
-      return item.subItems.map((sub) => ({
-        id: sub.id,
-        group: getSubItemGroup(group.label, item.title),
-        label: sub.title,
-        url: sub.url,
-        icon: item.icon,
-        disabled: sub.disabled,
-        newTab: sub.newTab,
-      }));
-    }
-    return [
-      {
-        id: item.id,
-        group: group.label ?? "Other",
-        label: item.title,
-        url: item.url,
-        icon: item.icon,
-        disabled: item.disabled,
-        newTab: item.newTab,
-      },
-    ];
-  }),
-);
-
 function getAvailableItems(items: SearchItem[]) {
   return items.filter((item) => !item.disabled && !item.url.includes("coming-soon"));
 }
-
-const recommendations = getAvailableItems(searchItems);
 
 function groupBy(items: SearchItem[]) {
   const groups = [...new Set(items.map((item) => item.group))];
@@ -78,6 +44,43 @@ function groupBy(items: SearchItem[]) {
 }
 
 export function SearchDialog() {
+  const t = useTranslations("search");
+  const nav = useTranslations("nav");
+  const sidebarItems = getSidebarItems(nav);
+  const sidebarGroupLabels = new Set(sidebarItems.flatMap((group) => (group.label ? [group.label] : [])));
+
+  function getSubItemGroup(groupLabel: string | undefined, itemTitle: string) {
+    return sidebarGroupLabels.has(itemTitle) ? (groupLabel ?? nav("other")) : itemTitle;
+  }
+
+  const searchItems: SearchItem[] = sidebarItems.flatMap((group) =>
+    group.items.flatMap((item) => {
+      if (item.subItems) {
+        return item.subItems.map((sub) => ({
+          id: sub.id,
+          group: getSubItemGroup(group.label, item.title),
+          label: sub.title,
+          url: sub.url,
+          icon: item.icon,
+          disabled: sub.disabled,
+          newTab: sub.newTab,
+        }));
+      }
+      return [
+        {
+          id: item.id,
+          group: group.label ?? nav("other"),
+          label: item.title,
+          url: item.url,
+          icon: item.icon,
+          disabled: item.disabled,
+          newTab: item.newTab,
+        },
+      ];
+    }),
+  );
+
+  const recommendations = getAvailableItems(searchItems);
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const router = useRouter();
@@ -138,16 +141,16 @@ export function SearchDialog() {
         className="px-0! font-normal text-muted-foreground hover:no-underline"
       >
         <Search data-icon="inline-start" />
-        Search
+        {t("label")}
         <kbd className="inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-medium text-[10px]">
           <span className="text-xs">⌘</span>J
         </kbd>
       </Button>
-      <CommandDialog open={open} onOpenChange={handleOpenChange}>
+      <CommandDialog title={t("label")} description={t("placeholder")} open={open} onOpenChange={handleOpenChange}>
         <Command>
-          <CommandInput placeholder="Search dashboards, users, and more…" value={query} onValueChange={setQuery} />
+          <CommandInput placeholder={t("placeholder")} value={query} onValueChange={setQuery} />
           <CommandList>
-            <CommandEmpty>No results found.</CommandEmpty>
+            <CommandEmpty>{t("empty")}</CommandEmpty>
             {query ? renderGroups(searchItems) : renderGroups(recommendations)}
           </CommandList>
         </Command>

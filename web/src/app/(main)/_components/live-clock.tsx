@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useTranslations } from "next-intl";
 
 import { cn } from "@/lib/utils";
 
@@ -10,6 +11,7 @@ function formatClock(value: Date) {
 }
 
 export function LiveClock({ className }: { className?: string }) {
+  const t = useTranslations("header");
   const [now, setNow] = React.useState<Date | null>(null);
 
   React.useEffect(() => {
@@ -27,8 +29,8 @@ export function LiveClock({ className }: { className?: string }) {
         className,
       )}
       dateTime={now?.toISOString()}
-      aria-label="当前时间"
-      title="当前本地时间"
+      aria-label={t("currentTime")}
+      title={t("localTime")}
     >
       {now ? formatClock(now) : "---- -- -- --:--:--"}
     </time>
