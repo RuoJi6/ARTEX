@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useTranslations } from "next-intl";
 
 import {
   CheckCircle2Icon,
@@ -40,6 +41,9 @@ function humanSize(n?: number): string {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function UpdateCard() {
+  const t = useTranslations("settings.update");
+  const messagesRef = React.useRef(t);
+  messagesRef.current = t;
   const [info, setInfo] = React.useState<UpdateCheck | null>(null);
   const [checking, setChecking] = React.useState(true);
   const [progress, setProgress] = React.useState<UpdateProgress | null>(null);
@@ -50,7 +54,7 @@ export function UpdateCard() {
   const [network, setNetwork] = React.useState<UpdateSettings | null>(null);
   const [savedNetwork, setSavedNetwork] = React.useState<UpdateSettings | null>(null);
   const [savingNetwork, setSavingNetwork] = React.useState(false);
-  const [networkError, setNetworkError] = React.useState("");
+  const [networkError, setNetworkError] = React.useState<{ key: "loadFailed" | "saveFailed"; error: string } | null>(null);
   const streamRef = React.useRef<ReturnType<typeof openSSE> | null>(null);
   const networkDirty = network?.proxy !== savedNetwork?.proxy;
 
@@ -64,7 +68,7 @@ export function UpdateCard() {
         setSavedNetwork(settings);
       })
       .catch((e) => {
-        if (active) setNetworkError("读取更新网络设置失败：" + (e as Error).message);
+        if (active) setNetworkError({ key: "loadFailed", error: (e as Error).message });
       });
     return () => {
       active = false;
@@ -82,13 +86,13 @@ export function UpdateCard() {
       .then((r) => {
         setInfo(r);
         if (!quiet) {
-          if (r.error) toast.error("检查更新失败：" + r.error);
-          else if (r.has_update) toast.success(`发现新版本 ${r.latest}`);
-          else if (r.comparable) toast.success("当前已是最新版本");
+          if (r.error) toast.error(messagesRef.current("checkFailed", { error: r.error }));
+          else if (r.has_update) toast.success(messagesRef.current("available", { version: r.latest ?? "" }));
+          else if (r.comparable) toast.success(messagesRef.current("upToDate"));
         }
       })
       .catch((e) => {
-        if (!quiet) toast.error("检查更新失败：" + (e as Error).message);
+        if (!quiet) toast.error(messagesRef.current("checkFailed", { error: (e as Error).message }));
       })
       .finally(() => setChecking(false));
   }, []);
@@ -100,17 +104,17 @@ export function UpdateCard() {
   const saveNetwork = async () => {
     if (!network) return;
     setSavingNetwork(true);
-    setNetworkError("");
+    setNetworkError(null);
     try {
       const settings = await api.saveUpdateSettings({
         proxy: network.proxy,
       });
       setNetwork(settings);
       setSavedNetwork(settings);
-      toast.success("更新网络设置已保存");
+      toast.success(t("networkSaved"));
       check();
     } catch (e) {
-      setNetworkError((e as Error).message);
+      setNetworkError({ key: "saveFailed", error: (e as Error).message });
     } finally {
       setSavingNetwork(false);
     }
@@ -128,7 +132,7 @@ export function UpdateCard() {
       try {
         const { version } = await api.version();
         if (version && version !== fromVersion) {
-          toast.success(`已更新到 ${version}，正在重新加载页面`);
+          toast.success(messagesRef.current("updated", { version }));
           await sleep(800);
           window.location.reload();
           return;
@@ -139,7 +143,7 @@ export function UpdateCard() {
     }
     setRestarting(false);
     setBusy(false);
-    toast.error("等待服务重启超时。请检查后端日志，或确认 artex 是通过 start.sh / start.bat 启动的。");
+    toast.error(messagesRef.current("restartTimeout"));
   }, []);
 
   // 订阅更新进度。SSE 不走 Next 的 /api 重写（那层会缓冲，事件推不出来）。
@@ -158,7 +162,7 @@ export function UpdateCard() {
         if (p.phase === "failed") {
           es.close();
           setBusy(false);
-          toast.error("更新失败：" + (p.error || p.message));
+          toast.error(messagesRef.current("failed", { error: p.error || p.message }));
           return;
         }
         if (p.phase === "staged") {
@@ -180,18 +184,14 @@ export function UpdateCard() {
   const doUpdate = () => {
     if (!info) return;
     const from = info.current;
-    const ok = window.confirm(
-      `确定更新到 ${info.latest}？\n\n` +
-        "更新会重启程序，正在运行的任务会被中断。\n" +
-        (info.mode === "docker"
-          ? "\n注意：容器内更新只替换程序本身，不会更新镜像里的 playwright / nmap 等工具链；" +
-            "若新版本依赖新工具，请改用 docker compose pull。"
-          : ""),
-    );
+    const ok = window.confirm(t("confirm", {
+      version: info.latest ?? "",
+      mode: info.mode === "docker" ? "docker" : "binary",
+    }));
     if (!ok) return;
 
     setBusy(true);
-    setProgress({ phase: "downloading", percent: 0, message: "准备中…" });
+    setProgress({ phase: "downloading", percent: 0, message: "" });
     api
       .applyUpdate()
       .then(() => {
@@ -200,7 +200,7 @@ export function UpdateCard() {
       .catch((e) => {
         setBusy(false);
         setProgress(null);
-        toast.error("启动更新失败：" + (e as Error).message);
+        toast.error(t("startFailed", { error: (e as Error).message }));
       });
   };
 
@@ -208,7 +208,7 @@ export function UpdateCard() {
     if (!info) return;
     if (
       !window.confirm(
-        "回滚到上一版本？\n\n程序会重启，正在运行的任务会被中断。\n注意：数据库结构不会回退，旧版本可能无法识别新版写入的数据。",
+        t("confirmRollback"),
       )
     )
       return;
@@ -217,12 +217,12 @@ export function UpdateCard() {
     api
       .rollbackUpdate()
       .then(() => {
-        toast.success("已切换到上一版本，正在重启…");
+        toast.success(t("rollbackStarted"));
         void waitForNewVersion(from);
       })
       .catch((e) => {
         setBusy(false);
-        toast.error("回滚失败：" + (e as Error).message);
+        toast.error(t("rollbackFailed", { error: (e as Error).message }));
       });
   };
 
@@ -239,21 +239,21 @@ export function UpdateCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <DownloadIcon className="size-4" />
-          版本与更新
+          {t("title")}
         </CardTitle>
-        <CardDescription>从 GitHub 检查并安装新版本。更新会重启程序，正在运行的任务会被中断。</CardDescription>
+        <CardDescription>{t("description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <FieldGroup>
           <Field data-invalid={!!networkError} data-disabled={busy || restarting || savingNetwork || !network}>
             <FieldLabel htmlFor="update-proxy" className="text-sm font-normal text-muted-foreground">
-              更新代理（可选）
+              {t("proxy")}
             </FieldLabel>
             <div className="flex items-center gap-2">
               <Input
                 id="update-proxy"
                 autoComplete="off"
-                placeholder="http://host:port 或 socks5://host:port（留空=直连）"
+                placeholder={t("proxyPlaceholder")}
                 value={network?.proxy ?? ""}
                 disabled={busy || restarting || savingNetwork || !network}
                 aria-invalid={!!networkError}
@@ -269,23 +269,22 @@ export function UpdateCard() {
                 onClick={() => void saveNetwork()}
                 disabled={!network || savingNetwork || checking || busy || restarting}
               >
-                {savingNetwork ? "保存中…" : "保存"}
+                {savingNetwork ? t("saving") : t("save")}
               </Button>
             </div>
             <FieldDescription className="text-xs">
-              独立出口代理，仅用于检查版本和下载更新，支持 HTTP / HTTPS / SOCKS5。留空保存后直连；不影响任务、网络搜索或
-              LLM 的代理。
+              {t("proxyDescription")}
             </FieldDescription>
-            {networkDirty && <p className="text-xs text-muted-foreground">修改尚未保存，保存后将自动检查更新。</p>}
+            {networkDirty && <p className="text-xs text-muted-foreground">{t("unsaved")}</p>}
             {networkError && (
               <p role="alert" className="text-xs text-destructive">
-                {networkError}
+                {t(networkError.key, { error: networkError.error })}
               </p>
             )}
           </Field>
         </FieldGroup>
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-muted-foreground">当前版本</span>
+          <span className="text-muted-foreground">{t("current")}</span>
           <Badge variant="secondary" className="font-mono">
             {info?.current ?? "…"}
           </Badge>
@@ -294,12 +293,12 @@ export function UpdateCard() {
               <Badge variant="outline" className="font-mono">
                 {info.os}/{info.arch}
               </Badge>
-              <Badge variant="outline">{info.mode === "docker" ? "Docker" : "独立程序"}</Badge>
+              <Badge variant="outline">{info.mode === "docker" ? "Docker" : t("binary")}</Badge>
             </>
           )}
           {info?.latest && (
             <>
-              <span className="text-muted-foreground">最新版本</span>
+              <span className="text-muted-foreground">{t("latest")}</span>
               <Badge variant={info.has_update ? "default" : "secondary"} className="font-mono">
                 {info.latest}
               </Badge>
@@ -312,7 +311,7 @@ export function UpdateCard() {
               rel="noreferrer"
               className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-4 hover:underline"
             >
-              更新日志 <ExternalLinkIcon className="size-3" />
+              {t("changelog")} <ExternalLinkIcon className="size-3" />
             </a>
           )}
         </div>
@@ -327,8 +326,7 @@ export function UpdateCard() {
         {info?.error && (
           <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-            无法连接 GitHub：{info.error}
-            {"　"}可配置更新代理或切换为直连后重试。
+            {t("githubFailed", { error: info.error })}
           </p>
         )}
 
@@ -337,36 +335,32 @@ export function UpdateCard() {
         {info?.has_update && info.asset_available === false && (
           <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-            {info.latest} 没有提供 {info.os}/{info.arch} 的发布包（缺少 {info.asset}），无法自动更新。
+            {t("missingAsset", { version: info.latest ?? "", os: info.os, arch: info.arch, asset: info.asset ?? "" })}
           </p>
         )}
 
         {info?.has_update && info.asset_available !== false && (
           <p className="text-xs text-muted-foreground">
-            将下载 <span className="font-mono">{info.asset}</span>
-            {info.size ? `（${humanSize(info.size)}）` : ""}，校验 SHA256 并冒烟测试后才会替换，失败自动保留当前版本。
+            {t.rich("downloadDescription", { asset: info.asset ?? "", size: info.size ? ` (${humanSize(info.size)})` : "", code: (chunks) => <span className="font-mono">{chunks}</span> })}
           </p>
         )}
 
         {info && !info.has_update && info.comparable && !info.error && (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <CheckCircle2Icon className="size-3.5 text-emerald-600" />
-            当前已是最新版本。
+            {t("upToDate")}
           </p>
         )}
 
         {info?.mode === "docker" && info.has_update && (
           <p className="text-xs text-muted-foreground">
-            Docker 下的更新只替换程序本身，不更新镜像里的 playwright / nmap 等工具链，且
-            <span className="font-mono"> docker compose up -d </span>
-            重建容器后会退回镜像自带的版本。需要连镜像一起升级请执行
-            <span className="font-mono"> docker compose pull artex &amp;&amp; docker compose up -d artex</span>。
+            {t.rich("dockerDescription", { recreate: (chunks) => <span className="font-mono">{chunks}</span>, upgrade: (chunks) => <span className="font-mono">{chunks}</span> })}
           </p>
         )}
 
         {progress?.phase === "failed" && (
           <p role="alert" className="text-xs text-destructive">
-            更新失败：{progress.error || progress.message}
+            {t("failed", { error: progress.error || progress.message })}
           </p>
         )}
 
@@ -374,7 +368,7 @@ export function UpdateCard() {
           <div className="space-y-1.5">
             <Progress value={pct} className={downloading ? undefined : "animate-pulse"} />
             <p className="text-xs text-muted-foreground">
-              {restarting ? "正在重启并应用新版本，请稍候（页面会自动刷新）…" : progress?.message}
+              {restarting ? t("restarting") : progress ? (t.has(`phase.${progress.phase}`) ? t(`phase.${progress.phase}`) : progress.message) : t("phase.idle")}
             </p>
           </div>
         )}
@@ -387,7 +381,7 @@ export function UpdateCard() {
             disabled={checking || busy || restarting || networkDirty || savingNetwork || !network}
           >
             <RefreshCwIcon className={checking ? "size-4 animate-spin" : "size-4"} />
-            检查更新
+            {t("check")}
           </Button>
           <Button
             size="sm"
@@ -405,19 +399,18 @@ export function UpdateCard() {
             }
           >
             <DownloadIcon className="size-4" />
-            {info?.has_update ? `更新到 ${info.latest}` : "立即更新"}
+            {info?.has_update ? t("updateTo", { version: info.latest ?? "" }) : t("updateNow")}
           </Button>
           {info?.has_backup && (
             <Button variant="ghost" size="sm" onClick={doRollback} disabled={busy || restarting}>
               <RotateCcwIcon className="size-4" />
-              回滚到上一版本
+              {t("rollback")}
             </Button>
           )}
         </div>
 
         <p className="text-xs text-muted-foreground">
-          一键更新依赖守护脚本重启程序。请通过 <span className="font-mono">start.sh</span>（Windows 为
-          <span className="font-mono"> start.bat</span>）启动 ARTEX；直接运行 artex 本体时，程序退出后不会被自动拉起。
+          {t.rich("launcher", { unix: (chunks) => <span className="font-mono">{chunks}</span>, windows: (chunks) => <span className="font-mono">{chunks}</span> })}
         </p>
       </CardContent>
     </Card>

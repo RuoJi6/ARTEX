@@ -60,7 +60,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         {/* <NavSecondary items={data.navSecondary} className="mt-auto" /> */}
       </SidebarContent>
       <SidebarFooter>
-        <div className="flex flex-col group-data-[collapsible=icon]:hidden">
+        <div className="group-data-[collapsible=icon]:hidden">
           <LanguageSelector />
         </div>
         <NavUser user={currentUser} />

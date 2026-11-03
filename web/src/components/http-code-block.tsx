@@ -1,4 +1,6 @@
 "use client";
+
+import { useTranslations } from "next-intl";
 import * as React from "react";
 
 import { CheckIcon, CopyIcon, SearchIcon, WrapTextIcon } from "lucide-react";
@@ -148,7 +150,7 @@ export function HttpPacketSyntax({
   raw,
   wrapLines = true,
   lineNumbers = true,
-  emptyFallback = "（空）",
+  emptyFallback,
   lineClassName = "leading-relaxed",
 }: {
   raw: string;
@@ -157,7 +159,8 @@ export function HttpPacketSyntax({
   emptyFallback?: string;
   lineClassName?: string;
 }) {
-  const value = raw || emptyFallback;
+  const ui = useTranslations();
+  const value = raw || emptyFallback || ui("trafficEvidence.code.empty");
   const lines = value.replaceAll("\r\n", "\n").split("\n");
   const lineItems = React.useMemo(() => {
     const occurrences = new Map<string, number>();
@@ -254,10 +257,12 @@ function selectedPacketText(container: HTMLElement, value: string, lines: string
 }
 
 export function HttpCodeBlock({ raw }: { raw: string }) {
+  const ui = useTranslations();
+  const t = useTranslations("trafficEvidence.code");
   const [wrapLines, setWrapLines] = React.useState(true);
   const [copied, setCopied] = React.useState(false);
   const [query, setQuery] = React.useState("");
-  const value = raw || "（空）";
+  const value = raw || ui("sessionTodo.empty");
   const lines = value.replaceAll("\r\n", "\n").split("\n");
   const matches = React.useMemo(() => countMatches(value, query), [value, query]);
 
@@ -273,7 +278,7 @@ export function HttpCodeBlock({ raw }: { raw: string }) {
       setCopied(true);
       return;
     }
-    toast.error("复制失败，请使用 Ctrl/Cmd+A 后复制");
+    toast.error(t("copyFailed"));
   };
 
   return (
@@ -285,14 +290,14 @@ export function HttpCodeBlock({ raw }: { raw: string }) {
               type="button"
               variant="ghost"
               size="icon-xs"
-              aria-label={wrapLines ? "关闭自动换行" : "开启自动换行"}
+              aria-label={wrapLines ? t("wrapOff") : t("wrapOn")}
               aria-pressed={wrapLines}
               onClick={() => setWrapLines((current) => !current)}
             >
               <WrapTextIcon />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{wrapLines ? "关闭自动换行" : "开启自动换行"}</TooltipContent>
+          <TooltipContent side="bottom">{wrapLines ? t("wrapOff") : t("wrapOn")}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -300,13 +305,13 @@ export function HttpCodeBlock({ raw }: { raw: string }) {
               type="button"
               variant="ghost"
               size="icon-xs"
-              aria-label={copied ? "已复制报文" : "复制报文"}
+              aria-label={copied ? t("copiedPacket") : t("copyPacket")}
               onClick={() => void copyPacket()}
             >
               {copied ? <CheckIcon /> : <CopyIcon />}
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{copied ? "已复制" : "复制报文"}</TooltipContent>
+          <TooltipContent side="bottom">{copied ? t("copied") : t("copyPacket")}</TooltipContent>
         </Tooltip>
       </div>
       <div className="min-h-0 max-h-[calc(100vh-15rem)] flex-1 min-w-0 overflow-hidden bg-background">
@@ -317,8 +322,8 @@ export function HttpCodeBlock({ raw }: { raw: string }) {
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索报文内容"
-          aria-label="搜索报文内容"
+          placeholder={ui("core.http.search")}
+          aria-label={ui("core.http.search")}
           className="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-muted-foreground/60"
         />
         {query.trim() ? (
@@ -328,8 +333,7 @@ export function HttpCodeBlock({ raw }: { raw: string }) {
               matches ? "font-medium text-foreground" : "text-muted-foreground",
             )}
           >
-            {matches} 处命中
-          </span>
+            {matches} {ui("core.http.matchesUnit")}</span>
         ) : null}
       </div>
     </div>

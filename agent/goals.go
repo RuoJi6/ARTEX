@@ -152,7 +152,7 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 	}
 	captureRun(ctx, agentcore.Options{
 		Provider:               prov,
-		SystemPrompt:           []string{sys},
+		SystemPrompt:           []string{withOutputLanguage(sys)},
 		Tools:                  tools,
 		PermissionMode:         acperm.ModeBypass,
 		DisableBackgroundTasks: true,

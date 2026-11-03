@@ -1,3 +1,7 @@
+"use client";
+
+import { useTranslations } from "next-intl";
+
 import { cn } from "@/lib/utils";
 import {
   statusMeta,
@@ -18,7 +22,8 @@ export function StatusBadge({
   dot?: boolean;
   className?: string;
 }) {
-  const meta = statusMeta(domain, value);
+  const t = useTranslations("status");
+  const meta = statusMeta(domain, value, (key) => t.has(key) ? t(key) : undefined);
   return (
     <span
       className={cn(

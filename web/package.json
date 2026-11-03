@@ -15,7 +15,8 @@
     "generate:presets": "ts-node -P tsconfig.scripts.json src/scripts/generate-theme-presets.ts",
     "i18n:check": "node scripts/check-messages.mjs",
     "test:i18n": "node --test scripts/i18n.test.mjs",
-    "test:i18n:browser": "playwright test"
+    "test:i18n:browser": "playwright test",
+    "i18n:inventory": "node scripts/inventory-chinese.mjs"
   },
   "lint-staged": {
     "*.{js,ts,jsx,tsx}": [

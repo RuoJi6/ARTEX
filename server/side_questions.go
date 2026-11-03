@@ -881,6 +881,7 @@ func (s *Server) runSide(ctx context.Context, cancel context.CancelFunc, e sideq
 	memory, runErr := s.m.pg.SideMemory(ctx, e)
 	var answer sidequestion.Answer
 	if runErr == nil {
+		snapshot.Request.System = agent.OutputLanguageSystem(snapshot.Request.System)
 		answer, e.Context, runErr = (sidequestion.SideQuestionService{Provider: provider}).Respond(ctx, snapshot, agentQuestion, sidequestion.Replay{
 			Memory: memory,
 			Load: func(ctx context.Context, after int64) ([]sidequestion.Exchange, error) {

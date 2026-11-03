@@ -5,13 +5,22 @@ import zh from "../messages/zh-CN.json";
 import { settings } from "../src/lib/mock/data";
 import { mockHandle } from "../src/lib/mock/handler";
 
-const language = (page: Page) => page.locator("select").filter({ has: page.locator('option[value="en"]') });
+const language = (page: Page) => page.getByRole("combobox", { name: /^(Interface language|界面语言)$/, includeHidden: true });
 let runtimeErrors: string[];
 
 async function selectLanguage(page: Page, locale: "en" | "zh-CN") {
-  // Exercise an open modal without closing it or discarding its draft.
   await language(page).selectOption(locale, { force: true });
   await expect(page.locator("html")).toHaveAttribute("lang", locale);
+}
+
+async function expectCompactLanguageSelector(page: Page) {
+  const label = language(page).locator("..");
+  const footer = label.locator('xpath=ancestor::*[@data-slot="sidebar-footer"]');
+  const labelBox = await label.boundingBox();
+  const footerBox = await footer.boundingBox();
+  expect(labelBox).not.toBeNull();
+  expect(footerBox).not.toBeNull();
+  expect(labelBox!.width).toBeLessThan(footerBox!.width - 40);
 }
 
 async function authenticated(page: Page) {
@@ -23,6 +32,11 @@ async function authenticated(page: Page) {
 test.beforeEach(async ({ page }) => {
   runtimeErrors = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error" && /MISSING_MESSAGE|FORMATTING_ERROR|IntlError/.test(message.text())) {
+      runtimeErrors.push(message.text());
+    }
+  });
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -152,6 +166,7 @@ test("navigation translates without changing links, search drafts, theme or loca
   const links = await page.locator('[data-slot="sidebar"] a').evaluateAll((items) => items.map((a) => a.getAttribute("href")));
   await expect(page.getByRole("timer")).toHaveText("2026-11-02 14:08:09");
   await selectLanguage(page, "en");
+  await expectCompactLanguageSelector(page);
   expect(await page.locator('[data-slot="sidebar"] a').evaluateAll((items) => items.map((a) => a.getAttribute("href")))).toEqual(links);
   await expect(page.getByRole("timer", { name: en.header.currentTime })).toHaveText("2026-11-02 14:08:09");
   await expect(page.getByRole("link", { name: en.nav.tasks, exact: true })).toBeVisible();
@@ -204,6 +219,7 @@ test("mobile sidebar exposes the language selector and translated navigation", a
   await page.getByRole("button", { name: zh.sidebar.toggle, exact: true }).click();
   await expect(language(page)).toBeVisible();
   await selectLanguage(page, "en");
+  await expectCompactLanguageSelector(page);
   await expect(page.getByRole("dialog").getByRole("link", { name: en.nav.tasks, exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: en.sidebar.toggle, exact: true }).click();

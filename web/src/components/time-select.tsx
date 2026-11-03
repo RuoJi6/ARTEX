@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useTranslations } from "next-intl";
 
 import { X } from "lucide-react";
 
@@ -22,6 +23,7 @@ function TimePart({
   placeholder,
   ariaLabel,
   onValueChange,
+  portalContainer,
 }: {
   value?: string;
   items: string[];
@@ -29,6 +31,7 @@ function TimePart({
   placeholder: string;
   ariaLabel: string;
   onValueChange: (value: string) => void;
+  portalContainer?: React.RefObject<HTMLElement | null>;
 }) {
   const [inputValue, setInputValue] = React.useState(value ?? "");
   React.useEffect(() => setInputValue(value ?? ""), [value]);
@@ -75,7 +78,7 @@ function TimePart({
           if (event.key === "Enter") commit(inputValue);
         }}
       />
-      <ComboboxContent className="max-h-64" sideOffset={4}>
+      <ComboboxContent className="max-h-64" sideOffset={4} portalContainer={portalContainer}>
         <ComboboxList>
           {(item) => (
             <ComboboxItem key={item} value={item}>
@@ -92,38 +95,43 @@ export function TimeSelect({
   value,
   onValueChange,
   optional = false,
-  placeholder = "选择时间",
+  placeholder,
   "aria-label": ariaLabel,
+  portalContainer,
 }: {
   value?: string;
   onValueChange: (value: string) => void;
   optional?: boolean;
   placeholder?: string;
   "aria-label"?: string;
+  portalContainer?: React.RefObject<HTMLElement | null>;
 }) {
+  const t = useTranslations("time");
   const selected = splitTime(value);
   const hasValue = Boolean(selected.hour && selected.minute);
   const updateHour = (hour: string) => onValueChange(`${hour}:${selected.minute ?? "00"}`);
   const updateMinute = (minute: string) => onValueChange(`${selected.hour ?? "00"}:${minute}`);
 
   return (
-    <div className="flex w-[9.25rem] min-w-0 items-center gap-1.5" title={optional && !hasValue ? placeholder : undefined}>
+    <div className="flex w-[9.25rem] min-w-0 items-center gap-1.5" title={optional && !hasValue ? (placeholder ?? t("select")) : undefined}>
       <TimePart
         value={selected.hour}
         items={hours}
         max={23}
-        placeholder="小时"
-        ariaLabel={ariaLabel ? `${ariaLabel} 小时` : "小时"}
+        placeholder={t("hour")}
+        ariaLabel={ariaLabel ? `${ariaLabel} ${t("hour")}` : t("hour")}
         onValueChange={updateHour}
+        portalContainer={portalContainer}
       />
       <span className="font-medium text-muted-foreground">:</span>
       <TimePart
         value={selected.minute}
         items={minutes}
         max={59}
-        placeholder="分钟"
-        ariaLabel={ariaLabel ? `${ariaLabel} 分钟` : "分钟"}
+        placeholder={t("minute")}
+        ariaLabel={ariaLabel ? `${ariaLabel} ${t("minute")}` : t("minute")}
         onValueChange={updateMinute}
+        portalContainer={portalContainer}
       />
       {optional && hasValue && (
         <Button
@@ -132,8 +140,8 @@ export function TimeSelect({
           size="icon-sm"
           className="shrink-0"
           onClick={() => onValueChange("")}
-          aria-label="清除结束时间"
-          title="不设置结束时间"
+          aria-label={t("clearEnd")}
+          title={t("noEnd")}
         >
           <X />
         </Button>

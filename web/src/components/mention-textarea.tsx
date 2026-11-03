@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { AtSignIcon, ChevronRightIcon, Loader2Icon, XIcon } from "lucide-react";
+import { useLocale, useTranslations } from "next-intl";
 
 import { Badge } from "@/components/ui/badge";
 import { InputGroupTextarea } from "@/components/ui/input-group";
@@ -26,6 +27,12 @@ type Props = Omit<React.ComponentProps<"textarea">, "value" | "onChange" | "ref"
 };
 
 export function MentionTextarea({ value, onValueChange, onKeyDown, className, inputGroup, disabled, ...props }: Props) {
+  const t = useTranslations("chatMentions");
+  const locale = useLocale();
+  function kindLabel(kind: string) {
+    const metadata = mentionKinds.find((entry) => entry.kind === kind);
+    return metadata && t.has(`kinds.${metadata.kind}`) ? t(`kinds.${metadata.kind}`) : metadata?.label ?? kind;
+  }
   const textarea = React.useRef<HTMLTextAreaElement>(null);
   const composing = React.useRef(false);
   const pendingKeyboardIndex = React.useRef<number | null>(null);
@@ -145,7 +152,7 @@ export function MentionTextarea({ value, onValueChange, onKeyDown, className, in
   }
 
   function choose(index: number) {
-    if (categories[index]) replaceActive(`@${categories[index].label} `, false);
+    if (categories[index]) replaceActive(`@${locale === "en" ? categories[index].alias : categories[index].label} `, false);
     else if (items[index]) replaceActive(`${mentionToken(items[index])} `, true);
   }
 
@@ -198,7 +205,7 @@ export function MentionTextarea({ value, onValueChange, onKeyDown, className, in
               value={value}
               disabled={disabled}
               className={className}
-              aria-label={props["aria-label"] ?? "消息，输入 @ 引用记录"}
+              aria-label={props["aria-label"] ?? t("inputLabel")}
               aria-autocomplete="list"
               aria-controls={open ? listId : undefined}
               aria-expanded={open}
@@ -230,20 +237,20 @@ export function MentionTextarea({ value, onValueChange, onKeyDown, className, in
           onInteractOutside={(event) => {
             if (event.target === textarea.current) event.preventDefault();
           }}
-          aria-label="选择引用记录"
+          aria-label={t("pickerLabel")}
         >
-          <div className="flex items-center justify-between px-2 py-1 text-muted-foreground text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2 py-1 text-muted-foreground text-xs">
             <span>
               {categories.length
-                ? "选择引用类型"
-                : `搜索${mentionKinds.find((kind) => kind.kind === search.kind)?.label ?? "全部记录"}`}
+                ? t("chooseKind")
+                : t("searchHeading", { kind: search.kind ? kindLabel(search.kind) : t("allRecords") })}
             </span>
-            <span>↑↓ 选择 · Enter 确认 · Esc 关闭</span>
+            <span>{t("keyboardHint")}</span>
           </div>
           <div
             id={listId}
             role="listbox"
-            aria-label="引用候选"
+            aria-label={t("resultsLabel")}
             className="max-h-60 overflow-y-auto"
             onScroll={(event) => {
               const list = event.currentTarget;
@@ -265,24 +272,24 @@ export function MentionTextarea({ value, onValueChange, onKeyDown, className, in
                 onClick={() => choose(index)}
               >
                 <AtSignIcon className="size-4 text-muted-foreground" />
-                <span>{kind.label}</span>
+                <span>{kindLabel(kind.kind)}</span>
                 <ChevronRightIcon className="ml-auto size-4 text-muted-foreground" />
               </button>
             ))}
             {!categories.length && loading && (
               <div role="status" className="flex items-center gap-2 p-3 text-muted-foreground text-sm">
                 <Loader2Icon className="size-4 animate-spin" />
-                搜索中…
+                {t("searching")}
               </div>
             )}
             {!categories.length && !loading && error && (
               <div role="alert" className="p-3 text-destructive text-sm">
-                搜索失败：{error}。请重新输入重试。
+                {t("searchError", { detail: error })}
               </div>
             )}
             {!categories.length && !loading && !error && !items.length && (
               <div role="status" className="p-3 text-muted-foreground text-sm">
-                没有匹配记录，请更换名称、地址或 ID
+                {t("empty")}
               </div>
             )}
             {items.map((item, index) => (
@@ -300,7 +307,7 @@ export function MentionTextarea({ value, onValueChange, onKeyDown, className, in
                 onClick={() => choose(index)}
               >
                 <span className="flex w-full items-center gap-2">
-                  <Badge variant="outline">{mentionKinds.find((kind) => kind.kind === item.kind)?.label}</Badge>
+                  <Badge variant="outline">{kindLabel(item.kind)}</Badge>
                   <span className="truncate text-sm">{item.label}</span>
                   <span className="ml-auto shrink-0 text-muted-foreground text-xs">#{item.id}</span>
                 </span>
@@ -310,17 +317,17 @@ export function MentionTextarea({ value, onValueChange, onKeyDown, className, in
           </div>
           {!categories.length && (
             <p className="px-2 py-1 text-muted-foreground text-xs">
-              {loadingMore && <span role="status">正在加载更多…</span>}
+              {loadingMore && <span role="status">{t("loadingMore")}</span>}
               {!loadingMore && nextCursor && (
                 <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={loadMore}>
-                  {pageError ? "加载失败，点击重试" : `已显示 ${items.length} 条，向下滚动加载更多`}
+                  {pageError ? t("retry") : t("shownMore", { count: items.length })}
                 </button>
               )}
-              {!loadingMore && !nextCursor && !loading && !error && items.length > 0 && `已显示全部 ${items.length} 条`}
+              {!loadingMore && !nextCursor && !loading && !error && items.length > 0 && t("shownAll", { count: items.length })}
               {!loadingMore &&
                 !nextCursor &&
                 (loading || !!error || items.length === 0) &&
-                "输入名称、地址或 ID 搜索记录"}
+                t("searchHint")}
             </p>
           )}
         </PopoverContent>
@@ -335,7 +342,7 @@ export function MentionTextarea({ value, onValueChange, onKeyDown, className, in
               <button
                 type="button"
                 disabled={disabled}
-                aria-label={`移除引用 ${item.label}`}
+                aria-label={t("remove", { label: item.label })}
                 onClick={() => {
                   onValueChange(value.slice(0, item.start) + value.slice(item.start + item.token.length));
                   setCursor(null);
@@ -345,7 +352,7 @@ export function MentionTextarea({ value, onValueChange, onKeyDown, className, in
               </button>
             </Badge>
           ))}
-          <span className="text-muted-foreground text-xs">发送时读取最新详情 · 最多 10 条</span>
+          <span className="text-muted-foreground text-xs">{t("selectionHint")}</span>
         </div>
       )}
     </div>

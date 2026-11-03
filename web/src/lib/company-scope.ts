@@ -94,16 +94,16 @@ function domainHostname(value: string): string | null {
   }
 }
 
-export function companyScopeRuleError(rule: CompanyScopeRule): string {
+export function companyScopeRuleErrorCode(rule: CompanyScopeRule): string {
   const value = rule.value.trim();
-  if (!value) return "请填写范围值";
+  if (!value) return "empty";
   if (Array.from(value).length > MAX_COMPANY_SCOPE_VALUE_LENGTH) {
-    return `最多 ${MAX_COMPANY_SCOPE_VALUE_LENGTH} 个字符`;
+    return "tooLong";
   }
   if (rule.kind === "domain") {
-    if (/\s/.test(value)) return "请输入不含空格的有效域名或 URL";
+    if (/\s/.test(value)) return "domainSpace";
     const hostname = domainHostname(value);
-    if (!hostname || ipVersion(hostname) !== null) return "请输入有效域名或 URL";
+    if (!hostname || ipVersion(hostname) !== null) return "domainInvalid";
     const labels = hostname.split(".");
     if (
       hostname.length > 253 ||
@@ -113,20 +113,20 @@ export function companyScopeRuleError(rule: CompanyScopeRule): string {
           !label || label.length > 63 || label.startsWith("-") || label.endsWith("-") || !/^[a-z0-9-]+$/i.test(label),
       )
     ) {
-      return "请输入有效域名或 URL";
+      return "domainInvalid";
     }
   }
-  if (rule.kind === "ip" && ipVersion(value) === null) return "请输入有效 IP";
+  if (rule.kind === "ip" && ipVersion(value) === null) return "ipInvalid";
   if (rule.kind === "cidr") {
     const separator = value.lastIndexOf("/");
-    if (separator <= 0) return "请输入 CIDR 网段";
+    if (separator <= 0) return "cidrInvalid";
     const address = value.slice(0, separator);
     const prefixText = value.slice(separator + 1);
     const version = ipVersion(address);
-    if (version === null || !/^\d+$/.test(prefixText)) return "请输入 CIDR 网段";
+    if (version === null || !/^\d+$/.test(prefixText)) return "cidrInvalid";
     const prefix = Number(prefixText);
-    if (version === 4 && (prefix < 16 || prefix > 32)) return "IPv4 网段前缀需为 /16 至 /32";
-    if (version === 6 && (prefix < 32 || prefix > 128)) return "IPv6 网段前缀需为 /32 至 /128";
+    if (version === 4 && (prefix < 16 || prefix > 32)) return "cidrPrefixV4";
+    if (version === 6 && (prefix < 32 || prefix > 128)) return "cidrPrefixV6";
   }
   return "";
 }
@@ -138,11 +138,11 @@ export function classifyCompanyScopeLine(
 ): CompanyScopeTextIssue {
   const value = raw.trim();
   if (Array.from(value).length > MAX_COMPANY_SCOPE_VALUE_LENGTH) {
-    return { line, error: `最多 ${MAX_COMPANY_SCOPE_VALUE_LENGTH} 个字符` };
+    return { line, error: "tooLong" };
   }
   if (preservedRule) {
     const rule = { kind: preservedRule.kind, value };
-    const error = companyScopeRuleError(rule);
+    const error = companyScopeRuleErrorCode(rule);
     return error ? { line, error } : { line, rule };
   }
 
@@ -152,18 +152,18 @@ export function classifyCompanyScopeLine(
     (ipVersion(value.slice(0, separator)) !== null || looksLikeIPAddress(value.slice(0, separator)))
   ) {
     const rule: CompanyScopeRule = { kind: "cidr", value };
-    const error = companyScopeRuleError(rule);
+    const error = companyScopeRuleErrorCode(rule);
     return error ? { line, error } : { line, rule };
   }
   if (ipVersion(value) !== null) return { line, rule: { kind: "ip", value } };
-  if (looksLikeIPAddress(value)) return { line, error: "请输入有效 IP" };
+  if (looksLikeIPAddress(value)) return { line, error: "ipInvalid" };
 
   const looksLikeDomain = value.includes("://") || (!/\s/.test(value) && value.includes("."));
   if (looksLikeDomain) {
     const hostname = domainHostname(value);
     if (hostname && ipVersion(hostname) !== null) return { line, rule: { kind: "ip", value: hostname } };
     const rule: CompanyScopeRule = { kind: "domain", value };
-    const error = companyScopeRuleError(rule);
+    const error = companyScopeRuleErrorCode(rule);
     return error ? { line, error } : { line, rule };
   }
   if (/icp|备案/i.test(value)) return { line, rule: { kind: "icp", value } };
@@ -201,4 +201,13 @@ export function normalizeCompanyScopeValue(rule: CompanyScopeRule): string {
   if (rule.kind === "icp") return value.toLowerCase().replace(/\s/gu, "");
   if (rule.kind === "keyword") return value.toLowerCase().split(/\s+/u).filter(Boolean).join(" ");
   return value.toLowerCase();
+}
+
+export function companyScopeErrorText(code: string): string {
+  const labels: Record<string, string> = {"empty": "请填写范围值", "domainSpace": "请输入不含空格的有效域名或 URL", "domainInvalid": "请输入有效域名或 URL", "ipInvalid": "请输入有效 IP", "cidrInvalid": "请输入 CIDR 网段", "cidrPrefixV4": "IPv4 网段前缀需为 /16 至 /32", "cidrPrefixV6": "IPv6 网段前缀需为 /32 至 /128"};
+  return code === "tooLong" ? `最多 ${MAX_COMPANY_SCOPE_VALUE_LENGTH} 个字符` : labels[code] ?? code;
+}
+
+export function companyScopeRuleError(rule: CompanyScopeRule): string {
+  return companyScopeErrorText(companyScopeRuleErrorCode(rule));
 }

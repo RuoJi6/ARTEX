@@ -16,6 +16,8 @@ import {
   Server,
   Waypoints,
 } from "lucide-react";
+import { useLocaleFormatting } from "@/i18n/formatting";
+import { useTranslations } from "next-intl";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,20 +42,14 @@ type Kind = CoverageGraphNode["kind"];
 type Zone = "internet" | "boundary" | "internal";
 type CoverageViewMode = "asset" | "network";
 
-const zoneMeta: Record<Zone, { label: string; description: string; className: string }> = {
+const zoneMeta: Record<Zone, { className: string }> = {
   internet: {
-    label: "互联网区",
-    description: "公网域名 / 外部入口",
     className: "bg-sky-50/70 dark:bg-sky-950/20",
   },
   boundary: {
-    label: "边界区",
-    description: "服务 / 网关 / 暴露面",
     className: "bg-amber-50/70 dark:bg-amber-950/15",
   },
   internal: {
-    label: "内网区",
-    description: "业务资产 / 应用 / 端点",
     className: "bg-emerald-50/65 dark:bg-emerald-950/15",
   },
 };
@@ -71,16 +67,16 @@ function zoneOf(node: CoverageGraphNode): Zone {
   return "internal";
 }
 
-type KindMeta = { label: string; icon: LucideIcon; iconBg: string; hex: string; size: number };
+type KindMeta = { icon: LucideIcon; iconBg: string; hex: string; size: number };
 
 const kindMeta: Record<Kind, KindMeta> = {
-  company: { label: "公司", icon: Building2, iconBg: "bg-slate-500", hex: "#64748b", size: 46 },
-  root_domain: { label: "根域名", icon: Globe, iconBg: "bg-indigo-500", hex: "#6366f1", size: 38 },
-  subdomain: { label: "子域名", icon: Waypoints, iconBg: "bg-blue-500", hex: "#3b82f6", size: 30 },
-  ip: { label: "IP", icon: Server, iconBg: "bg-cyan-600", hex: "#0891b2", size: 28 },
-  service: { label: "服务", icon: Radio, iconBg: "bg-amber-500", hex: "#f59e0b", size: 26 },
-  app: { label: "App", icon: AppWindow, iconBg: "bg-fuchsia-500", hex: "#d946ef", size: 26 },
-  endpoint: { label: "端点", icon: Link2, iconBg: "bg-rose-500", hex: "#f43f5e", size: 20 },
+  company: { icon: Building2, iconBg: "bg-slate-500", hex: "#64748b", size: 46 },
+  root_domain: { icon: Globe, iconBg: "bg-indigo-500", hex: "#6366f1", size: 38 },
+  subdomain: { icon: Waypoints, iconBg: "bg-blue-500", hex: "#3b82f6", size: 30 },
+  ip: { icon: Server, iconBg: "bg-cyan-600", hex: "#0891b2", size: 28 },
+  service: { icon: Radio, iconBg: "bg-amber-500", hex: "#f59e0b", size: 26 },
+  app: { icon: AppWindow, iconBg: "bg-fuchsia-500", hex: "#d946ef", size: 26 },
+  endpoint: { icon: Link2, iconBg: "bg-rose-500", hex: "#f43f5e", size: 20 },
 };
 
 // G6 节点图标用平台一致的 lucide 图标：把 lucide 的 SVG 路径（v1.22）渲染成白色描边的
@@ -263,7 +259,7 @@ function trunc(s: string, n = 26): string {
 
 // 图里的节点文案：服务不显示完整 URL，只显示 端口·标题·状态码；端点只显示 path。
 // 其余类型沿用后端给的 label。
-function graphLabel(n: CoverageGraphNode, viewMode: CoverageViewMode = "asset"): string {
+function graphLabel(n: CoverageGraphNode, viewMode: CoverageViewMode = "asset", kindLabel: (kind: Kind) => string = (kind) => kind): string {
   if (viewMode === "network") {
     if (n.kind === "endpoint") {
       if (n.url) {
@@ -273,14 +269,14 @@ function graphLabel(n: CoverageGraphNode, viewMode: CoverageViewMode = "asset"):
           /* 非法 URL：回退到资产标签 */
         }
       }
-      return n.label || n.domain || n.ip || "端点";
+      return n.label || n.domain || n.ip || kindLabel(n.kind);
     }
     if (n.kind === "service") {
       const engine = databaseEngine(n);
       const host = n.domain || n.ip || n.label;
       return engine ? `${engine.toUpperCase()} · ${host}${n.port ? `:${n.port}` : ""}` : `${host}${n.port ? `:${n.port}` : ""}`;
     }
-    return n.label || n.domain || n.ip || n.app_name || kindMeta[n.kind].label;
+    return n.label || n.domain || n.ip || n.app_name || kindLabel(n.kind);
   }
   if (n.kind === "service") {
     const parts: string[] = [];
@@ -303,6 +299,8 @@ function toG6Nodes(
   renderNodes: RenderNode[],
   activeKeys: Set<string>,
   viewMode: CoverageViewMode,
+  kindLabel: (kind: Kind) => string,
+  moreLabel: (count: number, kind: Kind) => string,
 ): G6NodeDatum[] {
   const buckets: Record<Zone, RenderNode[]> = { internet: [], boundary: [], internal: [] };
   for (const rn of renderNodes) {
@@ -391,7 +389,7 @@ function toG6Nodes(
         fold: true,
         tested: false,
         inScope: false,
-        lbl: `还有 ${rn.hidden.length} 个${kindMeta[rn.kind].label}`,
+        lbl: moreLabel(rn.hidden.length, rn.kind),
         size: 24,
         active: activeKeys.has(rn.key),
         iconSrc: FOLD_ICON,
@@ -405,7 +403,7 @@ function toG6Nodes(
       fold: false,
       tested: rn.node.tested,
       inScope: rn.node.in_scope,
-        lbl: `${rn.node.tested ? "✓ " : ""}${trunc(graphLabel(rn.node, viewMode) || kindMeta[rn.kind].label, viewMode === "network" ? (rn.kind === "service" ? 22 : 18) : 26)}`,
+        lbl: `${rn.node.tested ? "✓ " : ""}${trunc(graphLabel(rn.node, viewMode, kindLabel) || kindLabel(rn.kind), viewMode === "network" ? (rn.kind === "service" ? 22 : 18) : 26)}`,
       size: kindMeta[rn.kind].size,
       active: activeKeys.has(rn.key),
       iconSrc: viewMode === "network" && databaseEngine(rn.node)
@@ -455,11 +453,12 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 }
 
 function RefList({ title, items }: { title: string; items: CoverageAssetRef[] }) {
+  const t = useTranslations("taskPanels.coverageGraph");
   if (items.length === 0) return null;
   return (
     <div>
       <h4 className="text-muted-foreground mb-1 text-xs font-medium">
-        {title}（{items.length}）
+        {title} ({items.length})
       </h4>
       <div className="flex flex-col gap-1">
         {items.map((r) => (
@@ -472,7 +471,7 @@ function RefList({ title, items }: { title: string; items: CoverageAssetRef[] })
             <span className="min-w-32 flex-1 break-words text-foreground">{r.summary || "—"}</span>
             {r.inherited && r.source_task_id && (
               <Badge variant="outline" className="shrink-0">
-                来源 #{r.source_task_id} · 只读
+                {t("sheet.refSource", { id: r.source_task_id})}
               </Badge>
             )}
           </div>
@@ -491,8 +490,10 @@ function AssetSheet({
   taskId: string;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useTranslations("taskPanels.coverageGraph");
   const meta = node ? kindMeta[node.kind] : null;
   const Icon = meta?.icon;
+  const kindLabel = node ? t(`kind.${node.kind}`) : "";
   const raw = node ? JSON.stringify(node, null, 2) : "";
   const [refs, setRefs] = React.useState<CoverageAssetRefs | null>(null);
 
@@ -523,7 +524,7 @@ function AssetSheet({
                   <Icon className="size-4 text-white" />
                 </span>
                 <div className="min-w-0">
-                  <SheetTitle className="leading-tight">{meta.label}</SheetTitle>
+                  <SheetTitle className="leading-tight">{kindLabel}</SheetTitle>
                   <span className="text-muted-foreground truncate font-mono text-xs" title={node.label}>
                     {node.label}
                   </span>
@@ -533,42 +534,42 @@ function AssetSheet({
             <ScrollArea className="min-h-0 flex-1">
               <div className="flex w-full min-w-0 flex-col gap-4 p-4">
                 <section>
-                  <h4 className="text-muted-foreground mb-1 text-xs font-medium">属性</h4>
-                  <DetailRow label="类型">{meta.label}</DetailRow>
-                  <DetailRow label="测试状态">
+                  <h4 className="text-muted-foreground mb-1 text-xs font-medium">{t("sheet.attributes")}</h4>
+                  <DetailRow label={t("sheet.attrType")}>{kindLabel}</DetailRow>
+                  <DetailRow label={t("sheet.attrTestState")}>
                     {node.in_scope ? (
                       node.tested ? (
-                        <span className="text-emerald-600 dark:text-emerald-400">已测试</span>
+                        <span className="text-emerald-600 dark:text-emerald-400">{t("sheet.tested")}</span>
                       ) : (
-                        <span className="text-neutral-500">未测试</span>
+                        <span className="text-neutral-500">{t("sheet.untested")}</span>
                       )
                     ) : (
-                      <span className="text-neutral-400">范围外（连接节点）</span>
+                      <span className="text-neutral-400">{t("sheet.outOfScope")}</span>
                     )}
                   </DetailRow>
-                  <DetailRow label="域名">{node.domain}</DetailRow>
-                  <DetailRow label="根域名">{node.root_domain}</DetailRow>
+                  <DetailRow label={t("sheet.attrDomain")}>{node.domain}</DetailRow>
+                  <DetailRow label={t("sheet.attrRootDomain")}>{node.root_domain}</DetailRow>
                   <DetailRow label="IP">{node.ip}</DetailRow>
-                  <DetailRow label="端口">{node.port ? node.port : undefined}</DetailRow>
+                  <DetailRow label={t("sheet.attrPort")}>{node.port ? node.port : undefined}</DetailRow>
                   <DetailRow label="URL">
                     {node.url ? <span className="font-mono text-xs break-all">{node.url}</span> : undefined}
                   </DetailRow>
-                  <DetailRow label="标题">{node.page_title}</DetailRow>
-                  <DetailRow label="状态码">{node.status_code ? node.status_code : undefined}</DetailRow>
-                  <DetailRow label="App">{node.app_name}</DetailRow>
-                  <DetailRow label="资产ID">
+                  <DetailRow label={t("sheet.attrTitle")}>{node.page_title}</DetailRow>
+                  <DetailRow label={t("sheet.attrStatusCode")}>{node.status_code ? node.status_code : undefined}</DetailRow>
+                  <DetailRow label={t("sheet.attrApp")}>{node.app_name}</DetailRow>
+                  <DetailRow label={t("sheet.attrAssetId")}>
                     {node.asset_id ? <span className="font-mono text-xs">{node.asset_id}</span> : undefined}
                   </DetailRow>
                 </section>
                 {refs && (refs.intents.length > 0 || refs.facts.length > 0 || refs.findings.length > 0) && (
                   <section className="flex flex-col gap-3 border-t pt-3">
-                    <RefList title="关联意图" items={refs.intents} />
-                    <RefList title="关联事实" items={refs.facts} />
-                    <RefList title="关联发现" items={refs.findings} />
+                    <RefList title={t("sheet.refIntents")} items={refs.intents} />
+                    <RefList title={t("sheet.refFacts")} items={refs.facts} />
+                    <RefList title={t("sheet.refFindings")} items={refs.findings} />
                   </section>
                 )}
                 <section className="border-t pt-3">
-                  <h4 className="text-muted-foreground mb-1.5 text-xs font-medium">原始数据</h4>
+                  <h4 className="text-muted-foreground mb-1.5 text-xs font-medium">{t("sheet.rawData")}</h4>
                   <pre className="bg-muted/50 text-foreground max-w-full overflow-hidden rounded-md border p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap">
                     {raw}
                   </pre>
@@ -593,8 +594,10 @@ function FoldSheet({
   onShowMore: (groupId: string) => void;
   onPick: (n: CoverageGraphNode) => void;
 }) {
+  const t = useTranslations("taskPanels.coverageGraph");
   const meta = fold ? kindMeta[fold.kind] : null;
   const Icon = meta?.icon;
+  const kindLabel = fold ? t(`kind.${fold.kind}`) : "";
   return (
     <Sheet open={fold !== null} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:max-w-md">
@@ -602,9 +605,9 @@ function FoldSheet({
           <>
             <SheetHeader className="border-b p-4">
               <SheetTitle className="text-base">
-                未展示的{meta.label}（{fold.hidden.length}）
+                {t("sheet.foldTitle", { kind: kindLabel, count: fold.hidden.length})}
               </SheetTitle>
-              <p className="text-muted-foreground text-xs">已测优先展示。点「展示更多」把下一批拉进图里。</p>
+              <p className="text-muted-foreground text-xs">{t("sheet.foldHint")}</p>
             </SheetHeader>
             <ScrollArea className="min-h-0 flex-1">
               <div className="flex flex-col gap-1 p-3">
@@ -633,7 +636,7 @@ function FoldSheet({
             </ScrollArea>
             <div className="border-t p-3">
               <Button className="w-full" variant="outline" onClick={() => onShowMore(fold.groupId)}>
-                展示更多（+{FOLD_STEP}）
+                {t("sheet.showMore", { step: FOLD_STEP})}
               </Button>
             </div>
           </>
@@ -645,6 +648,8 @@ function FoldSheet({
 
 // ---------------------------------------------------------------------------
 function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; coverageEnabled?: boolean }) {
+  const format = useLocaleFormatting();
+  const ui = useTranslations();
   const [data, setData] = React.useState<{
     nodes: CoverageGraphNode[];
     edges: CoverageGraphEdge[];
@@ -667,6 +672,13 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
   const viewModeRef = React.useRef<CoverageViewMode>(viewMode);
   viewModeRef.current = viewMode;
 
+  const t = useTranslations("taskPanels.coverageGraph");
+  const kindLabel = React.useCallback((k: Kind) => t(`kind.${k}`), [t]);
+  const moreLabel = React.useCallback(
+    (count: number, k: Kind) => t("graph.moreCount", { kind: t(`kind.${k}`), count }),
+    [t],
+  );
+
   const containerRef = React.useRef<HTMLDivElement>(null);
   const graphRef = React.useRef<G6Graph | null>(null);
   // click 处理需要最新的 key→RenderNode 映射（G6 事件回调闭包外读 ref）。
@@ -679,7 +691,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
 
   const syncViewport = React.useCallback(() => {
     const graph = graphRef.current;
-    if (!graph || graph.destroyed) return;
+    if (!graph || !graph.rendered || graph.destroyed) return;
     const position = graph.getPosition();
     setViewport({ zoom: graph.getZoom(), position: [position[0], position[1]] });
   }, []);
@@ -814,7 +826,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
 
   // 维护 gDataRef + renderMapRef（供事件与图数据应用读取）。
   gDataRef.current = {
-    nodes: toG6Nodes(displayNodes, new Set(activePath), viewMode),
+    nodes: toG6Nodes(displayNodes, new Set(activePath), viewMode, kindLabel, moreLabel),
     edges: displayEdges.map((e) => ({
       // The API stores child → parent containment. Topology reads naturally
       // from internet entry → boundary service → internal asset, so reverse
@@ -935,6 +947,8 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
     })();
     return () => {
       destroyed = true;
+      // G6 can emit viewport events while destroying its transform context.
+      graphRef.current = null;
       // 先停布局再销毁:尽量缩短"布局在飞、context 被清空"的竞态窗口。
       try {
         graph?.stopLayout();
@@ -942,7 +956,6 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
         /* 图可能尚未建成或已无布局上下文 */
       }
       graph?.destroy();
-      graphRef.current = null;
     };
   }, [applyData, resetView, syncViewport]);
 
@@ -951,6 +964,13 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
   React.useEffect(() => {
     applyData();
   }, [sig, applyData]);
+
+  React.useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || graph.destroyed) return;
+    graph.updateNodeData(gDataRef.current.nodes.map(({ id, lbl }) => ({ id, lbl })));
+    void graph.draw().catch(() => {});
+  }, [kindLabel, moreLabel]);
 
   const showMore = React.useCallback((groupId: string) => {
     setExpanded((prev) => {
@@ -990,13 +1010,12 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
                 className={cn("relative border-r border-slate-200/80 dark:border-slate-800/80", zoneMeta[zone].className, index === 2 && "border-r-0")}
               >
                 <div className="absolute top-3 left-4">
-                  <div className="text-foreground/80 text-sm font-semibold">{zoneMeta[zone].label}</div>
-                  <div className="text-muted-foreground mt-0.5 text-[11px]">{zoneMeta[zone].description}</div>
+                  <div className="text-foreground/80 text-sm font-semibold">{ui(`core.graph.zones.${zone}.label`)}</div>
+                  <div className="text-muted-foreground mt-0.5 text-[11px]">{ui(`core.graph.zones.${zone}.description`)}</div>
                 </div>
                 {zoneCounts[zone] === 0 && (
                   <div className="text-muted-foreground/70 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-dashed border-slate-300/70 px-3 py-2 text-center text-xs dark:border-slate-700/70">
-                    暂无该区域资产证据
-                  </div>
+                    {ui("core.graph.emptyZone")}</div>
                 )}
               </div>
             ))}
@@ -1004,8 +1023,8 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
         </div>
       ) : (
         <div className="pointer-events-none absolute top-3 left-4 z-0">
-          <div className="text-foreground/80 text-sm font-semibold">资产关系图</div>
-          <div className="text-muted-foreground mt-0.5 text-[11px]">按资产层级展示关联关系</div>
+          <div className="text-foreground/80 text-sm font-semibold">{ui("core.graph.assetView")}</div>
+          <div className="text-muted-foreground mt-0.5 text-[11px]">{ui("core.graph.assetDescription")}</div>
         </div>
       )}
       <div ref={containerRef} className="relative z-10 h-full w-full pt-12" />
@@ -1024,56 +1043,59 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
             </span>
             <div className="min-w-0 flex-1">
               <div className="text-foreground truncate font-medium">
-                {viewMode === "network" ? "网络拓扑梳理 Agent" : "资产关系图"}
+                {viewMode === "network" ? ui("core.graph.mappingAgent") : ui("core.graph.assetView")}
               </div>
               <div className="text-muted-foreground truncate text-[11px]">
                 {viewMode === "network"
                   ? mapping
-                    ? "正在梳理网络拓扑，并生成两份结果…"
+                    ? ui("core.graph.mappingResults")
                     : networkReportAt
-                      ? `最近梳理 ${networkReportAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`
-                      : "网络拓扑等待梳理"
+                      ? ui("core.graph.mappedAt", { time: format.dateTime(networkReportAt, "clock") })
+                      : ui("core.graph.awaitMapping")
                   : loading
-                    ? "正在读取资产库关系…"
+                    ? ui("core.graph.reading")
                     : lastSyncedAt
-                      ? `资产库实时数据 · ${lastSyncedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`
-                      : "等待读取资产库"}
+                      ? ui("core.graph.syncedAt", { time: format.dateTime(lastSyncedAt, "clock") })
+                      : ui("core.graph.awaitRead")}
               </div>
             </div>
           </div>
           {total > 0 ? (
             <span className="text-muted-foreground whitespace-nowrap">
-              范围内 <span className="text-foreground font-semibold tabular-nums">{inScope}</span>
+              {ui.rich("taskPanels.coverageGraph.graph.scopeInCount", {
+                count: inScope,
+                num: (chunks) => <span className="text-foreground font-semibold tabular-nums">{chunks}</span>,
+              })}
               {coverageEnabled && (
                 <>
                   {" "}
-                  · 已测{" "}
+                  · {t("graph.tested")}{" "}
                   <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{tested}</span>
                 </>
               )}
             </span>
           ) : (
-            <span className="text-muted-foreground">{loading ? "加载中…" : "暂无范围内资产（先锚定任务范围）"}</span>
+            <span className="text-muted-foreground">{loading ? t("graph.loading") : t("graph.empty")}</span>
           )}
           {!panelCollapsed && <div className="flex shrink-0 items-center gap-1">
-            <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => setPanelCollapsed(true)} title="收起面板">
+            <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => setPanelCollapsed(true)} title={ui("core.graph.collapsePanel")}>
               <ChevronDown className="size-3.5" />
-              <span className="hidden sm:inline">收起</span>
+              <span className="hidden sm:inline">{ui("approval.collapse")}</span>
             </Button>
-            <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => void resetView()} title="重置视图">
+            <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => void resetView()} title={ui("core.graph.reset")}>
               <RotateCcw className="size-3.5" />
-              <span className="hidden sm:inline">重置视图</span>
+              <span className="hidden sm:inline">{ui("core.graph.reset")}</span>
             </Button>
             {viewMode === "network" && (
-              <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2" onClick={() => void remapNetwork()} disabled={mapping} title="重新梳理网络拓扑">
+              <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2" onClick={() => void remapNetwork()} disabled={mapping} title={ui("core.graph.remapTitle")}>
                 <RefreshCw className={cn("size-3.5", (loading || mapping) && "animate-spin")} />
-                <span className="hidden sm:inline">{mapping ? "正在梳理网络…" : "梳理网络拓扑"}</span>
+                <span className="hidden sm:inline">{mapping ? ui("core.graph.mapping") : ui("core.graph.map")}</span>
               </Button>
             )}
           </div>}
-          {panelCollapsed && <Button variant="ghost" size="sm" className="h-7 gap-1 px-2" onClick={() => setPanelCollapsed(false)} title="展开面板">
+          {panelCollapsed && <Button variant="ghost" size="sm" className="h-7 gap-1 px-2" onClick={() => setPanelCollapsed(false)} title={ui("core.graph.expandPanel")}>
             <ChevronUp className="size-3.5" />
-            <span className="hidden sm:inline">展开</span>
+            <span className="hidden sm:inline">{ui("approval.expand")}</span>
           </Button>}
         </div>
         {!panelCollapsed && <>
@@ -1087,8 +1109,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
               void resetView("asset");
             }}
           >
-            资产关系图
-          </Button>
+            {ui("core.graph.assetView")}</Button>
           <Button
             variant={viewMode === "network" ? "secondary" : "ghost"}
             size="sm"
@@ -1098,8 +1119,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
               void resetView("network");
             }}
           >
-            网络拓扑
-          </Button>
+            {ui("core.graph.network")}</Button>
         </div>
         <div className="flex flex-wrap gap-x-3 gap-y-1.5">
           {(Object.keys(kindMeta) as Kind[]).map((k) => {
@@ -1110,7 +1130,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
                 <span className={cn("flex size-4 items-center justify-center rounded", m.iconBg)}>
                   <Icon className="size-2.5 text-white" />
                 </span>
-                {m.label}
+                {t(`kind.${k}`)}
               </span>
             );
           })}
@@ -1119,15 +1139,15 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
           {coverageEnabled && (
             <>
               <span className="inline-flex items-center gap-1.5">
-                <span className="flex size-3 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-bold text-white">✓</span> 已测（绿色描边）
-              </span>
+                <span className="flex size-3 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-bold text-white">✓</span> {ui("core.graph.testedLegend")}</span>
               <span className="inline-flex items-center gap-1.5">
-                <span className="size-3 rounded-full bg-neutral-400" /> 未测
+                <span className="size-3 rounded-full bg-neutral-400" /> {t("graph.legendUntested")}
               </span>
             </>
           )}
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-3 rounded-full border border-dashed border-neutral-400 bg-neutral-200" /> 范围外
+            <span className="size-3 rounded-full border border-dashed border-neutral-400 bg-neutral-200" />{" "}
+            {t("graph.legendOutOfScope")}
           </span>
         </div>
         {viewMode === "network" && (
@@ -1135,15 +1155,15 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
             {(Object.keys(zoneMeta) as Zone[]).map((zone) => (
               <span key={zone} className="text-muted-foreground inline-flex items-center gap-1.5">
                 <span className={cn("size-2.5 rounded-full", zone === "internet" && "bg-sky-400", zone === "boundary" && "bg-amber-400", zone === "internal" && "bg-emerald-400")} />
-                {zoneMeta[zone].label}
+                {ui(`core.graph.zones.${zone}.label`)}
               </span>
             ))}
           </div>
         )}
         <p className="text-muted-foreground/80 border-border/60 border-t pt-2 leading-relaxed">
           {viewMode === "network"
-            ? "图中只展示有真实资产证据的节点；连线表示资产归属/关联，不代表已验证的网络通信路径。"
-            : "资产关系图直接读取资产库，不需要额外梳理；点击节点查看详情并高亮关系链。灰色「⋯」可展开更多资产。"}
+            ? ui("core.graph.networkHint")
+            : ui("core.graph.assetHint")}
         </p>
         </>}
       </div>
@@ -1152,8 +1172,8 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
         <div className="bg-card/95 pointer-events-auto absolute top-3 right-3 z-20 w-[min(310px,calc(100%-2rem))] rounded-lg border p-3 shadow-sm backdrop-blur">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-foreground text-sm font-semibold">关系路径</div>
-              <div className="text-muted-foreground mt-0.5 text-[11px]">从当前资产向上追溯关联关系</div>
+              <div className="text-foreground text-sm font-semibold">{ui("core.graph.path")}</div>
+              <div className="text-muted-foreground mt-0.5 text-[11px]">{ui("core.graph.trace")}</div>
             </div>
             <Button
               variant="ghost"
@@ -1164,8 +1184,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
                 void resetView();
               }}
             >
-              清除高亮
-            </Button>
+              {ui("core.graph.clearHighlight")}</Button>
           </div>
           <div className="mt-3 flex flex-col gap-1.5">
             {[...activePath].reverse().map((key, index, path) => {
@@ -1175,7 +1194,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
                 <React.Fragment key={key}>
                   <div className="flex min-w-0 items-center gap-2 rounded-md bg-muted/60 px-2 py-1.5 text-xs">
                     <span className={cn("size-2 shrink-0 rounded-full", zoneOf(node) === "internet" && "bg-sky-500", zoneOf(node) === "boundary" && "bg-amber-500", zoneOf(node) === "internal" && "bg-emerald-500")} />
-                    <span className="text-muted-foreground shrink-0">{zoneMeta[zoneOf(node)].label}</span>
+                    <span className="text-muted-foreground shrink-0">{ui(`core.graph.zones.${zoneOf(node)}.label`)}</span>
                     <span className="min-w-0 flex-1 truncate font-mono" title={node.label}>{node.label}</span>
                   </div>
                   {index < path.length - 1 && <div className="text-muted-foreground pl-3 text-[10px]">↓</div>}

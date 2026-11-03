@@ -1,5 +1,9 @@
 "use client";
 
+import { useDateTime } from "@/i18n/formatting";
+
+import { useTranslations } from "next-intl";
+
 import * as React from "react";
 
 import Link from "next/link";
@@ -35,15 +39,14 @@ const STATUS: Record<IntelligenceKind, Record<string, string>> = {
   lead: { pending: "待跟进", in_progress: "跟进中", dismissed: "已排除", converted: "已转漏洞" },
   sensitive_data: { suspected: "疑似", confirmed: "已确认", dismissed: "已排除" },
 };
-function time(value: string) {
-  return new Date(value).toLocaleString("zh-CN");
-}
+
 
 function conversationHref(item: TaskIntelligence) {
   return `/function/tasks/detail?id=${item.task_id}&tab=sessions${item.source_session ? `&session=${encodeURIComponent(item.source_session)}` : ""}`;
 }
 
 function AssetLinks({ ids, onNavigate }: { ids: number[]; onNavigate?: () => void }) {
+  const ui = useTranslations();
   return ids.length ? (
     <span className="inline-flex flex-wrap gap-x-2 gap-y-1">
       {ids.map((id) => (
@@ -52,14 +55,14 @@ function AssetLinks({ ids, onNavigate }: { ids: number[]; onNavigate?: () => voi
           href={`/function/assets?asset=${id}`}
           onClick={onNavigate}
           className="underline underline-offset-2"
-          aria-label={`查看资产 #${id}`}
+          aria-label={ui("core.assets.viewId", { id })}
         >
           #{id}
         </Link>
       ))}
     </span>
   ) : (
-    <>未关联</>
+    <>{ui("findings.assetTree.kind.none")}</>
   );
 }
 
@@ -72,6 +75,8 @@ export function IntelligencePanel({
   scopeId: string;
   onNavigate?: () => void;
 }) {
+  const time = useDateTime();
+  const ui = useTranslations();
   const [kind, setKind] = React.useState("all");
   const [status, setStatus] = React.useState("all");
   const [search, setSearch] = React.useState("");
@@ -140,9 +145,9 @@ export function IntelligencePanel({
       await api.updateIntelligence(selected.task_id, selected.id, value);
       setSelected((item) => (item ? { ...item, status: value } : null));
       setRefresh((n) => n + 1);
-      toast.success("情报状态已更新");
+      toast.success(ui("core.intelligence.updated"));
     } catch (e) {
-      toast.error("更新失败：" + (e as Error).message);
+      toast.error(ui("core.intelligence.updateFailed") + (e as Error).message);
     } finally {
       setSaving(false);
     }
@@ -152,23 +157,20 @@ export function IntelligencePanel({
     <div className="flex min-w-0 flex-col gap-4">
       {data && !data.enabled && scope === "tasks" ? (
         <Alert>
-          <AlertTitle>自动记录已关闭</AlertTitle>
+          <AlertTitle>{ui("core.intelligence.disabled")}</AlertTitle>
           <AlertDescription>
-            已有情报仍可查看。前往{" "}
+            {ui("core.intelligence.existingNote")}{" "}
             <Link href="/system/settings" className="underline">
-              系统设置
-            </Link>{" "}
-            开启后，Agent 将在执行中记录新增情报，并产生额外 Token 消耗。
-          </AlertDescription>
+              {ui("core.intelligence.settings")}</Link>{" "}
+            {ui("core.intelligence.enableNote")}</AlertDescription>
         </Alert>
       ) : null}
       <Card>
         <CardHeader>
-          <CardTitle>{scope === "tasks" ? "任务情报" : "资产关联情报"}</CardTitle>
+          <CardTitle>{scope === "tasks" ? ui("settings.intelligence.title") : ui("core.intelligence.assetTitle")}</CardTitle>
           <CardDescription>
-            {scope === "tasks" ? "集中查看本次获取与直接关联任务继承的情报。" : "按来源任务查看此资产关联的情报。"}{" "}
-            直接展示凭据、敏感数据及来源证据，发现凭据不代表验证成功。
-          </CardDescription>
+            {scope === "tasks" ? ui("core.intelligence.taskDescription") : ui("core.intelligence.assetDescription")}{" "}
+            {ui("core.intelligence.evidenceNote")}</CardDescription>
         </CardHeader>
         <CardContent className="flex min-w-0 flex-col gap-4">
           <Tabs
@@ -181,20 +183,20 @@ export function IntelligencePanel({
           >
             <TabsList className="max-w-full overflow-x-auto">
               <TabsTrigger value="all">
-                全部 {data ? Object.values(data.counts).reduce((a, b) => a + b, 0) : ""}
+                {ui("dashboard.all")} {data ? Object.values(data.counts).reduce((a, b) => a + b, 0) : ""}
               </TabsTrigger>
               {KINDS.map((item) => (
                 <TabsTrigger key={item.value} value={item.value}>
                   <ToneDot tone={statusMeta("intelligence", item.value).tone} />
-                  {item.label} {data?.counts[item.value] ?? 0}
+                  {ui(`status.intelligence.${item.value}`)} {data?.counts[item.value] ?? 0}
                 </TabsTrigger>
               ))}
             </TabsList>
           </Tabs>
           <div className="flex flex-wrap items-center gap-2">
             <Input
-              aria-label="搜索情报标题、内容或上报者"
-              placeholder="搜索标题、内容或上报者"
+              aria-label={ui("core.intelligence.searchAria")}
+              placeholder={ui("core.intelligence.search")}
               value={search}
               maxLength={200}
               onChange={(e) => setSearch(e.target.value)}
@@ -208,15 +210,15 @@ export function IntelligencePanel({
                   setPage(0);
                 }}
               >
-                <SelectTrigger aria-label="筛选情报状态">
+                <SelectTrigger aria-label={ui("core.intelligence.filterStatus")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectItem value="all">全部状态</SelectItem>
+                    <SelectItem value="all">{ui("tasksList.allStatuses")}</SelectItem>
                     {Object.entries(statusOptions).map(([value, label]) => (
                       <SelectItem key={value} value={value}>
-                        {label}
+                        {ui(`core.intelligence.states.${kind}.${value}`)}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -225,12 +227,11 @@ export function IntelligencePanel({
             ) : null}
             <Button variant="outline" onClick={() => setRefresh((n) => n + 1)}>
               <RefreshCwIcon data-icon="inline-start" />
-              刷新
-            </Button>
+              {ui("approval.refresh")}</Button>
           </div>
           {error ? (
             <Alert variant="destructive">
-              <AlertTitle>读取情报失败</AlertTitle>
+              <AlertTitle>{ui("core.intelligence.loadFailed")}</AlertTitle>
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
@@ -249,13 +250,13 @@ export function IntelligencePanel({
               </colgroup>
               <TableHeader>
                 <TableRow>
-                  <TableHead>类别 / 标题</TableHead>
-                  <TableHead>内容 / 来源证据</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>对话</TableHead>
-                  <TableHead>资产</TableHead>
-                  <TableHead>发现时间</TableHead>
-                  <TableHead>操作</TableHead>
+                  <TableHead>{ui("core.intelligence.categoryTitle")}</TableHead>
+                  <TableHead>{ui("core.intelligence.contentEvidence")}</TableHead>
+                  <TableHead>{ui("dashboard.status")}</TableHead>
+                  <TableHead>{ui("nav.chat")}</TableHead>
+                  <TableHead>{ui("nav.assets")}</TableHead>
+                  <TableHead>{ui("findings.detail.fieldTime")}</TableHead>
+                  <TableHead>{ui("tasksList.actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -276,34 +277,33 @@ export function IntelligencePanel({
                           onTraffic={(id) => setTrafficTarget({ item, id })}
                         />
                         <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-                          <span>来源证据</span>
+                          <span>{ui("core.intelligence.sourceEvidence")}</span>
                           <p className="whitespace-pre-wrap break-all">{intelligencePreview(item.evidence, 220)}</p>
                           {Array.from(item.evidence).length > 220 ? (
                             <button type="button" className="text-left underline" onClick={() => open(item)}>
-                              详情查看完整证据
-                            </button>
+                              {ui("core.intelligence.fullEvidence")}</button>
                           ) : null}
                         </div>
                       </div>
                     </TableCell>
                     <TableCell className="align-top whitespace-normal [overflow-wrap:anywhere]">
                       <div className="flex flex-col items-start gap-1">
-                        <Badge variant="outline">{STATUS[item.kind][item.status] ?? item.status}</Badge>
+                        <Badge variant="outline">{ui.has(`core.intelligence.states.${item.kind}.${item.status}`) ? ui(`core.intelligence.states.${item.kind}.${item.status}`) : item.status}</Badge>
                         <span className="text-xs text-muted-foreground">
-                          {item.confidence === "observed" ? "直接观察" : "推测"}
+                          {item.confidence === "observed" ? ui("core.intelligence.observed") : ui("core.intelligence.inferred")}
                         </span>
                       </div>
                     </TableCell>
                     <TableCell className="align-top whitespace-normal [overflow-wrap:anywhere]">
                       <div className="flex flex-col gap-1">
                         <Link href={conversationHref(item)} onClick={navigate} className="underline">
-                          {item.source_session ? "查看对话" : "查看任务对话"}
+                          {item.source_session ? ui("core.intelligence.viewConversation") : ui("core.intelligence.viewTaskConversation")}
                         </Link>
                         <span className="text-xs text-muted-foreground">
-                          任务 #{item.task_id} · {item.worker || "Agent"}
-                          {item.node_id ? ` · 节点 #${item.node_id}` : ""}
+                          {ui("core.common.taskNumber")}{item.task_id} · {item.worker || "Agent"}
+                          {item.node_id ? ui("core.intelligence.node", { id: item.node_id }) : ""}
                         </span>
-                        {item.inherited ? <Badge variant="outline">继承 · 只读</Badge> : null}
+                        {item.inherited ? <Badge variant="outline">{ui("core.common.inheritedReadOnly")}</Badge> : null}
                       </div>
                     </TableCell>
                     <TableCell className="align-top whitespace-normal [overflow-wrap:anywhere]">
@@ -312,8 +312,7 @@ export function IntelligencePanel({
                     <TableCell className="align-top whitespace-normal text-xs">{time(item.created_at)}</TableCell>
                     <TableCell className="align-top whitespace-normal [overflow-wrap:anywhere]">
                       <Button size="sm" variant="outline" onClick={() => open(item)}>
-                        详情
-                      </Button>
+                        {ui("taskPanels.findings.detail")}</Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -322,32 +321,30 @@ export function IntelligencePanel({
           ) : data ? (
             <Empty>
               <EmptyHeader>
-                <EmptyTitle>暂无符合条件的情报</EmptyTitle>
+                <EmptyTitle>{ui("core.intelligence.empty")}</EmptyTitle>
                 <EmptyDescription>
                   {query || kind !== "all" || status !== "all"
-                    ? "尝试调整分类或筛选条件。"
+                    ? ui("core.intelligence.adjust")
                     : data.enabled
-                      ? "Agent 在后续执行中发现有价值的信息后，会在此显示。"
-                      : "开启自动记录后，新增情报会在此显示；历史会话不会自动补提取。"}
+                      ? ui("core.intelligence.emptyEnabled")
+                      : ui("core.intelligence.emptyDisabled")}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : null}
         </CardContent>
         <CardFooter className="flex items-center justify-between gap-2">
-          <span className="text-sm text-muted-foreground">共 {data?.total ?? 0} 条 · 每页 25 条</span>
+          <span className="text-sm text-muted-foreground">{ui("core.intelligence.totalSummary", { total: data?.total ?? 0 })}</span>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((n) => n - 1)}>
-              上一页
-            </Button>
+              {ui("pagination.previous")}</Button>
             <Button
               size="sm"
               variant="outline"
               disabled={!data || (page + 1) * 25 >= data.total}
               onClick={() => setPage((n) => n + 1)}
             >
-              下一页
-            </Button>
+              {ui("pagination.next")}</Button>
           </div>
         </CardFooter>
       </Card>
@@ -359,29 +356,29 @@ export function IntelligencePanel({
       >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{selected?.title ?? "情报详情"}</DialogTitle>
-            <DialogDescription>完整展示记录内容与实际来源证据。</DialogDescription>
+            <DialogTitle>{selected?.title ?? ui("core.intelligence.detail")}</DialogTitle>
+            <DialogDescription>{ui("core.intelligence.detailDescription")}</DialogDescription>
           </DialogHeader>
           {selected ? (
             <div className="flex min-w-0 flex-col gap-4">
               <div className="flex flex-wrap items-center gap-2">
                 <StatusBadge domain="intelligence" value={selected.kind} />
-                <Badge variant="outline">{selected.confidence === "observed" ? "直接观察" : "推测"}</Badge>
+                <Badge variant="outline">{selected.confidence === "observed" ? ui("core.intelligence.observed") : ui("core.intelligence.inferred")}</Badge>
                 <span className="text-xs text-muted-foreground">
-                  任务 #{selected.task_id}
-                  {selected.node_id ? ` · 来源节点 #${selected.node_id}` : ""} · {selected.worker || "Agent"}
+                  {ui("core.common.taskNumber")}{selected.task_id}
+                  {selected.node_id ? ui("core.intelligence.sourceNode", { id: selected.node_id }) : ""} · {selected.worker || "Agent"}
                 </span>
               </div>
               {scope === "tasks" && !selected.inherited ? (
                 <Select value={selected.status} disabled={saving} onValueChange={(value) => void update(value)}>
-                  <SelectTrigger aria-label="更新情报状态">
+                  <SelectTrigger aria-label={ui("core.intelligence.changeStatus")}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {Object.entries(STATUS[selected.kind]).map(([value, label]) => (
                         <SelectItem key={value} value={value}>
-                          {label}
+                          {ui(`core.intelligence.states.${selected.kind}.${value}`)}
                         </SelectItem>
                       ))}
                     </SelectGroup>
@@ -389,22 +386,20 @@ export function IntelligencePanel({
                 </Select>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  {STATUS[selected.kind][selected.status]} · 请到来源任务修改状态
-                </p>
+                  {ui.has(`core.intelligence.states.${selected.kind}.${selected.status}`) ? ui(`core.intelligence.states.${selected.kind}.${selected.status}`) : selected.status} {ui("core.intelligence.sourceOnly")}</p>
               )}
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm">内容</span>
+                <span className="text-sm">{ui("core.intelligence.content")}</span>
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={async () => {
-                    if (await copyText(selected.content)) toast.success("已复制");
-                    else toast.error("复制失败，请手动选择内容复制");
+                    if (await copyText(selected.content)) toast.success(ui("common.copied"));
+                    else toast.error(ui("approval.copyFailed"));
                   }}
                 >
                   <CopyIcon data-icon="inline-start" />
-                  复制
-                </Button>
+                  {ui("common.copy")}</Button>
               </div>
               <CredentialContent
                 item={selected}
@@ -424,7 +419,7 @@ export function IntelligencePanel({
                     try {
                       await api.retryCredentials(selected.task_id, selected.id);
                       setRefresh((n) => n + 1);
-                      toast.success("已加入凭据处理队列");
+                      toast.success(ui("core.intelligence.processingQueued"));
                     } catch (e) {
                       toast.error((e as Error).message);
                     } finally {
@@ -432,22 +427,20 @@ export function IntelligencePanel({
                     }
                   }}
                 >
-                  重新处理凭据
-                </Button>
+                  {ui("core.intelligence.reprocess")}</Button>
               ) : null}
-              <p className="text-sm">来源证据</p>
+              <p className="text-sm">{ui("core.intelligence.sourceEvidence")}</p>
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted p-3 text-xs">
                 {selected.evidence}
               </pre>
               <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                 <span>
-                  关联资产：
-                  <AssetLinks ids={selected.asset_ids} onNavigate={navigate} />
+                  {ui("core.intelligence.assets")}<AssetLinks ids={selected.asset_ids} onNavigate={navigate} />
                 </span>
-                <span>发现于 {time(selected.created_at)}</span>
+                <span>{ui("core.intelligence.foundAtTime", { time: time(selected.created_at) })}</span>
               </div>
               <Link href={conversationHref(selected)} onClick={navigate} className="text-sm underline">
-                {selected.source_session ? "查看来源任务会话" : "查看来源任务"}
+                {selected.source_session ? ui("core.intelligence.sourceConversation") : ui("core.intelligence.sourceTask")}
               </Link>
             </div>
           ) : null}

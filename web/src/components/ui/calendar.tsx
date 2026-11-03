@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useLocaleFormatting } from "@/i18n/formatting"
 import {
   DayPicker,
   getDefaultClassNames,
@@ -18,7 +19,7 @@ function Calendar({
   showOutsideDays = true,
   captionLayout = "label",
   buttonVariant = "ghost",
-  locale,
+  locale: providedLocale,
   formatters,
   components,
   ...props
@@ -26,6 +27,8 @@ function Calendar({
   buttonVariant?: React.ComponentProps<typeof Button>["variant"]
 }) {
   const defaultClassNames = getDefaultClassNames()
+  const { calendarLocale } = useLocaleFormatting()
+  const locale = providedLocale ?? calendarLocale
 
   return (
     <DayPicker

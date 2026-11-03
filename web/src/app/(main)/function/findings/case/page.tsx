@@ -1,4 +1,8 @@
 "use client";
+
+import { useLocaleFormatting } from "@/i18n/formatting";
+
+import { useTranslations } from "next-intl";
 import * as React from "react";
 
 import Link from "next/link";
@@ -28,6 +32,8 @@ import { api } from "@/lib/api";
 import type { FindingCaseDetail } from "@/lib/types";
 
 function CaseDetail() {
+  const format = useLocaleFormatting();
+  const ui = useTranslations();
   const params = useSearchParams();
   const id = params.get("id") ?? "";
   const contextTask = params.get("context_task") ?? undefined;
@@ -71,7 +77,7 @@ function CaseDetail() {
     setBusy(true);
     try {
       await api.regenerateFindingCase(id, contextTask);
-      toast.success("已提交重新整理，可查看执行状态");
+      toast.success(ui("core.cases.queued"));
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -84,7 +90,7 @@ function CaseDetail() {
       for (const fid of selected) await api.removeFindingCaseMember(id, fid, "人工撤销归并");
       setSelected(new Set());
       setRefresh((v) => v + 1);
-      toast.success("已移出，原始记录保留");
+      toast.success(ui("core.cases.removed"));
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -104,7 +110,7 @@ function CaseDetail() {
     <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <Button asChild variant="outline">
-          <Link href="/function/findings">返回漏洞列表</Link>
+          <Link href="/function/findings">{ui("core.cases.back")}</Link>
         </Button>
         <h1 className="font-semibold text-xl">{c.title}</h1>
         <FindingSeverityCounts counts={c} />
@@ -116,43 +122,42 @@ function CaseDetail() {
       ) : null}
       {!c.active ? (
         <Alert>
-          <AlertDescription>此文件夹已解散或并入其他组，原始记录仍可从漏洞列表查看。</AlertDescription>
+          <AlertDescription>{ui("core.cases.dissolved")}</AlertDescription>
         </Alert>
       ) : null}
       {readOnly ? (
         <Alert>
-          <AlertDescription>继承任务的漏洞组，只读。</AlertDescription>
+          <AlertDescription>{ui("core.cases.inherited")}</AlertDescription>
         </Alert>
       ) : (
         <FindingCaseReviewPanel taskId={c.task_id ?? undefined} />
       )}
       <Tabs defaultValue="report">
         <TabsList>
-          <TabsTrigger value="report">统一报告</TabsTrigger>
-          <TabsTrigger value="members">原始上报（{c.count}）</TabsTrigger>
-          <TabsTrigger value="history">归并历史</TabsTrigger>
+          <TabsTrigger value="report">{ui("core.findings.combinedReport")}</TabsTrigger>
+          <TabsTrigger value="members">{ui("core.cases.originalCount", { count: c.count })}</TabsTrigger>
+          <TabsTrigger value="history">{ui("core.cases.history")}</TabsTrigger>
         </TabsList>
         <TabsContent value="report">
           <Card>
             <CardHeader>
-              <CardTitle>完整复现与修复报告</CardTitle>
-              <CardDescription>集中查看所有成员的复现步骤、证据与修复建议。</CardDescription>
+              <CardTitle>{ui("core.cases.reportTitle")}</CardTitle>
+              <CardDescription>{ui("core.cases.reportDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="flex min-w-0 flex-col gap-4">
               {c.report_version !== c.version ? (
                 <Alert>
-                  <AlertDescription>成员或证据已变化，统一报告待更新。</AlertDescription>
+                  <AlertDescription>{ui("core.cases.stale")}</AlertDescription>
                 </Alert>
               ) : null}
               {!readOnly && c.active ? (
                 <Button variant="outline" onClick={regenerate} disabled={busy}>
-                  {busy ? <Spinner /> : null}重新生成统一报告
-                </Button>
+                  {busy ? <Spinner /> : null}{ui("core.cases.regenerate")}</Button>
               ) : null}
               {c.report ? (
                 <Markdown text={c.report} />
               ) : (
-                <p className="text-muted-foreground text-sm">统一报告尚未生成，原始报告可在“原始上报”中查看。</p>
+                <p className="text-muted-foreground text-sm">{ui("core.cases.noReport")}</p>
               )}
             </CardContent>
           </Card>
@@ -160,27 +165,26 @@ function CaseDetail() {
         <TabsContent value="members">
           <Card>
             <CardHeader>
-              <CardTitle>原始报告和证据完整保留</CardTitle>
-              <CardDescription>各条原始上报保留各自的等级、报告和证据。</CardDescription>
+              <CardTitle>{ui("core.cases.keepOriginal")}</CardTitle>
+              <CardDescription>{ui("core.cases.originalDescription")}</CardDescription>
             </CardHeader>
             <CardContent>
               {!readOnly && selected.size > 0 ? (
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button variant="outline" disabled={busy}>
-                      移出所选（{selected.size}）
+                      {ui("core.cases.removeSelectedCount", { count: selected.size })}
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>移出归并组？</AlertDialogTitle>
+                      <AlertDialogTitle>{ui("core.cases.removeTitle")}</AlertDialogTitle>
                       <AlertDialogDescription>
-                        原报告和证据保留，Agent 不会自动把这些关系再次归并。
-                      </AlertDialogDescription>
+                        {ui("core.cases.removeDescription")}</AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                      <AlertDialogCancel>取消</AlertDialogCancel>
-                      <AlertDialogAction onClick={detach}>移出</AlertDialogAction>
+                      <AlertDialogCancel>{ui("password.cancel")}</AlertDialogCancel>
+                      <AlertDialogAction onClick={detach}>{ui("core.cases.remove")}</AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
@@ -198,25 +202,25 @@ function CaseDetail() {
         <TabsContent value="history">
           <Card>
             <CardHeader>
-              <CardTitle>判断依据与操作记录</CardTitle>
+              <CardTitle>{ui("core.cases.historyDescription")}</CardTitle>
               <CardDescription>{c.reason}</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               {data.events.map((e) => (
                 <div key={e.id} className="border-b pb-3 text-sm">
                   <p>
-                    {({ reporter: "报告 Agent", human: "人工", system: "系统" } as Record<string, string>)[e.actor] ??
+                    {({ reporter: ui("core.cases.reportAgent"), human: ui("core.cases.manual"), system: ui("nav.system") } as Record<string, string>)[e.actor] ??
                       e.actor}{" "}
                     ·{" "}
                     {(
                       {
-                        merge: "归并",
-                        detach: "移出成员",
-                        member_deleted: "成员移出或删除",
-                        report_updated: "更新统一报告",
+                        merge: ui("core.cases.merge"),
+                        detach: ui("core.cases.removeMember"),
+                        member_deleted: ui("core.cases.memberChanged"),
+                        report_updated: ui("core.cases.updateReport"),
                       } as Record<string, string>
                     )[e.action] ?? e.action}{" "}
-                    · {new Date(e.created_at).toLocaleString("zh-CN")}
+                    · {format.dateTime(new Date(e.created_at), "timestamp")}
                   </p>
                   <p className="text-muted-foreground">
                     {e.reason}

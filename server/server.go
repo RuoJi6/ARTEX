@@ -212,6 +212,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	// Wire DB-stored prompt templates into the agents (新版方案 §3.3 / §5a). With no
 	// override row, agents keep their built-in defaults — behavior is unchanged.
 	if m.pg != nil {
+		agent.OutputLanguage = s.outputLanguage
 		agent.OpsecEnabled = func() bool { return m.pg.GetBool(settingOpsecEnabled, false) }
 		agent.PromptOverride = func(key string) (string, bool) {
 			a, err := m.pg.GetAgentByKey(key)
@@ -3665,6 +3666,7 @@ func (s *Server) settingsPayload() map[string]any {
 	}
 	return map[string]any{
 		"traffic_capture":                      s.m.TrafficEnabled(),
+		"output_language":                      s.outputLanguage(),
 		"browser_screenshot_enabled":           s.m.pg.GetBool(settingBrowserScreenshot, false),
 		"browser_screenshot_timestamp_enabled": s.m.pg.GetBool(settingScreenshotTimestamp, false),
 		"opsec_enabled":                        s.m.pg.GetBool(settingOpsecEnabled, false),
@@ -3764,17 +3766,18 @@ func (s *Server) pgDetectPython(w http.ResponseWriter, r *http.Request) {
 // off, agents get no proxy config, no traffic tools, and no proxy prompt content.
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TrafficCapture      *bool `json:"traffic_capture"`
-		BrowserScreenshot   *bool `json:"browser_screenshot_enabled"`
-		ScreenshotTimestamp *bool `json:"browser_screenshot_timestamp_enabled"`
-		OpsecEnabled        *bool `json:"opsec_enabled"`
-		AgentTrafficBinding *bool `json:"agent_traffic_binding"`
-		TaskIntelligence    *bool `json:"task_intelligence_enabled"`
-		TaskAutoTitle       *bool `json:"task_auto_title_enabled"`
-		ChatAutoTitle       *bool `json:"chat_auto_title_enabled"`
-		CredentialAgent     *bool `json:"credential_agent_enabled"`
-		CredentialTraffic   *bool `json:"credential_traffic_binding"`
-		LLMRecord           *bool `json:"llm_record"` // LLM 录制开关（默认关）；即时生效，无需重建 agent
+		OutputLanguage      *string `json:"output_language"`
+		TrafficCapture      *bool   `json:"traffic_capture"`
+		BrowserScreenshot   *bool   `json:"browser_screenshot_enabled"`
+		ScreenshotTimestamp *bool   `json:"browser_screenshot_timestamp_enabled"`
+		OpsecEnabled        *bool   `json:"opsec_enabled"`
+		AgentTrafficBinding *bool   `json:"agent_traffic_binding"`
+		TaskIntelligence    *bool   `json:"task_intelligence_enabled"`
+		TaskAutoTitle       *bool   `json:"task_auto_title_enabled"`
+		ChatAutoTitle       *bool   `json:"chat_auto_title_enabled"`
+		CredentialAgent     *bool   `json:"credential_agent_enabled"`
+		CredentialTraffic   *bool   `json:"credential_traffic_binding"`
+		LLMRecord           *bool   `json:"llm_record"` // LLM 录制开关（默认关）；即时生效，无需重建 agent
 		// Web search. WebSearchEnabled/Backend toggle the tool + backend; BraveKey/TavilyKey
 		// are optional — omit (null) to leave a stored key untouched, send "" to clear.
 		WebSearchEnabled       *bool         `json:"web_search_enabled"`
@@ -3831,6 +3834,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			value = checked
 		}
 		req.EgressProbeURL = &value
+	}
+	if req.OutputLanguage != nil && *req.OutputLanguage != "zh" && *req.OutputLanguage != "en" {
+		writeErr(w, 400, "output_language must be zh or en")
+		return
 	}
 	if req.ConstraintsInjectPlanner != nil {
 		if err := s.m.pg.SetBool(settingConstraintsInjectPlanner, *req.ConstraintsInjectPlanner); err != nil {
@@ -4127,6 +4134,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, 500, err.Error())
 				return
 			}
+		}
+	}
+	if req.OutputLanguage != nil {
+		if err := s.m.pg.SetSetting(settingOutputLanguage, *req.OutputLanguage); err != nil {
+			writeErr(w, 500, err.Error())
+			return
 		}
 	}
 	writeJSON(w, 200, s.settingsPayload())
@@ -4471,7 +4484,7 @@ func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
 	}
 	md := report.Markdown(report.Input{
 		Title: t.Description, Goal: t.Goal, GeneratedAt: time.Now(),
-		AssetCounts: counts, Findings: findings,
+		AssetCounts: counts, Findings: findings, English: s.outputLanguage() == "en",
 	})
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)

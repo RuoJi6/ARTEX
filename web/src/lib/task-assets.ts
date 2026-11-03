@@ -20,10 +20,12 @@ const TASK_ASSET_SOURCE_LABELS: Record<string, string> = {
   task: "任务初始化",
 };
 
-export function taskAssetTypeLabel(type: NewAssetType): string {
-  return ASSET_TYPE_LABELS[type];
+export function taskAssetTypeLabel(type: NewAssetType, translate?: (key: string) => string | undefined): string {
+  if (!Object.hasOwn(ASSET_TYPE_LABELS, type)) return type;
+  return translate?.(`types.${type}`) ?? ASSET_TYPE_LABELS[type];
 }
 
-export function taskAssetSourceLabel(source: string): string {
-  return TASK_ASSET_SOURCE_LABELS[source] ?? source;
+export function taskAssetSourceLabel(source: string, translate?: (key: string) => string | undefined): string {
+  if (!Object.hasOwn(TASK_ASSET_SOURCE_LABELS, source)) return source;
+  return translate?.(`sources.${source}`) ?? TASK_ASSET_SOURCE_LABELS[source];
 }

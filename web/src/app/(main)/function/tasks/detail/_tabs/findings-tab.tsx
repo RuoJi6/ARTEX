@@ -1,5 +1,9 @@
 "use client";
 
+import { useLocaleFormatting } from "@/i18n/formatting";
+
+import { useTranslations } from "next-intl";
+
 import * as React from "react";
 
 import Link from "next/link";
@@ -25,10 +29,10 @@ import { cn } from "@/lib/utils";
 const FINDING_SORT_FIELDS: readonly FindingSortField[] = ["time", "severity"];
 const FINDING_SORT_PREFERENCE_KEY = "artex_task_findings_sort";
 
-function findingLabel(finding: Finding): string {
+function findingLabel(finding: Finding, unclassified: string): string {
   if (finding.name?.trim()) return finding.name;
   if (finding.vulnclass?.trim()) return finding.vulnclass;
-  return "未分类";
+  return unclassified;
 }
 
 const FINDING_STATUSES: FindingStatus[] = [
@@ -52,6 +56,9 @@ function Row({
   contextTaskId: string;
   onStatus: (f: Finding, next: FindingStatus) => void;
 }) {
+  const format = useLocaleFormatting();
+  const t = useTranslations("taskPanels.findings");
+  const tStatus = useTranslations("status");
   const [open, setOpen] = React.useState(false);
   return (
     <div className="border-b last:border-b-0">
@@ -67,17 +74,17 @@ function Row({
           <StatusBadge domain="severity" value={f.severity} dot />
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate font-medium">{findingLabel(f)}</span>
+              <span className="truncate font-medium">{findingLabel(f, t("unclassified"))}</span>
               {f.inherited && f.source_task_id && (
                 <Badge variant="outline" className="shrink-0">
-                  来源 #{f.source_task_id} · 只读
+                  {t("sourceReadonly", { id: f.source_task_id})}
                 </Badge>
               )}
             </div>
             <span className="truncate text-xs text-muted-foreground">{f.summary}</span>
           </div>
         </button>
-        <Badge variant="outline">流量证据 {f.traffic_count ?? 0} 条</Badge>
+        <Badge variant="outline">{t("trafficEvidence", { count: f.traffic_count ?? 0})}</Badge>
         {f.assets && f.assets.length > 0 && (
           <div className="hidden shrink-0 flex-wrap justify-end gap-1 sm:flex">
             {f.assets.slice(0, 2).map((a) => (
@@ -101,7 +108,7 @@ function Row({
               <SelectGroup>
                 {FINDING_STATUSES.map((st) => (
                   <SelectItem key={st} value={st}>
-                    {statusMeta("finding", st).label}
+                    {tStatus(`finding.${st}`)}
                   </SelectItem>
                 ))}
               </SelectGroup>
@@ -111,22 +118,22 @@ function Row({
           <StatusBadge domain="finding" value={f.status} dot />
         )}
         <span className="hidden shrink-0 text-xs text-muted-foreground md:block">
-          {new Date(f.ts).toLocaleString("zh-CN")}
+          {format.dateTime(new Date(f.ts), "timestamp")}
         </span>
         {f.finding_id && (
           <Link
             href={`/function/findings/detail?id=${f.finding_id}&context_task=${contextTaskId}`}
             className="text-muted-foreground hover:text-primary inline-flex shrink-0 items-center gap-0.5 text-xs"
-            title="查看漏洞详情"
+            title={t("viewDetail")}
           >
-            详情
+            {t("detail")}
             <ArrowUpRightIcon className="size-3" />
           </Link>
         )}
       </div>
       {open && (
         <div className="bg-muted/30 px-4 pb-4 pl-11">
-          <div className="mb-1 text-xs font-medium text-muted-foreground">证据 / PoC</div>
+          <div className="mb-1 text-xs font-medium text-muted-foreground">{t("evidencePoc")}</div>
           <pre className="overflow-auto rounded-md border bg-background p-3 font-mono text-xs whitespace-pre-wrap">
             {f.evidence}
           </pre>
@@ -137,6 +144,9 @@ function Row({
 }
 
 export function FindingsTab({ taskId }: { taskId: string }) {
+  const ui = useTranslations();
+  const t = useTranslations("taskPanels.findings");
+  const tStatus = useTranslations("status");
   const [findings, setFindings] = React.useState<Finding[]>([]);
   const [severity, setSeverity] = React.useState<"all" | Severity>("all");
   const [search, setSearch] = React.useState("");
@@ -174,12 +184,13 @@ export function FindingsTab({ taskId }: { taskId: string }) {
     setFindings((cur) => cur.map((x) => (x.id === f.id ? { ...x, status: next } : x)));
     try {
       await api.setFindingStatus(f.finding_id, next);
-      toast.success(`已标记为「${statusMeta("finding", next).label}」`);
+      toast.success(t("markedAs", { label: tStatus(`finding.${next}`) }));
     } catch (e) {
       setFindings((cur) => cur.map((x) => (x.id === f.id ? { ...x, status: prev } : x)));
-      toast.error("更新失败：" + (e as Error).message);
+      toast.error(t("updateFailed", { message: (e as Error).message }));
     }
-  }, []);
+  }, [t, tStatus],
+  );
 
   // Discover inherited sources before filtering; finding-cases owns folder matching.
   const taskFindings = findings.filter((f) => f.task_id === taskId || f.inherited);
@@ -197,8 +208,8 @@ export function FindingsTab({ taskId }: { taskId: string }) {
           spacing={0}
         >
           {SEVERITY_FILTER_OPTIONS.map(([val, label]) => (
-            <ToggleGroupItem key={val} value={val} aria-label={`按${label}等级筛选`}>
-              {label}
+            <ToggleGroupItem key={val} value={val} aria-label={val === "all" ? ui("core.common.all") : ui(`status.severity.${val}`)}>
+              {val === "all" ? ui("core.common.all") : ui(`status.severity.${val}`)}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
@@ -210,19 +221,19 @@ export function FindingsTab({ taskId }: { taskId: string }) {
             }
           }}
         >
-          <SelectTrigger size="sm" className="w-36" aria-label="发现排序方式">
+          <SelectTrigger size="sm" className="w-36" aria-label={ui("core.findings.sort")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="time">按时间排序</SelectItem>
-            <SelectItem value="severity">按严重度排序</SelectItem>
+            <SelectItem value="time">{ui("core.findings.byTime")}</SelectItem>
+            <SelectItem value="severity">{ui("core.findings.bySeverity")}</SelectItem>
           </SelectContent>
         </Select>
         <Button
           type="button"
           variant="outline"
           size="sm"
-          aria-label={`${sortPreference.field === "severity" ? "同严重度" : "全部"}发现时间当前${sortPreference.direction === "asc" ? "正序" : "倒序"}，点击切换排序方向`}
+          aria-label={ui("core.findings.sortDirection", { direction: sortPreference.direction === "asc" ? ui("taskPanels.findings.orderAsc") : ui("taskPanels.findings.orderDesc") })}
           onClick={() =>
             setSortPreference((current) => ({
               ...current,
@@ -235,8 +246,8 @@ export function FindingsTab({ taskId }: { taskId: string }) {
           ) : (
             <ArrowDownIcon aria-hidden="true" />
           )}
-          {sortPreference.field === "severity" ? "同严重度：" : ""}
-          {sortPreference.direction === "asc" ? "最早优先" : "最新优先"}
+          {sortPreference.field === "severity" ? ui("core.findings.sameSeverityPrefix") : ""}
+          {sortPreference.direction === "asc" ? ui("core.findings.oldest") : ui("core.findings.newest")}
         </Button>
         <form
           className="flex w-full items-center gap-2 sm:w-auto"
@@ -250,16 +261,15 @@ export function FindingsTab({ taskId }: { taskId: string }) {
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="检索漏洞内容"
-              aria-label="检索漏洞内容"
+              placeholder={ui("findings.search.placeholder")}
+              aria-label={ui("findings.search.placeholder")}
             />
             <InputGroupAddon>
               <SearchIcon aria-hidden="true" />
             </InputGroupAddon>
           </InputGroup>
-          <Button type="submit" size="sm" aria-label="搜索">
-            搜索
-          </Button>
+          <Button type="submit" size="sm" aria-label={ui("search.label")}>
+            {ui("search.label")}</Button>
         </form>
       </div>
       <FindingCaseList
@@ -281,7 +291,7 @@ export function FindingsTab({ taskId }: { taskId: string }) {
         ),
       ].map((source) => (
         <div key={source}>
-          <p className="mb-2 text-sm text-muted-foreground">继承任务 #{source} · 只读</p>
+          <p className="mb-2 text-sm text-muted-foreground">{ui("core.findings.inheritedTask")}{source} {ui("core.common.readOnlySuffix")}</p>
           <FindingCaseList
             query={{
               task: source,
@@ -296,15 +306,15 @@ export function FindingsTab({ taskId }: { taskId: string }) {
         </div>
       ))}
       <details>
-        <summary className="cursor-pointer text-sm text-muted-foreground">查看原始上报列表</summary>
+        <summary className="cursor-pointer text-sm text-muted-foreground">{ui("core.findings.viewRaw")}</summary>
         <Card className="overflow-hidden py-0">
           <CardContent className="px-0">
             <div className="flex items-center border-b px-4 py-2 text-xs text-muted-foreground">
               <span className="min-w-0 flex-1">
-                漏洞（{sortPreference.field === "severity" ? "按严重度排序" : "按时间排序"}）
+                {ui("core.findings.listHeading", { order: sortPreference.field === "severity" ? "severity" : "time" })}
               </span>
               <span className="inline-flex items-center gap-1">
-                <span>{sortPreference.field === "severity" ? "同严重度发现时间" : "发现时间"}</span>
+                <span>{sortPreference.field === "severity" ? ui("core.findings.sameSeverityTime") : ui("findings.detail.fieldTime")}</span>
                 {sortPreference.direction === "asc" ? (
                   <ArrowUpIcon className="size-3.5" />
                 ) : (
@@ -318,8 +328,8 @@ export function FindingsTab({ taskId }: { taskId: string }) {
             {items.length === 0 && (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">
                 {severity !== "all" || query
-                  ? "当前筛选与搜索条件下暂无原始上报。"
-                  : "本任务及直接关联任务暂无确认发现。"}
+                  ? ui("core.findings.emptyRaw")
+                  : ui("taskPanels.findings.empty")}
               </p>
             )}
           </CardContent>
