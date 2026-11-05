@@ -156,69 +156,135 @@ func (r *Recorder) Stream(ctx context.Context, req llm.CompletionRequest) iter.S
 			streamErr   error
 		)
 
-		finished := false
-		finish := func(err error) {
-			if finished {
-				return
-			}
-			finished = true
-			status := "ok"
-			if err != nil {
-				status = "error"
-			}
-			// Lightweight metering row — always written.
-			r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status)
-			// Heavy trace row — only when body recording is on.
-			if recordBodies {
-				r.record(req, session, taskID, worker, reqBody, capt, start, textBuf.String(), thinkingBuf.String(), usage, stopReason, err)
-			}
-		}
-		defer func() { finish(ctx.Err()) }()
+		for attempt := 0; ; attempt++ {
+			res := r.streamAttempt(ctx, req, recordBodies, yield)
+			textBuf.Reset()
+			textBuf.WriteString(res.text)
+			thinkingBuf.Reset()
+			thinkingBuf.WriteString(res.thinking)
+			usage, stopReason, streamErr = res.usage, res.stopReason, res.err
 
-		for ev, err := range r.inner.Stream(ctx, req) {
-			if err != nil {
-				streamErr = err
-				finish(streamErr)
-				if !yield(ev, err) {
-					return
-				}
-				return
+			if res.stopped || res.err != nil || !res.empty {
+				break
 			}
-			// Always track usage (cheap); accumulate text/thinking only for bodies.
-			// Anthropic (and the other providers) split token usage across events:
-			// message_start carries ONLY the input side (input + cache), message_delta
-			// ONLY the output. They must be FOLDED with Add — overwriting on delta
-			// would zero out the input already counted at start (mirrors the SDK's own
-			// llm.Accumulator; see norma/llm/accumulate.go).
-			switch ev.Type {
-			case llm.SETextDelta:
-				if recordBodies {
-					textBuf.WriteString(ev.Text)
+			if attempt >= emptyResponseRetries {
+				// 重试耗尽仍是空响应：把元数据事件吐给调用方，保持「正常结束」观感
+				for _, p := range res.pending {
+					if !yield(p, nil) {
+						break
+					}
 				}
-			case llm.SEThinkingDelta:
-				if recordBodies {
-					thinkingBuf.WriteString(ev.Text)
-				}
-			case llm.SEMessageStart:
-				usage.Add(ev.Usage)
-			case llm.SEMessageDelta:
-				if ev.StopReason != "" {
-					stopReason = ev.StopReason
-				}
-				usage.Add(ev.Usage)
+				break
 			}
-			if !yield(ev, err) {
-				return
-			}
+			// 空响应且还有重试额度：丢弃本轮的元数据，重试下一轮
 		}
 
-		// Stream completed normally.
-		finish(streamErr)
+		if streamErr == nil && ctx.Err() != nil {
+			streamErr = ctx.Err()
+		}
+		status := "ok"
+		if streamErr != nil {
+			status = "error"
+		}
+		// Lightweight metering row — always written.
+		r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status)
+		// Heavy trace row — only when body recording is on.
+		if recordBodies {
+			r.record(req, session, taskID, worker, reqBody, capt, start, textBuf.String(), thinkingBuf.String(), usage, stopReason, streamErr)
+		}
 	}
 }
 
+// streamAttemptResult 汇总一次 inner.Stream 的结果。
+type streamAttemptResult struct {
+	text        string
+	thinking    string
+	usage       llm.Usage
+	stopReason  string
+	contentSeen bool              // 是否出现过内容事件(文本/思考/工具)
+	empty       bool              // 流结束仍无任何内容块
+	stopped     bool              // 调用方通过 yield 返回 false 主动停止
+	pending     []llm.StreamEvent // 空响应时被压住的元数据事件(message_start/message_delta/message_stop)
+	err         error             // 流内错误
+}
+
+// streamAttempt 跑一次 inner.Stream。开头的元数据事件先压住，直到出现第一个
+// 内容事件(文本/思考/工具)才按顺序吐出，从而在不破坏实时流式的前提下探测
+// 「完成但零内容」的空响应：空响应时不吐元数据，交由上层重试。
+func (r *Recorder) streamAttempt(ctx context.Context, req llm.CompletionRequest, recordBodies bool, yield func(llm.StreamEvent, error) bool) streamAttemptResult {
+	var (
+		textBuf     strings.Builder
+		thinkingBuf strings.Builder
+		res         streamAttemptResult
+	)
+	next, stop := iter.Pull2(r.inner.Stream(ctx, req))
+	defer stop()
+
+	for {
+		ev, e, ok := next()
+		if !ok {
+			break
+		}
+		if e != nil {
+			// 流内错误：照原样交给调用方，不重试
+			res.err = e
+			res.empty = !res.contentSeen
+			yield(ev, e)
+			res.stopped = true
+			res.text, res.thinking = textBuf.String(), thinkingBuf.String()
+			return res
+		}
+		switch ev.Type {
+		case llm.SEMessageStart:
+			res.usage.Add(ev.Usage)
+		case llm.SEMessageDelta:
+			if ev.StopReason != "" {
+				res.stopReason = ev.StopReason
+			}
+			res.usage.Add(ev.Usage)
+		}
+		if recordBodies {
+			switch ev.Type {
+			case llm.SETextDelta:
+				textBuf.WriteString(ev.Text)
+			case llm.SEThinkingDelta:
+				thinkingBuf.WriteString(ev.Text)
+			}
+		}
+		if !res.contentSeen {
+			if isContentEvent(ev.Type) {
+				res.contentSeen = true
+				for _, p := range res.pending {
+					if !yield(p, nil) {
+						res.stopped = true
+						res.text, res.thinking = textBuf.String(), thinkingBuf.String()
+						return res
+					}
+				}
+				res.pending = nil
+				if !yield(ev, nil) {
+					res.stopped = true
+					res.text, res.thinking = textBuf.String(), thinkingBuf.String()
+					return res
+				}
+			} else {
+				res.pending = append(res.pending, ev)
+			}
+		} else if !yield(ev, nil) {
+			res.stopped = true
+			res.text, res.thinking = textBuf.String(), thinkingBuf.String()
+			return res
+		}
+	}
+
+	res.text, res.thinking = textBuf.String(), thinkingBuf.String()
+	res.empty = !res.contentSeen
+	return res
+}
+
 // Complete implements the atomic completion path while preserving the same
-// usage metering, normalized body recording and raw wire capture as Stream.
+// usage metering, normalized body recording and raw wire capture as Stream. It
+// also retries empty completions (0 text/tool/thinking), mirroring Stream.
 func (r *Recorder) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
 	recordBodies := r.enabled == nil || r.enabled()
 	start := time.Now()
@@ -241,6 +307,9 @@ func (r *Recorder) Complete(ctx context.Context, req llm.CompletionRequest) (llm
 	}
 
 	msg, stopReason, usage, err := r.inner.Complete(ctx, req)
+	for attempt := 0; attempt < emptyResponseRetries && err == nil && emptyMessage(msg); attempt++ {
+		msg, stopReason, usage, err = r.inner.Complete(ctx, req)
+	}
 	status := "ok"
 	if err != nil {
 		status = "error"
@@ -260,6 +329,40 @@ func thinkingText(msg llm.Message) string {
 		}
 	}
 	return b.String()
+}
+
+// emptyResponseRetries 是 SDK 之上对「完成但零内容」空响应的重试次数。norma 的
+// EmptyResponseRetries 只对 openai 格式生效，这里在 Recorder 层对所有格式补齐，
+// 避免 5.5 代等模型返回空流时被静默当成正常结束。
+const emptyResponseRetries = 2
+
+// isContentEvent 判断一个流事件是否属于「实质内容」：文本、思考或工具调用。
+// message_start / message_delta / message_stop 只是元数据，不算内容。
+func isContentEvent(t llm.StreamEventType) bool {
+	switch t {
+	case llm.SETextDelta, llm.SEThinkingDelta, llm.SEToolUseStart, llm.SEToolInputJSON:
+		return true
+	}
+	return false
+}
+
+// emptyMessage 判断一个非流式响应是否为「零内容」：没有任何文本/思考/工具调用块。
+func emptyMessage(msg llm.Message) bool {
+	for _, b := range msg.Content {
+		switch b.Type {
+		case llm.BlockText:
+			if b.Text != "" {
+				return false
+			}
+		case llm.BlockThinking:
+			if b.Thinking != "" {
+				return false
+			}
+		case llm.BlockToolUse:
+			return false
+		}
+	}
+	return true
 }
 
 // recordUsage appends one lightweight metering row to llm_usage (no bodies). Skips
@@ -315,6 +418,9 @@ func (r *Recorder) record(req llm.CompletionRequest, session, taskID, worker, re
 	}
 	if thinking != "" {
 		resp["thinking"] = thinking
+	}
+	if text == "" && thinking == "" {
+		resp["empty"] = true
 	}
 	respBody, _ := json.Marshal(resp)
 
