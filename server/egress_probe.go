@@ -30,8 +30,8 @@ const settingEgressProbeURL = "egress_probe_url"
 
 // defaultEgressProbes 按顺序尝试，第一个成功即停；自定义地址为空时使用。
 var defaultEgressProbes = []string{
-	"https://api.ipify.org?format=json", // 返回 {"ip":"1.2.3.4"}
-	"https://ifconfig.me/ip",            // 返回纯文本 1.2.3.4
+	"http://api.ipify.org?format=json", // 返回 {"ip":"1.2.3.4"}
+	"http://ifconfig.me/ip",            // 返回纯文本 1.2.3.4
 }
 
 func (m *Manager) EgressProbeURL() string {
