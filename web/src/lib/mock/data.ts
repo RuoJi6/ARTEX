@@ -220,7 +220,12 @@ const grandTotal: TokenTotal = tasks.reduce(
 // ── Stats ──────────────────────────────────────────────────────────────────
 export function stats(
   taskId?: string,
-  state: { tasks?: readonly Task[]; findings?: readonly Finding[]; activeTask?: string } = {},
+  state: {
+    tasks?: readonly Task[];
+    findings?: readonly Finding[];
+    intents?: readonly TaskNode[];
+    activeTask?: string;
+  } = {},
 ): Stats & { active_task?: unknown } {
   const taskList = state.tasks ?? tasks;
   const findingList = state.findings ?? findings;
@@ -238,6 +243,10 @@ export function stats(
     ...base,
     engine_mode: t.engine_mode ?? "idle",
     findings_confirmed: findingList.filter((f) => f.task_id === t.id).length,
+    exploration: {
+      finding: findingList.filter((f) => f.task_id === t.id).length,
+      intent: (state.intents ?? intents).length,
+    },
     active_task: {
       id: t.id,
       in_flight: t.in_flight,

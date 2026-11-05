@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { StatusBadge } from "@/components/status-badge";
+import { TablePagination } from "@/components/table-pagination";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -107,6 +108,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
   const [task, setTask] = React.useState<Task | null>(null);
   const [stats, setStats] = React.useState<Stats | null>(null);
   const [intents, setIntents] = React.useState<TaskNode[]>([]);
+  const [intentCounts, setIntentCounts] = React.useState({ running: 0, open: 0, blocked: 0 });
   const [findings, setFindings] = React.useState<Finding[]>([]);
   const [coverage, setCoverage] = React.useState<{
     enabled: boolean;
@@ -128,6 +130,10 @@ export function OverviewTab({ taskId }: { taskId: string }) {
   const [modelTokens, setModelTokens] = React.useState<ModelTokenStat[]>([]);
   // 目标管理：目标列表 + 新增表单 + 行内编辑状态。
   const [goals, setGoals] = React.useState<TaskGoal[]>([]);
+  const [goalPage, setGoalPage] = React.useState(1);
+  const [goalPageSize, setGoalPageSize] = React.useState(20);
+  const [goalTotal, setGoalTotal] = React.useState(0);
+  const goalRequest = React.useRef(0);
   const [goalText, setGoalText] = React.useState("");
   const [goalVuln, setGoalVuln] = React.useState("");
   const [goalBusy, setGoalBusy] = React.useState(false);
@@ -164,13 +170,16 @@ export function OverviewTab({ taskId }: { taskId: string }) {
   }, [taskId]);
 
   const loadGoals = React.useCallback(async () => {
+    const request = goalRequest.current;
     try {
-      const resp = await api.taskGoals(taskId);
+      const resp = await api.taskGoals(taskId, goalPage, goalPageSize);
+      if (request !== goalRequest.current) return;
       setGoals(resp.goals);
+      setGoalTotal(resp.total);
     } catch {
       // 忽略：瞬时错误，下次轮询重试
     }
-  }, [taskId]);
+  }, [taskId, goalPage, goalPageSize]);
 
   const addGoal = async () => {
     const text = goalText.trim();
@@ -181,7 +190,8 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       await api.addGoal(taskId, text, goalVuln.trim() || undefined);
       setGoalText("");
       setGoalVuln("");
-      await loadGoals();
+      if (goalPage === 1) await loadGoals();
+      else setGoalPage(1);
     } catch (e) {
       setGoalErr(e instanceof Error ? e.message : "添加失败");
     } finally {
@@ -221,6 +231,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
     setGoals((prev) => prev.filter((x) => x.id !== g.id));
     try {
       await api.deleteGoal(taskId, g.id);
+      await loadGoals();
     } catch {
       await loadGoals(); // 删除失败：重新拉取还原
     }
@@ -327,6 +338,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
     try {
       await api.rerunIntent(taskId, id);
       setIntents((prev) => prev.map((i) => (i.id === id ? { ...i, state: "open" } : i)));
+      setIntentCounts((prev) => ({ ...prev, blocked: Math.max(0, prev.blocked - 1), open: prev.open + 1 }));
     } catch {
       // 失败忽略：下次轮询仍显示 blocked，用户可再点
     } finally {
@@ -338,8 +350,13 @@ export function OverviewTab({ taskId }: { taskId: string }) {
   const rerunAll = async () => {
     markRerun("__all__", true);
     try {
-      await api.rerunBlocked(taskId);
+      const result = await api.rerunBlocked(taskId);
       setIntents((prev) => prev.map((i) => (i.state === "blocked" ? { ...i, state: "open" } : i)));
+      setIntentCounts((prev) => ({
+        ...prev,
+        blocked: Math.max(0, prev.blocked - result.reopened),
+        open: prev.open + result.reopened,
+      }));
     } catch {
       // ignore
     } finally {
@@ -355,10 +372,12 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       if (loading) return;
       loading = true;
       try {
-        const [taskResp, statsResp, intentsResp, findingsResp] = await Promise.all([
+        const [taskResp, statsResp, runningResp, openResp, blockedResp, findingsResp] = await Promise.all([
           api.task(taskId),
           api.stats(taskId),
-          api.intents(taskId),
+          api.explorationNodes(taskId, { kinds: ["intent"], states: ["running"], size: 6 }),
+          api.explorationNodes(taskId, { kinds: ["intent"], states: ["open"], size: 1 }),
+          api.explorationNodes(taskId, { kinds: ["intent"], states: ["blocked"], size: 20 }),
           api.findings(taskId),
         ]);
         if (cancelled) return;
@@ -376,7 +395,8 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             : taskResp,
         );
         setStats(statsResp);
-        setIntents(intentsResp);
+        setIntents([...runningResp.items, ...blockedResp.items]);
+        setIntentCounts({ running: runningResp.total, open: openResp.total, blocked: blockedResp.total });
         setFindings(findingsResp);
         // coverage is independent + may 503 when no asset store — fetch separately so
         // its failure never blocks the others.
@@ -408,14 +428,16 @@ export function OverviewTab({ taskId }: { taskId: string }) {
     }, 3000);
     return () => {
       cancelled = true;
+      goalRequest.current++;
       clearInterval(timer);
     };
   }, [taskId, loadScope, loadTokens, loadGoals, loadConstraints]);
 
   const running = intents.filter((i) => i.state === "running");
-  const open = intents.filter((i) => i.state === "open");
   const blocked = intents.filter((i) => i.state === "blocked");
   const taskFindings = findings.filter((f) => f.task_id === taskId);
+  const findingCount = stats?.exploration?.finding ?? 0;
+  const intentTotal = stats?.exploration?.intent ?? 0;
   const goalsPct = task?.goals_total ? Math.round(((task.goals_met ?? 0) / task.goals_total) * 100) : 0;
   // token 合计（跨全部模型），用于卡片头部总览。
   const tokenTotals = modelTokens.reduce(
@@ -457,7 +479,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
           <CardTitle className="flex items-center gap-2 text-base">
             <ListChecksIcon className="size-4 text-primary" /> 目标管理
             <span className="text-muted-foreground text-xs font-normal">
-              （最终可核验的目标，共 {goals.length} 条；新增/修改会通知规划者并复活任务）
+              （最终可核验的目标，共 {goalTotal} 条；新增/修改会通知规划者并复活任务）
             </span>
           </CardTitle>
         </CardHeader>
@@ -570,6 +592,16 @@ export function OverviewTab({ taskId }: { taskId: string }) {
           ) : (
             <p className="text-muted-foreground text-sm">暂无目标，添加后规划者会据此派发探索意图并判定达成。</p>
           )}
+          <TablePagination
+            page={goalPage}
+            pageSize={goalPageSize}
+            total={goalTotal}
+            onPageChange={setGoalPage}
+            onPageSizeChange={(size) => {
+              setGoalPageSize(size);
+              setGoalPage(1);
+            }}
+          />
         </CardContent>
       </Card>
       {/* 操作约束管理：allow=允许 / deny=禁止。约束会在下一轮规划时注入 planner/worker 的系统
@@ -910,7 +942,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
           </div>
           <div>
             <div className="text-xs text-muted-foreground">运行中 Worker</div>
-            <div className="mt-1 text-lg font-semibold tabular-nums">{running.length}</div>
+            <div className="mt-1 text-lg font-semibold tabular-nums">{intentCounts.running}</div>
           </div>
           <div>
             <div className="text-xs text-muted-foreground">最近活动</div>
@@ -952,7 +984,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                 <span className="min-w-0 flex-1 truncate">{i.payload}</span>
               </div>
             ))}
-            {running.length === 0 && <p className="text-sm text-muted-foreground">暂无进行中意图</p>}
+            {intentCounts.running === 0 && <p className="text-sm text-muted-foreground">暂无进行中意图</p>}
           </CardContent>
         </Card>
 
@@ -964,19 +996,19 @@ export function OverviewTab({ taskId }: { taskId: string }) {
           </CardHeader>
           <CardContent className="grid grid-cols-2 gap-3 text-sm">
             <div>
-              <div className="text-2xl font-semibold tabular-nums text-red-600">{taskFindings.length}</div>
+              <div className="text-2xl font-semibold tabular-nums text-red-600">{findingCount}</div>
               <div className="text-xs text-muted-foreground">确认漏洞</div>
             </div>
             <div>
-              <div className="text-2xl font-semibold tabular-nums text-blue-600">{running.length}</div>
+              <div className="text-2xl font-semibold tabular-nums text-blue-600">{intentCounts.running}</div>
               <div className="text-xs text-muted-foreground">执行中</div>
             </div>
             <div>
-              <div className="text-2xl font-semibold tabular-nums">{open.length}</div>
+              <div className="text-2xl font-semibold tabular-nums">{intentCounts.open}</div>
               <div className="text-xs text-muted-foreground">frontier 待领</div>
             </div>
             <div>
-              <div className="text-2xl font-semibold tabular-nums text-red-600">{blocked.length}</div>
+              <div className="text-2xl font-semibold tabular-nums text-red-600">{intentCounts.blocked}</div>
               <div className="text-xs text-muted-foreground">被拦意图</div>
             </div>
           </CardContent>
@@ -1002,12 +1034,14 @@ export function OverviewTab({ taskId }: { taskId: string }) {
 
       {/* Blocked intents — 出错/被拦(如 LLM 网络问题)的意图，可一键重跑：置回 open，
           worker 会重新认领、从头再跑（已写回图谱的数据保留）；任务若已终态/暂停会自动复活。 */}
-      {blocked.length > 0 && (
+      {intentCounts.blocked > 0 && (
         <Card className="border-red-500/30">
           <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
             <CardTitle className="flex items-center gap-2 text-sm">
               <AlertTriangleIcon className="size-4 text-red-500" /> 被拦/出错意图
-              <span className="text-xs font-normal text-muted-foreground">（共 {blocked.length} 条，可重跑）</span>
+              <span className="text-xs font-normal text-muted-foreground">
+                （共 {intentCounts.blocked} 条，可重跑）
+              </span>
             </CardTitle>
             <Button size="sm" variant="outline" disabled={rerunning.has("__all__")} onClick={() => void rerunAll()}>
               <RefreshCwIcon className={`size-3.5 ${rerunning.has("__all__") ? "animate-spin" : ""}`} />
@@ -1031,9 +1065,9 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                 </Button>
               </div>
             ))}
-            {blocked.length > 20 && (
+            {intentCounts.blocked > blocked.length && (
               <p className="text-xs text-muted-foreground">
-                仅显示前 20 条，点「全部重跑」处理剩余 {blocked.length - 20} 条。
+                当前显示 {blocked.length} 条，点「全部重跑」处理其余 {intentCounts.blocked - blocked.length} 条。
               </p>
             )}
           </CardContent>
@@ -1042,9 +1076,9 @@ export function OverviewTab({ taskId }: { taskId: string }) {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-        <StatCard label="待领意图" value={open.length} icon={ShieldCheckIcon} sub="frontier 开放" />
-        <StatCard label="确认发现" value={taskFindings.length} icon={BugIcon} sub="本任务" />
-        <StatCard label="意图总数" value={intents.length} icon={AlertTriangleIcon} sub="本任务全部意图" />
+        <StatCard label="待领意图" value={intentCounts.open} icon={ShieldCheckIcon} sub="frontier 开放" />
+        <StatCard label="确认发现" value={findingCount} icon={BugIcon} sub="本任务" />
+        <StatCard label="意图总数" value={intentTotal} icon={AlertTriangleIcon} sub="本任务全部意图" />
       </div>
     </div>
   );

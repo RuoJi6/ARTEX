@@ -30,6 +30,7 @@ import type {
   Agent,
   ConvTokenSummary,
   Finding,
+  FindingStats,
   InterceptPending,
   LLMProfile,
   MCPServer,
@@ -166,6 +167,7 @@ export default function DashboardPage() {
   // data state
   const [tasks, setTasks] = React.useState<Task[]>([]);
   const [findings, setFindings] = React.useState<Finding[]>([]);
+  const [findingStats, setFindingStats] = React.useState<FindingStats | null>(null);
   const [stats, setStats] = React.useState<Stats | null>(null);
   const [settings, setSettings] = React.useState<Settings | null>(null);
   const [pending, setPending] = React.useState<InterceptPending[]>([]);
@@ -175,6 +177,7 @@ export default function DashboardPage() {
   const [usageStats, setUsageStats] = React.useState<UsageStats | null>(null);
   const [assetCounts, setAssetCounts] = React.useState<Record<string, number>>({});
   const [traffic, setTraffic] = React.useState<TrafficExchange[]>([]);
+  const [trafficCount, setTrafficCount] = React.useState(0);
   const [agents, setAgents] = React.useState<Agent[]>([]);
   const [mcpServers, setMcpServers] = React.useState<MCPServer[]>([]);
   const [skills, setSkills] = React.useState<SkillItem[]>([]);
@@ -228,6 +231,31 @@ export default function DashboardPage() {
     };
   }, []);
 
+  React.useEffect(() => {
+    let alive = true;
+    let loading = false;
+    const load = async () => {
+      if (loading) return;
+      loading = true;
+      try {
+        const [recent, summary] = await Promise.all([api.findingsPage({ page: 1, pageSize: 8 }), api.findingStats()]);
+        if (!alive) return;
+        setFindings(recent.items);
+        setFindingStats(summary);
+      } catch {
+        // Preserve the last successful snapshot and retry on the next interval.
+      } finally {
+        loading = false;
+      }
+    };
+    void load();
+    const timer = setInterval(load, 5000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+
   // The remaining fast sources stay batched so one poll causes a single render.
   React.useEffect(() => {
     let alive = true;
@@ -236,17 +264,15 @@ export default function DashboardPage() {
       if (loading) return;
       loading = true;
       try {
-        const [findings, stats, settings, pending, activity, tokens, conversationTokens] = await Promise.all([
-          api.findings(),
+        const [stats, settings, pending, activity, tokens, conversationTokens] = await Promise.all([
           api.stats(),
           api.settings(),
           api.interceptPending(),
-          api.activity(undefined, { limit: 30 }),
+          api.activity(undefined, { limit: 30, latest: true }),
           api.tokenStats(),
           api.conversationTokens(),
         ]);
         if (!alive) return;
-        setFindings(findings);
         setStats(stats);
         setSettings(settings);
         setPending(pending);
@@ -284,6 +310,7 @@ export default function DashboardPage() {
         ]);
         if (!alive) return;
         setTraffic(traf.exchanges ?? []);
+        setTrafficCount(traf.count ?? 0);
         setAssetCounts(counts ?? {});
         setAgents(agentList);
         setMcpServers(mcpList);
@@ -310,14 +337,6 @@ export default function DashboardPage() {
     for (const t of tasks) m[t.status] = (m[t.status] ?? 0) + 1;
     return m;
   }, [tasks]);
-
-  const findingsBySev = React.useMemo(() => {
-    const m = { critical: 0, high: 0, medium: 0, low: 0 };
-    for (const f of findings) {
-      if (f.severity in m) m[f.severity as keyof typeof m]++;
-    }
-    return m;
-  }, [findings]);
 
   const sortedTasks = React.useMemo(
     () =>
@@ -580,13 +599,13 @@ export default function DashboardPage() {
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
               <BugIcon className="size-3" /> 确认发现
             </div>
-            <div className="text-2xl font-semibold tabular-nums">{findings.length}</div>
+            <div className="text-2xl font-semibold tabular-nums">{findingStats?.total ?? 0}</div>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2.5 text-[10px]">
-            <span className="text-rose-500">严重 {findingsBySev.critical}</span>
-            <span className="text-red-400">高危 {findingsBySev.high}</span>
-            <span className="text-amber-400">中危 {findingsBySev.medium}</span>
-            <span className="text-slate-400">低危 {findingsBySev.low}</span>
+            <span className="text-rose-500">严重 {findingStats?.critical ?? 0}</span>
+            <span className="text-red-400">高危 {findingStats?.high ?? 0}</span>
+            <span className="text-amber-400">中危 {findingStats?.medium ?? 0}</span>
+            <span className="text-slate-400">低危 {findingStats?.low ?? 0}</span>
           </CardContent>
         </Card>
 
@@ -607,7 +626,7 @@ export default function DashboardPage() {
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
               <ActivityIcon className="size-3" /> 流量交互
             </div>
-            <div className="text-2xl font-semibold tabular-nums">{traffic.length}</div>
+            <div className="text-2xl font-semibold tabular-nums">{trafficCount}</div>
           </CardHeader>
           <CardContent className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
             {settings?.traffic_capture ? (
@@ -907,7 +926,7 @@ export default function DashboardPage() {
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-muted-foreground">
-                {activity.filter((a) => a.kind !== "usage").length} 条事件
+                最近 {activity.filter((a) => a.kind !== "usage").length} 条事件
               </span>
               <Link
                 href="/function/tasks"
@@ -1127,7 +1146,7 @@ export default function DashboardPage() {
 
         {/* 流量状态码 */}
         <Card className="p-4">
-          <SectionTitle icon={ActivityIcon} sub={`${traffic.length} 次请求`}>
+          <SectionTitle icon={ActivityIcon} sub={`最近 ${traffic.length} 次请求`}>
             流量状态码
           </SectionTitle>
 
