@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
+import { useTranslations } from "next-intl";
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { defaultHighlightStyle, HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
@@ -62,7 +63,7 @@ export function PacketCodeEditor({
   onChange,
   readOnly = false,
   wrapLines = true,
-  ariaLabel = "HTTP 报文代码",
+  ariaLabel,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -70,6 +71,9 @@ export function PacketCodeEditor({
   wrapLines?: boolean;
   ariaLabel?: string;
 }) {
+  const t = useTranslations("trafficEvidence.code");
+  const label = ariaLabel ?? t("label");
+  const [options] = React.useState(() => new Compartment());
   const host = React.useRef<HTMLDivElement>(null);
   const viewRef = React.useRef<EditorView | null>(null);
   const valueRef = React.useRef(value);
@@ -90,10 +94,7 @@ export function PacketCodeEditor({
         syntaxHighlighting(defaultHighlightStyle),
         syntaxHighlighting(packetHighlight),
         packetTheme,
-        ...(wrapLines ? [EditorView.lineWrapping] : []),
-        EditorView.editable.of(!readOnly),
-        EditorState.readOnly.of(readOnly),
-        EditorView.contentAttributes.of({ role: "textbox", "aria-label": ariaLabel, "aria-multiline": "true" }),
+        options.of([]),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) return;
           const next = update.state.doc.toString();
@@ -108,7 +109,16 @@ export function PacketCodeEditor({
       viewRef.current = null;
       view.destroy();
     };
-  }, [ariaLabel, readOnly, wrapLines]);
+  }, [options]);
+
+  React.useEffect(() => {
+    viewRef.current?.dispatch({ effects: options.reconfigure([
+      ...(wrapLines ? [EditorView.lineWrapping] : []),
+      EditorView.editable.of(!readOnly),
+      EditorState.readOnly.of(readOnly),
+      EditorView.contentAttributes.of({ role: "textbox", "aria-label": label, "aria-multiline": "true" }),
+    ]) });
+  }, [label, options, readOnly, wrapLines]);
 
   React.useEffect(() => {
     const view = viewRef.current;

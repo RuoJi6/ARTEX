@@ -1,6 +1,5 @@
 "use client";
 
-import { toast } from "sonner";
 import { create } from "zustand";
 
 import { getLocalStorageValue } from "../../lib/local-storage.client";
@@ -68,7 +67,7 @@ export function flush() {
       // response bodies. Never shrink the request drafts, even if they exceed quota.
       window.localStorage.setItem(STORAGE_KEY, serializeWorkspace(workspace, 0));
     } catch {
-      toast.error("工作区保存失败，浏览器存储空间不足或不可用，请备份请求草稿");
+      window.dispatchEvent(new Event("artex:repeater-storage-error"));
     }
   }
 }

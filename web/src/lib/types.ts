@@ -977,6 +977,7 @@ export interface TrafficHost {
 
 // ---- App settings (runtime toggles) ----
 export interface Settings {
+  output_language: "zh" | "en";
   traffic_capture: boolean;
   /** 是否向可见 Agent 暴露浏览器 MCP 的截图工具。默认关闭。 */
   browser_screenshot_enabled?: boolean;

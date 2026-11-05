@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import * as React from "react";
 
 import { ArrowUpRightIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, NetworkIcon } from "lucide-react";
@@ -21,8 +23,8 @@ export function intelligencePreview(text: string, limit = 260) {
   return chars.length > limit ? `${chars.slice(0, limit).join("")}…` : text;
 }
 const FIELDS = [
-  ["username", "账号", "blue"],
-  ["password", "密码", "violet"],
+  ["username", "username", "blue"],
+  ["password", "password", "violet"],
   ["token", "Token / API Key", "violet"],
   ["cookie", "Cookie", "amber"],
 ] as const;
@@ -62,16 +64,16 @@ function TrafficList({
   onTraffic?: (id: string) => void;
   onDetails?: () => void;
 }) {
+  const ui = useTranslations();
   const [expanded, setExpanded] = React.useState(false);
   const limit = detail ? 3 : 2;
   const visible = detail && expanded ? traffic : traffic.slice(0, limit);
   const remaining = traffic.length - limit;
   return (
-    <section aria-label="关联流量" className="min-w-0 space-y-2 rounded-lg border bg-muted/20 p-2.5">
+    <section aria-label={ui("tasksList.deleteTraffic")} className="min-w-0 space-y-2 rounded-lg border bg-muted/20 p-2.5">
       <div className="flex items-center gap-1.5 text-xs font-medium">
         <NetworkIcon className="size-3.5 text-muted-foreground" />
-        关联流量
-        <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-muted-foreground">{traffic.length} 条</span>
+        {ui("core.traffic.linkedTraffic")}<span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-muted-foreground">{ui("core.traffic.recordCount", { count: traffic.length })}</span>
       </div>
       <div className={cn("space-y-1.5", detail && expanded && "max-h-80 overflow-y-auto pr-1")}>
         {visible.map((ref) => {
@@ -99,7 +101,7 @@ function TrafficList({
               key={ref.id}
               type="button"
               title={ref.url}
-              aria-label={`查看流量 ${ref.method} ${ref.url}，编号 ${ref.id}`}
+              aria-label={ui("core.credentials.viewTraffic", { method: ref.method, url: ref.url, id: ref.id })}
               onClick={() => onTraffic?.(ref.id)}
               className="group flex w-full min-w-0 flex-col gap-1.5 rounded-md border bg-background p-2 text-left transition-colors hover:border-primary/40 hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
@@ -112,12 +114,12 @@ function TrafficList({
                     {ref.status}
                   </Badge>
                 ) : null}
-                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{host || "流量记录"}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{host || ui("core.credentials.trafficRecords")}</span>
                 <ArrowUpRightIcon className="size-3.5 shrink-0 text-muted-foreground group-hover:text-primary" />
               </span>
               <span className="block w-full truncate font-mono text-xs">{path}</span>
               <span className="text-[11px] text-muted-foreground">
-                {ref.side === "request" ? "请求中使用" : "响应中发现"}
+                {ref.side === "request" ? ui("core.credentials.usedInRequest") : ui("core.credentials.foundInResponse")}
               </span>
             </button>
           );
@@ -131,7 +133,7 @@ function TrafficList({
           aria-expanded={detail ? expanded : undefined}
           onClick={detail ? () => setExpanded(!expanded) : onDetails}
         >
-          {detail ? (expanded ? "收起流量" : `展开其余 ${remaining} 条流量`) : `还有 ${remaining} 条流量，查看详情`}
+          {detail ? (expanded ? ui("core.credentials.collapseTraffic") : ui("core.credentials.expandTraffic", { count: remaining })) : ui("core.credentials.moreTraffic", { count: remaining })}
           {detail ? expanded ? <ChevronUpIcon /> : <ChevronDownIcon /> : <ArrowUpRightIcon />}
         </Button>
       ) : null}
@@ -151,6 +153,7 @@ export function CredentialContent({
   onTraffic?: (id: string) => void;
   onDetails?: () => void;
 }) {
+  const ui = useTranslations();
   const analysis = item.kind === "credential" ? item.credentials : undefined;
   const accounts = analysis?.accounts ?? [];
   const ready = accounts.length > 0;
@@ -174,30 +177,30 @@ export function CredentialContent({
         <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
           <Badge variant="outline">
             {analysis.state === "processing"
-              ? "正在整理"
+              ? ui("core.credentials.processing")
               : analysis.state === "queued"
-                ? "等待整理"
+                ? ui("core.credentials.queued")
                 : analysis.method === "rules"
-                  ? "规则整理"
-                  : "Agent 整理"}
+                  ? ui("core.credentials.ruleProcessed")
+                  : ui("core.credentials.agentProcessed")}
           </Badge>
-          {analysis.method === "rules" ? <span>未调用模型</span> : null}
+          {analysis.method === "rules" ? <span>{ui("core.credentials.noModel")}</span> : null}
           {detail && analysis.model ? (
             <span>
               {analysis.model} ·{" "}
               {analysis.input_tokens + analysis.output_tokens > 0
-                ? `输入 ${analysis.input_tokens} / 输出 ${analysis.output_tokens} Token`
-                : "模型未返回 Token 用量"}
+                ? ui("core.credentials.tokens", { input: analysis.input_tokens, output: analysis.output_tokens })
+                : ui("core.credentials.noUsage")}
             </span>
           ) : null}
         </div>
       ) : !analysis && enabled && item.kind === "credential" ? (
-        <span className="text-xs text-muted-foreground">等待凭据整理</span>
+        <span className="text-xs text-muted-foreground">{ui("core.credentials.awaiting")}</span>
       ) : null}
       {ready ? (
         <section
           className={cn("flex min-w-0 flex-col gap-2 overflow-y-auto", detail ? "max-h-96" : "max-h-80")}
-          aria-label="结构化凭据"
+          aria-label={ui("core.credentials.structured")}
         >
           {visibleAccounts.map((account, index) => (
             <div
@@ -205,7 +208,7 @@ export function CredentialContent({
               className="flex min-w-0 flex-col gap-2 rounded-lg border p-2"
             >
               <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
-                <span>凭据 {index + 1}</span>
+                <span>{ui("core.credentials.credentialNumber", { number: index + 1 })}</span>
                 {account.label ? (
                   <span>· {detail ? account.label : intelligencePreview(account.label, 80)}</span>
                 ) : null}
@@ -224,7 +227,7 @@ export function CredentialContent({
                 {FIELDS.map(([field, label, tone]) =>
                   account[field] ? (
                     <div key={field} className="flex min-w-0 items-start gap-2">
-                      <dt className="min-w-10 shrink-0 pt-1 text-xs text-muted-foreground">{label}</dt>
+                      <dt className="min-w-10 shrink-0 pt-1 text-xs text-muted-foreground">{ui(`core.credentials.fields.${field}`)}</dt>
                       <dd className="flex min-w-0 flex-1 items-start gap-1">
                         <code
                           data-credential-field={field}
@@ -238,10 +241,10 @@ export function CredentialContent({
                         <Button
                           variant="ghost"
                           size="icon-xs"
-                          aria-label={`复制${label} ${index + 1}`}
+                          aria-label={ui("core.credentials.copyField", { field: ui(`core.credentials.fields.${field}`), index: index + 1 })}
                           onClick={async () => {
-                            if (await copyText(account[field] ?? "")) toast.success(`${label}已复制`);
-                            else toast.error("复制失败，请手动选择内容复制");
+                            if (await copyText(account[field] ?? "")) toast.success(ui("core.credentials.copied", { field: ui(`core.credentials.fields.${field}`) }));
+                            else toast.error(ui("approval.copyFailed"));
                           }}
                         >
                           <CopyIcon />
@@ -257,7 +260,7 @@ export function CredentialContent({
       ) : null}
       {!detail && ready && (accounts.length > 2 || fieldsTruncated) ? (
         <Button variant="link" size="sm" className="h-auto justify-start p-0 text-xs" onClick={onDetails}>
-          {accounts.length > 2 ? `还有 ${accounts.length - 2} 组凭据，查看详情` : "查看完整凭据"}
+          {accounts.length > 2 ? ui("core.credentials.moreAccounts", { count: accounts.length - 2 }) : ui("core.credentials.viewFull")}
         </Button>
       ) : null}
       {ready && analysis?.note ? <p className="text-xs text-muted-foreground">{analysis.note}</p> : null}
@@ -275,12 +278,11 @@ export function CredentialContent({
       ) : null}
       {!ready || detail ? (
         <div className={cn(detail ? "max-h-72 overflow-auto rounded-lg bg-muted p-3" : "")}>
-          {ready ? <p className="mb-2 text-xs text-muted-foreground">原始上报内容</p> : null}
+          {ready ? <p className="mb-2 text-xs text-muted-foreground">{ui("core.credentials.original")}</p> : null}
           <HighlightedOriginal text={detail ? pretty : intelligencePreview(pretty)} accounts={accounts} />
           {!detail && Array.from(pretty).length > 260 ? (
             <Button variant="link" size="sm" className="h-auto justify-start p-0 text-xs" onClick={onDetails}>
-              查看完整内容
-            </Button>
+              {ui("core.credentials.fullContent")}</Button>
           ) : null}
         </div>
       ) : null}
@@ -301,6 +303,7 @@ export function CredentialTrafficViewer({
   trafficId: string | null;
   onClose: () => void;
 }) {
+  const ui = useTranslations();
   const [data, setData] = React.useState<CredentialTrafficDetail | null>(null);
   const [error, setError] = React.useState("");
   React.useEffect(() => {
@@ -329,8 +332,8 @@ export function CredentialTrafficViewer({
     >
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>凭据关联流量</DialogTitle>
-          <DialogDescription className="break-all">{data?.reference.url ?? "读取已绑定的真实流量"}</DialogDescription>
+          <DialogTitle>{ui("core.credentials.linkedTraffic")}</DialogTitle>
+          <DialogDescription className="break-all">{data?.reference.url ?? ui("core.credentials.readingTraffic")}</DialogDescription>
         </DialogHeader>
         {error ? (
           <Alert variant="destructive">
@@ -340,22 +343,21 @@ export function CredentialTrafficViewer({
           <div className="flex flex-col gap-3">
             <p className="text-xs text-muted-foreground">
               {data.reference.method} · HTTP {data.reference.status} ·{" "}
-              {data.reference.side === "request" ? "请求包含匹配凭据" : "响应包含匹配凭据"}，不代表认证验证成功。
-            </p>
-            <p className="text-sm">绑定时保存的匹配片段</p>
+              {data.reference.side === "request" ? ui("core.credentials.requestMatch") : ui("core.credentials.responseMatch")}{ui("core.credentials.unverifiedSuffix")}</p>
+            <p className="text-sm">{ui("core.credentials.savedMatch")}</p>
             <HttpCodeBlock raw={data.reference.excerpt} />
             {data.unavailable ? (
               <Alert>
-                <AlertDescription>原始流量已删除或不可用，仍可查看上方保存的匹配片段。</AlertDescription>
+                <AlertDescription>{ui("core.credentials.deletedTraffic")}</AlertDescription>
               </Alert>
             ) : (
               <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="min-w-0">
-                  <p className="mb-1 px-1 text-sm font-medium">请求 Request</p>
+                  <p className="mb-1 px-1 text-sm font-medium">{ui("trafficEvidence.viewer.request")}</p>
                   <HttpCodeBlock raw={data.req ?? ""} />
                 </div>
                 <div className="min-w-0">
-                  <p className="mb-1 px-1 text-sm font-medium">响应 Response</p>
+                  <p className="mb-1 px-1 text-sm font-medium">{ui("trafficEvidence.viewer.response")}</p>
                   <HttpCodeBlock raw={data.resp ?? ""} />
                 </div>
               </div>

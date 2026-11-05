@@ -27,7 +27,7 @@ func GenerateAutoTitle(ctx context.Context, prov llm.Provider, content string) (
 		content = string([]rune(content)[:1000])
 	}
 	msg, _, _, err := prov.Complete(ctx, llm.CompletionRequest{
-		System:    []string{autoTitleSystemPrompt},
+		System:    []string{withOutputLanguage(autoTitleSystemPrompt)},
 		Messages:  []llm.Message{llm.UserText(content)},
 		MaxTokens: 96,
 		Thinking:  "disabled",

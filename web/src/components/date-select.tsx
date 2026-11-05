@@ -3,7 +3,8 @@
 import * as React from "react";
 
 import { format, parse } from "date-fns";
-import { zhCN } from "date-fns/locale/zh-CN";
+import { useTranslations } from "next-intl";
+import { useLocaleFormatting } from "@/i18n/formatting";
 import { CalendarDays, ChevronDown, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ export function DateSelect({
   value,
   onValueChange,
   optional = false,
-  placeholder = "选择日期",
+  placeholder,
   "aria-label": ariaLabel,
 }: {
   value?: string;
@@ -29,6 +30,8 @@ export function DateSelect({
   placeholder?: string;
   "aria-label"?: string;
 }) {
+  const t = useTranslations("date");
+  const formatting = useLocaleFormatting();
   const [open, setOpen] = React.useState(false);
   const selected = parseDate(value);
   return (
@@ -44,9 +47,9 @@ export function DateSelect({
           <span className="flex items-center gap-2">
             <CalendarDays className="size-4 text-muted-foreground" />
             {selected ? (
-              format(selected, "yyyy年M月d日", { locale: zhCN })
+              formatting.dateTime(selected, "shortDate")
             ) : (
-              <span className="text-muted-foreground">{placeholder}</span>
+              <span className="text-muted-foreground">{placeholder ?? t("select")}</span>
             )}
           </span>
           <span className="flex items-center gap-1">
@@ -57,7 +60,7 @@ export function DateSelect({
       <PopoverContent align="start" className="w-auto overflow-hidden p-0">
         <Calendar
           mode="single"
-          locale={zhCN}
+          locale={formatting.calendarLocale}
           captionLayout="dropdown"
           startMonth={new Date(2020, 0, 1)}
           endMonth={new Date(2100, 11, 31)}
@@ -79,7 +82,7 @@ export function DateSelect({
             }}
           >
             <X data-icon="inline-start" />
-            清除日期
+            {t("clear")}
           </Button>
         )}
       </PopoverContent>

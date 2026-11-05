@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { SendIcon, Settings2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -19,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { useLocaleFormatting } from "@/i18n/formatting";
 import { api } from "@/lib/api";
 
 import {
@@ -27,6 +29,7 @@ import {
   connectionOrigin,
   parseHeadersText,
   parseRawRequest,
+  RepeaterParseError,
 } from "./repeater-http";
 import { newId, type RepeaterTab } from "./repeater-state";
 import { useRepeaterStore } from "./repeater-store";
@@ -57,6 +60,8 @@ function responseTextFor(response: RepeaterTab["response"], mode: "raw" | "prett
 }
 
 export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
+  const t = useTranslations("repeater");
+  const format = useLocaleFormatting();
   const { useProxy, insecure, response } = tab;
   const updateTab = useRepeaterStore((state) => state.updateTab);
   const busy = useRepeaterStore((state) => state.inflight[tab.id] !== undefined);
@@ -66,6 +71,10 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
   const targetOrigin = tab.targetOrigin ?? (tab.rawRequest === undefined ? connectionOrigin(tab.url) : "");
   const requestText = buildRawRequest(tab);
   const responseText = responseTextFor(response, responseMode);
+  function parseError(error: unknown) {
+    if (error instanceof RepeaterParseError) return t(`errors.${error.code}`);
+    return (error as Error).message;
+  }
   function changeRequest(rawRequest: string) {
     try {
       const { httpVersion: _version, ...parts } = parseRawRequest(rawRequest, targetOrigin);
@@ -85,7 +94,7 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
     try {
       parsed = parseRawRequest(requestText, targetOrigin);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(parseError(error));
       return;
     }
     const { method, url: target, headersText, body, httpVersion } = parsed;
@@ -115,21 +124,21 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
         at: new Date().toISOString(),
       });
     } catch (error) {
-      if (store.isCurrentSend(tab.id, requestGeneration)) toast.error((error as Error).message);
+      if (store.isCurrentSend(tab.id, requestGeneration)) toast.error(parseError(error));
     } finally {
       store.clearInflight(tab.id, requestGeneration);
     }
   }
 
   return (
-    <section aria-label="请求编辑器" className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+    <section aria-label={t("request")} className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2 border-b px-1 pb-2">
-        <span className="text-muted-foreground text-xs">目标</span>
+        <span className="text-muted-foreground text-xs">{t("target")}</span>
         <code
           className="min-w-0 max-w-[min(60vw,44rem)] truncate rounded bg-muted px-2 py-1 font-mono text-xs"
           title={targetOrigin || tab.url}
         >
-          {targetOrigin || connectionOrigin(tab.url) || "按 Host 请求头（默认 HTTPS）"}
+          {targetOrigin || connectionOrigin(tab.url) || t("targetFallback")}
         </code>
         <Button
           variant="outline"
@@ -141,15 +150,15 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
           }}
         >
           <Settings2 data-icon="inline-start" />
-          目标设置
+          {t("targetSettings")}
         </Button>
         <Button className="ml-auto" disabled={busy} onClick={() => void send()}>
           <SendIcon data-icon="inline-start" />
-          {busy ? "发送中…" : "发送"}
+          {busy ? t("sending") : t("send")}
         </Button>
       </div>
       <FieldSet className="flex-row flex-wrap items-center gap-3 border-b px-1 pb-2 text-xs">
-        <FieldLegend className="sr-only">发送选项</FieldLegend>
+        <FieldLegend className="sr-only">{t("sendOptions")}</FieldLegend>
         <FieldLabel className="flex items-center gap-2" htmlFor="repeater-use-proxy">
           <Checkbox
             id="repeater-use-proxy"
@@ -157,7 +166,7 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
             checked={useProxy}
             onCheckedChange={(value) => setUseProxy(value === true)}
           />
-          经流量代理
+          {t("useProxy")}
         </FieldLabel>
         <FieldLabel className="flex items-center gap-2" htmlFor="repeater-insecure">
           <Checkbox
@@ -166,7 +175,7 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
             checked={insecure}
             onCheckedChange={(value) => setInsecure(value === true)}
           />
-          跳过 TLS 校验
+          {t("insecure")}
         </FieldLabel>
         {response ? (
           <div className="ml-auto flex items-center gap-2 text-muted-foreground text-xs">
@@ -176,15 +185,15 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
               </Badge>
             ) : null}
             <span>{response.elapsed_ms} ms</span>
-            <span>{response.body_bytes.toLocaleString()} 字节</span>
-            {response.body_truncated ? <Badge variant="outline">正文已截断</Badge> : null}
+            <span>{t("bodyBytes", { count: format.number(response.body_bytes, "count") })}</span>
+            {response.body_truncated ? <Badge variant="outline">{t("bodyTruncated")}</Badge> : null}
           </div>
         ) : null}
       </FieldSet>
       <div className="grid min-h-0 flex-1 auto-rows-[minmax(300px,1fr)] gap-2 overflow-hidden lg:auto-rows-auto lg:grid-cols-2">
         <RepeaterTextPane
           id="repeater-request"
-          label="请求"
+          label={t("request")}
           value={requestText}
           onChange={changeRequest}
           disabled={busy}
@@ -204,9 +213,9 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
           ) : null}
           <RepeaterTextPane
             id="repeater-response"
-            label="响应"
+            label={t("responsePane")}
             value={responseText}
-            placeholder="发送后显示原始响应"
+            placeholder={t("responsePlaceholderText")}
             syntaxHighlight
             panelClassName="bg-background"
             toolbar={
@@ -237,10 +246,8 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
       <Dialog open={targetOpen} onOpenChange={setTargetOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>修改发送目标</DialogTitle>
-            <DialogDescription>
-              设置连接地址和 HTTP/HTTPS。方法、路径和 Host 均在左侧报文中编辑；Host 可以与连接目标不同。
-            </DialogDescription>
+            <DialogTitle>{t("modifyTarget")}</DialogTitle>
+            <DialogDescription>{t("targetDescription")}</DialogDescription>
           </DialogHeader>
           <form
             className="flex flex-col gap-4"
@@ -248,7 +255,7 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
               event.preventDefault();
               const origin = targetDraft.trim() ? connectionOrigin(targetDraft.trim()) : "";
               if (targetDraft.trim() && !origin) {
-                toast.error("请填写 http:// 或 https:// 开头的地址");
+                toast.error(t("invalidTarget"));
                 return;
               }
               try {
@@ -261,19 +268,19 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
             }}
           >
             <Field>
-              <FieldLabel htmlFor="repeater-target">发送目标</FieldLabel>
+              <FieldLabel htmlFor="repeater-target">{t("targetLabel")}</FieldLabel>
               <Input
                 id="repeater-target"
-                placeholder="https://example.com:443，留空按 Host 连接"
+                placeholder={t("targetPlaceholder")}
                 value={targetDraft}
                 onChange={(event) => setTargetDraft(event.target.value)}
               />
             </Field>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setTargetOpen(false)}>
-                取消
+                {t("cancel")}
               </Button>
-              <Button type="submit">保存目标</Button>
+              <Button type="submit">{t("saveTarget")}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

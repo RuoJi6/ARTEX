@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useTranslations } from "next-intl";
+import { useLocaleFormatting } from "@/i18n/formatting";
 
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
@@ -38,6 +40,8 @@ export function TablePagination({
   onPageSizeChange,
   pageSizeOptions = [10, 20, 50],
 }: TablePaginationProps) {
+  const t = useTranslations("pagination");
+  const format = useLocaleFormatting();
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(Math.max(1, page), totalPages);
   const from = total === 0 ? 0 : (safePage - 1) * pageSize + 1;
@@ -53,7 +57,7 @@ export function TablePagination({
     <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 lg:px-6">
       <div className="text-muted-foreground flex items-center gap-2 text-xs">
         <Select value={String(pageSize)} onValueChange={(v) => onPageSizeChange(Number(v))}>
-          <SelectTrigger size="sm" className="h-7 w-16">
+          <SelectTrigger size="sm" className="h-7 w-16" aria-label={t("pageSize")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -64,13 +68,13 @@ export function TablePagination({
             ))}
           </SelectContent>
         </Select>
-        <span>条/页</span>
+        <span>{t("perPage")}</span>
         {total > 0 ? (
           <span className="tabular-nums">
-            {from}–{to} / 共 {total} 条
+            {t("range", { from, to, total })}
           </span>
         ) : (
-          <span>共 0 条</span>
+          <span>{t("empty")}</span>
         )}
       </div>
 
@@ -83,7 +87,7 @@ export function TablePagination({
                 size="icon-sm"
                 disabled={safePage === 1}
                 onClick={() => onPageChange(safePage - 1)}
-                aria-label="上一页"
+                aria-label={t("previous")}
               >
                 <ChevronLeftIcon className="size-4" />
               </Button>
@@ -101,7 +105,7 @@ export function TablePagination({
                     onClick={() => onPageChange(p)}
                     aria-current={p === safePage ? "page" : undefined}
                   >
-                    {p}
+                    {format.number(p, "count")}
                   </Button>
                 </PaginationItem>
               ),
@@ -112,7 +116,7 @@ export function TablePagination({
                 size="icon-sm"
                 disabled={safePage === totalPages}
                 onClick={() => onPageChange(safePage + 1)}
-                aria-label="下一页"
+                aria-label={t("next")}
               >
                 <ChevronRightIcon className="size-4" />
               </Button>

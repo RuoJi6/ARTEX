@@ -154,7 +154,7 @@ func ExtractCredentials(ctx context.Context, prov llm.Provider, prompt, raw stri
 		prompt = CredentialProcessorPrompt
 	}
 	data, _ := json.Marshal(map[string]string{"raw_content": raw})
-	msg, stop, usage, err := prov.Complete(ctx, llm.CompletionRequest{System: []string{prompt}, Messages: []llm.Message{llm.UserText(string(data))}, MaxTokens: maxTokens, Thinking: "disabled"})
+	msg, stop, usage, err := prov.Complete(ctx, llm.CompletionRequest{System: []string{withOutputLanguage(prompt)}, Messages: []llm.Message{llm.UserText(string(data))}, MaxTokens: maxTokens, Thinking: "disabled"})
 	if err != nil {
 		return nil, usage, errors.New("模型调用未完成，请检查模型配置后手动重试")
 	}

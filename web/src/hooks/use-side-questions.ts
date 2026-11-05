@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 
 import { toast } from "sonner";
 
@@ -23,6 +24,7 @@ function merge(old: SideExchange[], incoming: SideExchange[]) {
 }
 
 export function useSideQuestions(parent: string | null) {
+  const t = useTranslations("sideQuestion");
   const [stateParent, setStateParent] = useState(parent);
   const current = stateParent === parent;
   const [open, setOpen] = useState(false);
@@ -33,7 +35,7 @@ export function useSideQuestions(parent: string | null) {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [nextCursor, setNextCursor] = useState(0);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | { code: "parseError" }>("");
   const [loadError, setLoadError] = useState("");
   const epoch = useRef(0);
   const [streamEpoch, setStreamEpoch] = useState(0);
@@ -142,7 +144,7 @@ export function useSideQuestions(parent: string | null) {
         restoreFailedDraft([item]);
         if (item.status !== "running") stream.close();
       } catch {
-        setError("旁路数据解析失败，请重新打开面板");
+        setError({ code: "parseError" });
       }
     });
     stream.addEventListener("cleared", () => {
@@ -240,7 +242,7 @@ export function useSideQuestions(parent: string | null) {
     setDraft,
     busy: current && busy,
     loading: !current || loading,
-    error: current ? error || loadError : "",
+    error: current ? (typeof error === "string" ? error || loadError : t(error.code)) : "",
     running,
     nextCursor: current ? nextCursor : 0,
     load,

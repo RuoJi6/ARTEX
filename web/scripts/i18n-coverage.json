@@ -1,0 +1,128 @@
+{
+  "hooks/use-side-questions.ts": {},
+  "app/(main)/chat/page.tsx": {},
+  "app/(main)/function/commands/page.tsx": {},
+  "app/(main)/function/findings/_components/asset-tree.tsx": {},
+  "app/(main)/function/findings/detail/lineage.tsx": {},
+  "app/(main)/function/tasks/detail/_tabs/assets-tab.tsx": {},
+  "app/(main)/function/tasks/detail/_tabs/broadcast-tab.tsx": {},
+  "app/(main)/function/workspace/page.tsx": {},
+  "app/(main)/system/agents/page.tsx": {},
+  "app/(main)/system/intercept/assets/page.tsx": {},
+  "app/(main)/system/llm/_components/retry.tsx": {},
+  "app/(main)/system/llm/page.tsx": {},
+  "app/(main)/system/mcp/page.tsx": {},
+  "app/(main)/system/notify/_components/channel-form.tsx": {},
+  "app/(main)/system/notify/_components/delivery-list.tsx": {},
+  "app/(main)/system/notify/_components/stat-tile.tsx": {},
+  "app/(main)/system/notify/page.tsx": {},
+  "app/(main)/system/skills/page.tsx": {},
+  "app/(main)/system/tools/page.tsx": {},
+  "components/agent-editor.tsx": {},
+  "components/approval-execution-focus.tsx": {},
+  "components/asset-dsl-search.tsx": {},
+  "components/exploration-graph.tsx": {},
+  "components/finding-retest-dialog.tsx": {},
+  "components/finding-retest-panel.tsx": {},
+  "components/link-traffic-dialog.tsx": {},
+  "components/scope-text-editor.tsx": {},
+  "components/traffic-picker-dialog.tsx": {},
+  "components/ui/sortable-head.tsx": {},
+  "components/transcript.tsx": {},
+  "app/(main)/function/assets/page.tsx": {},
+  "app/(main)/function/findings/_components/findings-table.tsx": {},
+  "app/(main)/function/findings/detail/page.tsx": {},
+  "app/(main)/function/findings/page.tsx": {},
+  "app/(main)/function/llm-records/page.tsx": {},
+  "app/(main)/function/tasks/detail/_tabs/coverage-graph-tab.tsx": {},
+  "app/(main)/function/tasks/detail/_tabs/findings-tab.tsx": {},
+  "app/(main)/function/tasks/detail/_tabs/retests-tab.tsx": {},
+  "app/(main)/system/intercept/page.tsx": {},
+  "app/(main)/system/logs/page.tsx": {
+    "MOCK_LOGS": [
+      "task t-acme-web: 第 3 轮规划，生成意图 i-4",
+      "block bash: 目标越界 out.evil.example 不在 scope 内",
+      "report_finding: Default Credentials (high) 已落库",
+      "intercept: mysqldump 命中破坏性规则，等待人工审批"
+    ]
+  },
+  "components/approval-records.tsx": {
+    "source": [
+      "[模型]"
+    ]
+  },
+  "components/finding-traffic-panel.tsx": {},
+  "components/http-code-block.tsx": {},
+  "components/side-question-workspace.tsx": {},
+  "components/traffic-evidence-viewer.tsx": {},
+  "components/intelligence-panel.tsx": {
+    "KINDS": [
+      "凭据",
+      "重要线索",
+      "敏感数据"
+    ],
+    "STATUS": [
+      "未验证",
+      "已验证",
+      "已失效",
+      "待跟进",
+      "跟进中",
+      "已排除",
+      "已转漏洞",
+      "疑似",
+      "已确认",
+      "已排除"
+    ]
+  },
+  "components/credential-content.tsx": {},
+  "components/traffic-history.tsx": {},
+  "components/finding-auto-chat.tsx": {
+    "FindingAutoChat": [
+      "漏洞 #",
+      "漏洞 #",
+      "漏洞 #",
+      "漏洞 #",
+      "@[漏洞#"
+    ]
+  },
+  "components/finding-reproduction-panel.tsx": {
+    "SECTION_HEADINGS": [
+      "概述",
+      "影响与危害",
+      "受影响范围",
+      "最终结果",
+      "根因分析",
+      "修复建议"
+    ]
+  },
+  "components/finding-case-list.tsx": {},
+  "app/(main)/function/findings/case/page.tsx": {
+    "CaseDetail": [
+      "人工撤销归并"
+    ]
+  },
+  "app/(main)/system/notify/_components/channel-fields.ts": {},
+  "components/repeater/repeater-editor.tsx": {},
+  "components/repeater/repeater-history.tsx": {},
+  "components/repeater/repeater-text-pane.tsx": {},
+  "components/repeater/repeater-workspace.tsx": {
+    "RepeaterWorkspace": [
+      "默认"
+    ]
+  },
+  "components/repeater/repeater-navigator.tsx": {
+    "RepeaterNavigator": [
+      "默认"
+    ]
+  },
+  "app/(main)/function/schedules/page.tsx": {},
+  "app/(main)/function/sync/page.tsx": {},
+  "components/finding-date-filter.tsx": {},
+  "components/packet-code-editor.tsx": {},
+  "lib/system-activity.ts": {
+    "originParts": [
+      "任务起点：",
+      "；目标："
+    ]
+  }
+}

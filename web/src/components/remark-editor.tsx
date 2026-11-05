@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useTranslations } from "next-intl";
 
 import { PencilIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -19,11 +20,13 @@ type EditorProps = {
 };
 
 export function RemarkEditor(props: EditorProps) {
-  return <InlineTextEditor {...props} multiline fieldName="备注" maxCharacters={MAX_TASK_REMARK_RUNES} emptyLabel="添加备注" />;
+  const t = useTranslations("inlineEditor");
+  return <InlineTextEditor {...props} multiline fieldName={t("remark")} maxCharacters={MAX_TASK_REMARK_RUNES} emptyLabel={t("addRemark")} />;
 }
 
 export function ScheduleNameEditor(props: EditorProps) {
-  return <InlineTextEditor {...props} multiline={false} fieldName="名称" maxCharacters={200} emptyLabel="未命名" />;
+  const t = useTranslations("inlineEditor");
+  return <InlineTextEditor {...props} multiline={false} fieldName={t("name")} maxCharacters={200} emptyLabel={t("unnamed")} />;
 }
 
 function InlineTextEditor({
@@ -35,10 +38,13 @@ function InlineTextEditor({
   maxCharacters,
   emptyLabel,
 }: EditorProps & { multiline: boolean; fieldName: string; maxCharacters: number; emptyLabel: string }) {
+  const t = useTranslations("inlineEditor");
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(value);
   const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState("");
+  const [error, setError] = React.useState<"" | "required" | "tooLong" | "saveFailed">("");
+  const [errorDetail, setErrorDetail] = React.useState("");
+  const errorMessage = error ? t(error, { field: fieldName, max: maxCharacters, detail: errorDetail }) : "";
   const inputRef = React.useRef<HTMLInputElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const cancelOnBlurRef = React.useRef(false);
@@ -68,12 +74,12 @@ function InlineTextEditor({
       return;
     }
     if (!multiline && next.length === 0) {
-      setError("名称不能为空");
+      setError("required");
       refocus();
       return;
     }
     if (Array.from(next).length > maxCharacters) {
-      setError(`${fieldName}最多 ${maxCharacters} 个字符`);
+      setError("tooLong");
       refocus();
       return;
     }
@@ -81,10 +87,11 @@ function InlineTextEditor({
     setSaving(true);
     try {
       await onSave(next);
-      toast.success(`${fieldName}已保存`);
+      toast.success(t("saved", { field: fieldName }));
       setEditing(false);
     } catch (cause) {
-      setError(`${fieldName}保存失败：${(cause as Error).message}`);
+      setError("saveFailed");
+      setErrorDetail((cause as Error).message);
       refocus();
     } finally {
       savingRef.current = false;
@@ -98,10 +105,10 @@ function InlineTextEditor({
       autoFocus: true,
       disabled: saving,
       "aria-busy": saving,
-      "aria-label": `${label}${fieldName}`,
+      "aria-label": t("inputLabel", { label, field: fieldName }),
       "aria-invalid": error.length > 0,
       "aria-describedby": error ? errorID : undefined,
-      title: multiline ? "Enter 保存，Shift+Enter 换行，Esc 取消；留空可清除备注" : "Enter 或失焦保存，Esc 取消",
+      title: multiline ? t("remarkHint") : t("nameHint"),
       onFocus: (event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => event.currentTarget.select(),
       onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         setDraft(event.target.value);
@@ -134,7 +141,7 @@ function InlineTextEditor({
         )}
         {error ? (
           <p id={errorID} role="alert" className="whitespace-normal text-destructive text-xs">
-            {error}
+            {errorMessage}
           </p>
         ) : null}
       </div>
@@ -156,8 +163,8 @@ function InlineTextEditor({
       <button
         type="button"
         className="min-w-0 truncate rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={`${label}${fieldName}，点击编辑`}
-        title={value.length > 0 ? value : `点击编辑${fieldName}`}
+        aria-label={t("clickToEdit", { label, field: fieldName })}
+        title={value.length > 0 ? value : t("editHint", { field: fieldName })}
         onClick={startEditing}
       >
         {value.length > 0 ? (
@@ -173,14 +180,14 @@ function InlineTextEditor({
             variant="ghost"
             size="icon-xs"
             className="shrink-0 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within/inline-editor:opacity-100 [@media(hover:hover)]:group-hover/inline-editor:opacity-100"
-            aria-label={`编辑${label}的${fieldName}`}
+            aria-label={t("editLabel", { label, field: fieldName })}
             onClick={startEditing}
           >
             <PencilIcon />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="top" sideOffset={6}>
-          编辑{fieldName}：输入完成后按 Enter 或点击其他位置保存，按 Esc 取消。
+          {t("editTooltip", { field: fieldName })}
         </TooltipContent>
       </Tooltip>
     </div>

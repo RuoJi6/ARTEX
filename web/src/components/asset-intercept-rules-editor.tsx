@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useTranslations } from "next-intl";
 
 import { PlusIcon, Trash2Icon } from "lucide-react";
 
@@ -34,6 +35,8 @@ export function AssetInterceptRulesEditor({
   value: AssetInterceptRuleInput[];
   onChange: (v: AssetInterceptRuleInput[]) => void;
 }) {
+  const t = useTranslations("taskRules");
+
   function update(i: number, patch: Partial<AssetInterceptRuleInput>) {
     onChange(value.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   }
@@ -49,37 +52,41 @@ export function AssetInterceptRulesEditor({
         const ph = ASSET_INTERCEPT_KIND_OPTIONS.find((o) => o.value === r.kind)?.placeholder ?? "";
         return (
           // biome-ignore lint/suspicious/noArrayIndexKey: 行无稳定 id，按索引受控即可
-          <div key={i} className="flex items-center gap-2">
+          <div key={i} className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] items-center gap-2">
             <NativeSelect
               size="sm"
-              className="w-[84px] shrink-0"
+              className="w-full min-w-0"
+              aria-label={t("action", { index: i + 1 })}
               value={r.action}
               onChange={(e) => update(i, { action: e.target.value as "block" | "allow" })}
             >
-              <NativeSelectOption value="block">拦截</NativeSelectOption>
-              <NativeSelectOption value="allow">允许</NativeSelectOption>
+              <NativeSelectOption value="block">{t("block")}</NativeSelectOption>
+              <NativeSelectOption value="allow">{t("allow")}</NativeSelectOption>
             </NativeSelect>
             <NativeSelect
               size="sm"
-              className="w-[120px] shrink-0"
+              className="w-full min-w-0"
+              aria-label={t("kind", { index: i + 1 })}
               value={r.kind}
               onChange={(e) => update(i, { kind: e.target.value as AssetInterceptKind })}
             >
               {ASSET_INTERCEPT_KIND_OPTIONS.map((o) => (
                 <NativeSelectOption key={o.value} value={o.value}>
-                  {o.label}
+                  {t.has(o.value) ? t(o.value) : o.label}
                 </NativeSelectOption>
               ))}
             </NativeSelect>
             <Input
-              className="flex-1"
+              className="col-span-3 row-start-2 min-w-0"
+              aria-label={t("pattern", { index: i + 1 })}
               placeholder={ph}
               value={r.pattern}
               onChange={(e) => update(i, { pattern: e.target.value })}
             />
             <Input
-              className="w-[120px] shrink-0"
-              placeholder="备注(可选)"
+              className="col-span-3 row-start-3 min-w-0"
+              aria-label={t("note", { index: i + 1 })}
+              placeholder={t("notePlaceholder")}
               value={r.note}
               onChange={(e) => update(i, { note: e.target.value })}
             />
@@ -87,7 +94,8 @@ export function AssetInterceptRulesEditor({
               type="button"
               size="icon"
               variant="ghost"
-              className="text-destructive hover:text-destructive size-8 shrink-0"
+              className="col-start-3 row-start-1 text-destructive hover:text-destructive size-8 shrink-0"
+              aria-label={t("remove", { index: i + 1 })}
               onClick={() => remove(i)}
             >
               <Trash2Icon className="size-4" />
@@ -96,7 +104,7 @@ export function AssetInterceptRulesEditor({
         );
       })}
       <Button type="button" size="sm" variant="outline" className="w-fit" onClick={add}>
-        <PlusIcon className="size-4" /> 添加一条
+        <PlusIcon className="size-4" /> {t("add")}
       </Button>
     </div>
   );

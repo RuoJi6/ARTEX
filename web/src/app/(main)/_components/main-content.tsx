@@ -3,6 +3,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -42,6 +43,7 @@ export function MainContent({ children }: { children: ReactNode }) {
 }
 
 function MainContentInner({ children }: { children: ReactNode }) {
+  const t = useTranslations("header");
   const currentUser = useCurrentUser();
   const pathname = usePathname();
   const [version, setVersion] = useState("");
@@ -80,7 +82,7 @@ function MainContentInner({ children }: { children: ReactNode }) {
           <div className="flex shrink-0 items-center gap-2">
             <LiveClock />
             {version && (
-              <span className="font-medium text-muted-foreground text-xs tabular-nums">版本 · {version}</span>
+              <span className="hidden font-medium text-muted-foreground text-xs tabular-nums sm:inline">{t("version", { version })}</span>
             )}
             <UpdateBadge />
             <LayoutControls />

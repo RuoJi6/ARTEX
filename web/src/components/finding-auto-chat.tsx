@@ -1,5 +1,9 @@
 "use client";
 
+import { useLocaleFormatting } from "@/i18n/formatting";
+
+import { useTranslations } from "next-intl";
+
 import * as React from "react";
 
 import { ArrowUpIcon, BotIcon, HistoryIcon, Loader2Icon, PlusIcon, SquareIcon, Trash2Icon, XIcon } from "lucide-react";
@@ -24,13 +28,13 @@ export function FindingAutoChat({
   findingTitle,
   agentKey = "auto",
   agentLabel = "Auto Agent",
-  promptPlaceholder = "询问这个漏洞…",
+  promptPlaceholder,
   modal = false,
   initialConversationId,
   open,
   onOpenChange,
 }: {
-    findingId: string;
+  findingId: string;
   findingTitle: string;
   agentKey?: string;
   agentLabel?: string;
@@ -40,6 +44,10 @@ export function FindingAutoChat({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const format = useLocaleFormatting();
+  const ui = useTranslations();
+  const uiRef = React.useRef(ui);
+  uiRef.current = ui;
   const [conversation, setConversation] = React.useState<Conversation | null>(null);
   const [messages, setMessages] = React.useState<Activity[]>([]);
   const [input, setInput] = React.useState("");
@@ -65,7 +73,7 @@ export function FindingAutoChat({
       window.localStorage.setItem(storageKey, String(created.id));
       setConversation(created);
     } catch (error) {
-      toast.error(`创建 Auto 对话失败：${(error as Error).message}`);
+      toast.error(uiRef.current("core.autoChat.createFailed", { error: (error as Error).message }));
     } finally {
       setLoading(false);
     }
@@ -184,7 +192,7 @@ export function FindingAutoChat({
       setRunning(true);
     } catch (error) {
       setInput(question);
-      toast.error(`发送失败：${(error as Error).message}`);
+      toast.error(ui("core.autoChat.sendFailed", { error: (error as Error).message }));
     } finally {
       setSending(false);
     }
@@ -209,9 +217,9 @@ export function FindingAutoChat({
       setRunning(false);
       setManualEmpty(true);
       setHistory((items) => items.filter((item) => item.id !== conversation.id));
-      toast.success("已删除当前漏洞对话");
+      toast.success(ui("core.autoChat.deleted"));
     } catch (error) {
-      toast.error(`删除对话失败：${(error as Error).message}`);
+      toast.error(ui("core.autoChat.deleteFailed", { error: (error as Error).message }));
     }
   };
 
@@ -221,7 +229,7 @@ export function FindingAutoChat({
     try {
       await api.stopConversation(conversation.id);
     } catch (error) {
-      toast.error(`停止失败：${(error as Error).message}`);
+      toast.error(ui("core.autoChat.stopFailed", { error: (error as Error).message }));
     } finally {
       setStopping(false);
     }
@@ -241,21 +249,21 @@ export function FindingAutoChat({
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-2 font-medium">
               {agentLabel}
-              {running && <span className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 text-blue-600 text-xs"><span className="size-1.5 animate-pulse rounded-full bg-blue-500" />运行中</span>}
+              {running && <span className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 text-blue-600 text-xs"><span className="size-1.5 animate-pulse rounded-full bg-blue-500" />{ui("status.task.running")}</span>}
             </p>
-            <p className="truncate text-muted-foreground text-xs">漏洞 #{findingId} · {safeTitle}</p>
+            <p className="truncate text-muted-foreground text-xs">{ui("core.autoChat.findingNumber")}{findingId} · {safeTitle}</p>
           </div>
-          <Button variant="ghost" size="icon-sm" onClick={() => void createConversation()} title="新建漏洞对话" aria-label="新建漏洞对话">
+          <Button variant="ghost" size="icon-sm" onClick={() => void createConversation()} title={ui("core.autoChat.new")} aria-label={ui("core.autoChat.new")}>
             <PlusIcon />
           </Button>
           <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
             <PopoverTrigger asChild>
-              <Button variant="ghost" size="icon-sm" title="查看当前漏洞的历史对话" aria-label="查看当前漏洞的历史对话">
+              <Button variant="ghost" size="icon-sm" title={ui("core.autoChat.historyTitle")} aria-label={ui("core.autoChat.historyTitle")}>
                 <HistoryIcon />
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-80 p-2">
-              <p className="px-2 py-1 text-muted-foreground text-xs">漏洞历史对话</p>
+              <p className="px-2 py-1 text-muted-foreground text-xs">{ui("core.autoChat.history")}</p>
               <div className="max-h-64 overflow-y-auto">
                 {history.length ? history.map((item) => (
                   <button
@@ -266,21 +274,21 @@ export function FindingAutoChat({
                   >
                     <span className="flex items-center gap-2 whitespace-normal break-words text-sm leading-5">
                       {item.title}
-                      {item.id === conversation?.id && <span className="shrink-0 text-primary text-xs">当前</span>}
+                      {item.id === conversation?.id && <span className="shrink-0 text-primary text-xs">{ui("taskProfiles.current")}</span>}
                     </span>
                     <span className="flex items-center gap-2 text-muted-foreground text-xs">
-                      #{item.id} · {new Date(item.updated_at).toLocaleString("zh-CN")}
-                      {item.running && <span className="inline-flex items-center gap-1 text-blue-600"><span className="size-1.5 animate-pulse rounded-full bg-blue-500" />运行中</span>}
+                      #{item.id} · {format.dateTime(new Date(item.updated_at), "timestamp")}
+                      {item.running && <span className="inline-flex items-center gap-1 text-blue-600"><span className="size-1.5 animate-pulse rounded-full bg-blue-500" />{ui("status.task.running")}</span>}
                     </span>
                   </button>
-                )) : <p className="px-2 py-3 text-muted-foreground text-xs">暂无历史对话</p>}
+                )) : <p className="px-2 py-3 text-muted-foreground text-xs">{ui("core.autoChat.emptyHistory")}</p>}
               </div>
             </PopoverContent>
           </Popover>
-          <Button variant="ghost" size="icon-sm" onClick={() => void deleteConversation()} disabled={!conversation} title="删除当前漏洞对话" aria-label="删除当前漏洞对话">
+          <Button variant="ghost" size="icon-sm" onClick={() => void deleteConversation()} disabled={!conversation} title={ui("core.autoChat.delete")} aria-label={ui("core.autoChat.delete")}>
             <Trash2Icon />
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => onOpenChange(false)} aria-label="关闭 Auto 对话">
+          <Button variant="ghost" size="icon-sm" onClick={() => onOpenChange(false)} aria-label={ui("core.autoChat.close")}>
             <XIcon />
           </Button>
         </header>
@@ -294,12 +302,11 @@ export function FindingAutoChat({
           <div className="w-full min-w-0 max-w-full">
             {loading ? (
               <div className="flex items-center justify-center py-10 text-muted-foreground text-sm">
-                <Loader2Icon className="mr-2 size-4 animate-spin" /> 正在创建 Auto 对话…
-              </div>
+                <Loader2Icon className="mr-2 size-4 animate-spin" /> {ui("core.autoChat.creating")}</div>
             ) : messages.length ? (
               <Transcript activity={messages} chat live={running} fetchDetail={(seq) => api.conversationMsgDetail(conversation?.id ?? 0, seq)} />
             ) : (
-              <p className="py-10 text-center text-muted-foreground text-sm">{conversation ? "请输入你想了解的内容。" : "点击上方 + 新建漏洞对话。"}</p>
+              <p className="py-10 text-center text-muted-foreground text-sm">{conversation ? ui("core.autoChat.askHint") : ui("core.autoChat.newHint")}</p>
             )}
           </div>
         </div>
@@ -311,7 +318,7 @@ export function FindingAutoChat({
               inputGroup
               onValueChange={setInput}
               disabled={!conversation || loading || sending || running}
-              placeholder={promptPlaceholder}
+              placeholder={promptPlaceholder ?? ui("core.autoChat.placeholder")}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
@@ -320,9 +327,9 @@ export function FindingAutoChat({
               }}
             />
             <InputGroupAddon align="block-end">
-              <span className="text-muted-foreground text-xs">将自动引用当前漏洞</span>
+              <span className="text-muted-foreground text-xs">{ui("core.autoChat.referenceHint")}</span>
               {running ? (
-                <InputGroupButton className="ml-auto" variant="destructive" size="icon-xs" onClick={() => void stop()} disabled={stopping} aria-label="停止 Auto Agent">
+                <InputGroupButton className="ml-auto" variant="destructive" size="icon-xs" onClick={() => void stop()} disabled={stopping} aria-label={ui("core.autoChat.stop")}>
                   <SquareIcon />
                 </InputGroupButton>
               ) : (

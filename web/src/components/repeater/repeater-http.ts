@@ -1,5 +1,26 @@
 import type { RepeaterSendResponse } from "@/lib/types";
 
+export type RepeaterErrorCode = "incompleteTraffic" | "truncatedBody" | "requestLine" | "path" | "host" | "fragment";
+
+export class RepeaterParseError extends Error {
+  readonly code: RepeaterErrorCode;
+
+  constructor(code: RepeaterErrorCode) {
+    super(
+      {
+        incompleteTraffic: "请求报文不完整，无法送入请求重发",
+        truncatedBody: "请求正文为截断预览，请下载完整正文后再导入",
+        requestLine: "请求首行应为：POST /path HTTP/1.1",
+        path: "请求路径必须以 / 开头，或填写完整 http/https URL",
+        host: "请填写 Host 请求头或设置发送目标",
+        fragment: "请求路径不能包含 URL 片段，请使用 %23 表示 #",
+      }[code],
+    );
+    this.name = "RepeaterParseError";
+    this.code = code;
+  }
+}
+
 export type RepeaterInitial = {
   method?: string;
   url?: string;
@@ -97,11 +118,11 @@ export function requestFromTraffic(
 ): RepeaterInitial {
   const firstLine = /^[^\r\n]+(?:\r?\n|$)/.exec(raw);
   if (!firstLine || !/^[A-Z]+\s+\S+\s+HTTP\/\d(?:\.\d)?\r?\n?$/i.test(firstLine[0])) {
-    throw new Error("请求报文不完整，无法送入请求重发");
+    throw new RepeaterParseError("incompleteTraffic");
   }
   const request = splitRequestText(raw.slice(firstLine[0].length));
   if (/…\[truncated\] @blob sha256:[a-f0-9]{64}/.test(request.body)) {
-    throw new Error("请求正文为截断预览，请下载完整正文后再导入");
+    throw new RepeaterParseError("truncatedBody");
   }
   let host = exchange.host;
   try {
@@ -155,17 +176,17 @@ export function parseRawRequest(
   const newline = text.indexOf("\n");
   const line = (newline < 0 ? text : text.slice(0, newline)).trim();
   const match = /^([A-Za-z]+)\s+(\S+)\s+(HTTP\/(?:1\.[01]|2(?:\.0)?))$/.exec(line);
-  if (!match) throw new Error("请求首行应为：POST /path HTTP/1.1");
+  if (!match) throw new RepeaterParseError("requestLine");
   const parts = splitRequestText(newline < 0 ? "" : text.slice(newline + 1));
   let url: URL;
   if (/^https?:\/\//i.test(match[2])) url = new URL(match[2]);
   else {
-    if (!match[2].startsWith("/")) throw new Error("请求路径必须以 / 开头，或填写完整 http/https URL");
+    if (!match[2].startsWith("/")) throw new RepeaterParseError("path");
     const origin = connectionOrigin(targetOrigin) || connectionOrigin(`https://${getHostHeader(parts.headersText)}`);
-    if (!origin) throw new Error("请填写 Host 请求头或设置发送目标");
+    if (!origin) throw new RepeaterParseError("host");
     url = new URL(origin + match[2]);
   }
-  if (url.hash) throw new Error("请求路径不能包含 URL 片段，请使用 %23 表示 #");
+  if (url.hash) throw new RepeaterParseError("fragment");
   return {
     ...parts,
     method: match[1].toUpperCase(),

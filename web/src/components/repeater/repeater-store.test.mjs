@@ -21,6 +21,7 @@ const {
   truncateResponse,
 } = require("./repeater-state.ts");
 const {
+  RepeaterParseError,
   requestFromEvidence,
   buildRawRequest,
   parseRawRequest,
@@ -35,7 +36,6 @@ const {
 } = require("./repeater-http.ts");
 const { DEFAULT_FILTERS, matchesRepeaterFilters } = require("./repeater-filter.ts");
 const { flush, useRepeaterStore } = require("./repeater-store.ts");
-const { toast } = require("sonner");
 
 const response = (body = "ok") => ({
   status: 200,
@@ -203,10 +203,12 @@ test("drafts exceeding the soft UTF-16 budget are never discarded", () => {
 function setupStore(t) {
   const previousWindow = globalThis.window;
   const writes = [];
+  const events = [];
   globalThis.window = {
     localStorage: {
       setItem: (key, value) => writes.push({ key, value }),
     },
+    dispatchEvent: (event) => events.push(event),
   };
   useRepeaterStore.setState({ workspace: addTab(defaultWorkspace()), inflight: {} });
   t.after(() => {
@@ -215,7 +217,7 @@ function setupStore(t) {
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
   });
-  return { store: useRepeaterStore.getState(), writes };
+  return { store: useRepeaterStore.getState(), writes, events };
 }
 
 test("a second send invalidates only that tab's first send and stale cleanup cannot clear it", (t) => {
@@ -311,7 +313,7 @@ test("failed send cleanup preserves the previous response and history", (t) => {
 });
 
 test("failed storage write retries with histories and response bodies removed, preserving live data and drafts", (t) => {
-  const { store } = setupStore(t);
+  const { store, events } = setupStore(t);
   const tab = store.workspace.tabs[0];
   store.updateTab(tab.id, { body: "keep this draft" });
   store.recordSend(tab.id, entry(1, "previous response"));
@@ -320,7 +322,6 @@ test("failed storage write retries with histories and response bodies removed, p
     attempts.push(value);
     if (attempts.length === 1) throw new DOMException("full", "QuotaExceededError");
   });
-  const error = t.mock.method(toast, "error", () => "test-toast");
   flush();
   assert.equal(attempts.length, 2);
   assert.ok(attempts[1].length < attempts[0].length);
@@ -331,21 +332,33 @@ test("failed storage write retries with histories and response bodies removed, p
   assert.equal(saved.response.body_truncated, true);
   assert.equal(useRepeaterStore.getState().workspace.tabs[0].response.body, "previous response");
   assert.equal(useRepeaterStore.getState().workspace.tabs[0].history.length, 1);
-  assert.equal(error.mock.callCount(), 0);
+  assert.equal(events.length, 0);
 });
 
-test("two failed storage writes report save failure through a Chinese error toast", (t) => {
-  const { store } = setupStore(t);
+test("parser errors expose stable codes without matching arbitrary backend text", () => {
+  for (const [text, code] of [
+    ["GET /missing-version", "requestLine"],
+    ["GET relative HTTP/1.1", "path"],
+    ["GET / HTTP/1.1", "host"],
+    ["GET /#fragment HTTP/1.1\nHost: example.test\n\n", "fragment"],
+  ]) {
+    assert.throws(() => parseRawRequest(text), (error) => error instanceof RepeaterParseError && error.code === code);
+  }
+  const error = new RepeaterParseError("host");
+  assert.equal(new Error(error.message) instanceof RepeaterParseError, false);
+});
+
+test("two failed storage writes report a storage error event", (t) => {
+  const { store, events } = setupStore(t);
   const tab = store.workspace.tabs[0];
   store.updateTab(tab.id, { body: "unsaved draft" });
   const setItem = t.mock.method(globalThis.window.localStorage, "setItem", () => {
     throw new DOMException("full", "QuotaExceededError");
   });
-  const error = t.mock.method(toast, "error", () => "test-toast");
   flush();
   assert.equal(setItem.mock.callCount(), 2);
-  assert.equal(error.mock.callCount(), 1);
-  assert.match(error.mock.calls[0].arguments[0], /工作区保存失败/);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "artex:repeater-storage-error");
   assert.equal(useRepeaterStore.getState().workspace.tabs[0].body, "unsaved draft");
 });
 
