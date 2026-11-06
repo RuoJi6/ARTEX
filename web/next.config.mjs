@@ -11,6 +11,9 @@ const nextConfig = {
   // 避免父目录的 lockfile 影响根目录推断及资源路径生成。
   turbopack: { root: fileURLToPath(new URL(".", import.meta.url)) },
   reactCompiler: true,
+  // 可复现构建：Next 每次 build 会随机生成 BUILD_ID，并写进 index.html 与 RSC payload 等
+  // 300+ 个产物，导致同一份源码两次构建得到不同的二进制。固定它，构建才能逐字节对账。
+  generateBuildId: async () => process.env.ARTEX_BUILD_ID || "artex",
   // 允许从局域网 IP 访问 dev 资源（HMR），按需增删。
   // dev 阶段放开任意 IPv4 来源访问 /_next/* 与 HMR（局域网 IP 变动也不受影响）。
   // 注意：Next 出于安全禁止裸 "*"，需用分段通配；"*.*.*.*" 匹配任意 IPv4。
