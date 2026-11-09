@@ -708,7 +708,8 @@ export const api = {
       { case_id: id },
     ),
   findingCaseReviewRuns: () => get<FindingCaseReviewRun[]>("/exploration/finding-case-review"),
-  findingStats: () => get<FindingStats>("/exploration/findings/stats"),
+  findingStats: (q: Omit<FindingQuery, "page" | "pageSize"> = {}) =>
+    get<FindingStats>(`/exploration/findings/stats?${findingFilterParams(q).toString()}`),
   // exportFindings 触发发现页导出并下载文件。scope=selected 时传 ids(finding_id 列表);
   // scope=filtered 时传当前筛选(沿用 FindingQuery 的筛选字段);scope=all 忽略筛选。
   exportFindings: async (opts: {

@@ -132,3 +132,30 @@ test("group dates use the latest matching finding after filters", async () => {
   assert.equal(result.items[0].task_id, "10");
   assert.equal(result.items[0].last_found_at, fixtures[8].ts);
 });
+
+test("finding statistics follow combined filters and retain global choices", async () => {
+  const route = { path: "/exploration/findings/stats" };
+  const all = await read(route);
+  const filtered = await read(route, {
+    task_id: "10",
+    severity: "high",
+    status: "pending",
+    vulnclass: "Demo",
+    q: "needle",
+    from: "2026-01-04T00:00:00Z",
+    to: "2026-01-04T23:59:59Z",
+    page: "2",
+    limit: "1",
+  });
+  assert.equal(filtered.total, 1);
+  assert.equal(filtered.distinct.total, 1);
+  assert.equal(filtered.high, 1);
+  assert.equal(filtered.critical, 0);
+  assert.deepEqual(filtered.tasks, all.tasks);
+  assert.deepEqual(filtered.vulnclasses, all.vulnclasses);
+  const empty = await read(route, { q: "no matching fixture" });
+  assert.equal(empty.total, 0);
+  assert.equal(empty.distinct.total, 0);
+  assert.equal(empty.high + empty.medium + empty.low + empty.critical, 0);
+  assert.deepEqual(empty.tasks, all.tasks);
+});

@@ -579,7 +579,7 @@ export interface FindingDeepenResponse {
   queued: boolean;
 }
 
-// FindingStats 是发现全表聚合(统计卡 + 漏洞类型下拉),服务端计算,不受分页影响。
+// FindingStats 的计数跟随列表筛选，不受分页影响；类型和任务选项保留全局范围。
 export interface FindingStats {
   distinct?: FindingDistinctStats;
   total: number;

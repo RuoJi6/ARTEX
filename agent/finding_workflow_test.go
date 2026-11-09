@@ -38,6 +38,9 @@ func TestFindingWorkflowSharedAssemblyAndSwitch(t *testing.T) {
 			if on && (!strings.Contains(system[0], "TCP") || !strings.Contains(system[0], "evidence_hint_id")) {
 				t.Fatal("missing optional/handoff contract")
 			}
+			if on && (!strings.Contains(system[0], "不是列表行号") || !strings.Contains(system[0], "完整 ID")) {
+				t.Fatal("missing stable traffic ID handoff contract")
+			}
 			for _, tool := range out {
 				if !strings.HasPrefix(tool.Description(), "CUSTOM DESCRIPTION") {
 					t.Fatal("custom description replaced")

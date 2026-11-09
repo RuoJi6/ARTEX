@@ -2001,6 +2001,7 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   // ── exploration ──
   if (path === "/exploration/frontier") return D.frontier;
   if (path === "/exploration/findings/stats") {
+    const list = mockApplyAssetScope(mockFilterFindings(q), q.get("asset_scope"));
     const vulnclasses = Array.from(new Set(mockFindings.map((f) => f.vulnclass))).sort();
     // 「按任务」下拉:有漏洞的任务 + 描述 + 条数(mock 任务 id 是字符串,直接当 id 用)。
     const taskMap = new Map<string, { name: string; description: string; count: number }>();
@@ -2017,12 +2018,13 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     }
     const tasks = Array.from(taskMap, ([id, v]) => ({ id, name: v.name, description: v.description, count: v.count }));
     return {
-      total: mockFindings.length,
-      pending: mockFindings.filter((f) => f.status === "pending").length,
-      critical: mockFindings.filter((f) => f.severity === "critical").length,
-      high: mockFindings.filter((f) => f.severity === "high").length,
-      medium: mockFindings.filter((f) => f.severity === "medium").length,
-      low: mockFindings.filter((f) => f.severity === "low").length,
+      total: list.length,
+      pending: list.filter((f) => f.status === "pending").length,
+      critical: list.filter((f) => f.severity === "critical").length,
+      high: list.filter((f) => f.severity === "high").length,
+      medium: list.filter((f) => f.severity === "medium").length,
+      low: list.filter((f) => f.severity === "low").length,
+      distinct: { total: list.length, reports: list.length },
       vulnclasses,
       tasks,
     };

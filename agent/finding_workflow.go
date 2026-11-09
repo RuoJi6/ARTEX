@@ -77,7 +77,7 @@ func findingWorkflowTools(agentKey string, tools []actool.CoreTool) ([]actool.Co
 		guidance += "\n\n**报告前自动关联流量（已开启）**：你负责为本次触发的漏洞核对并绑定流量，再撰写报告。先从 report_finding 返回 JSON 或 get_task_node_detail / list_task_findings 取得明确的 finding_id 与 finding_node_id。读取漏洞详情、对应意图的执行记录及已有证据清单，优先使用上报者交接的真实 ID。若本次验证为 HTTP 且流量工具可用，用 traffic_search 筛选候选，再用 traffic_get 逐条核实请求/响应确实支持该漏洞；域名和时间只用于筛选，不证明归属。将确认的证据按复现顺序用 bind_finding_traffic(finding_id, traffic_refs) 关联，选择 baseline / proof / verification / supporting 并说明用途。只能操作本次漏洞，不重复创建漏洞或重新探测目标。绑定成功后重新调用 get_finding_traffic 获取最新 version，读取所需正文，再将实际读取的 version 作为 evidence_version 传给 update_finding_report（其 finding_id 参数仍用 finding_node_id）。已有绑定不必重复追加。TCP、未采集、工具不可用或没有确切匹配时，跳过自动绑定，依据文字/命令证据正常写报告并说明原因，不得为凑齐流量而猜测。绑定失败不宣称成功；保留已有证据并在报告说明未绑定原因。"
 	}
 	if guidance != "" || has["get_finding_traffic"] || has["update_finding_report"] {
-		guidance += findingIDGuidance
+		guidance += "\n\n**流量 ID 约定**：流量页面展示/复制的流量 ID 就是 traffic_search 返回的 id，也是 traffic_get(id) 和 traffic_refs[].traffic_id 使用的原始字符串。它不是列表行号，不随分页、排序或筛选变化。用户交接完整 ID 时优先直接用 traffic_get 读取并核实，不要改写、截短或猜测 ID；报告引用流量证据时保留对应完整 ID，方便从流量页面检索。" + findingIDGuidance
 	}
 	return out, guidance
 }
