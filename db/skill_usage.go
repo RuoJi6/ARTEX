@@ -104,8 +104,18 @@ ORDER BY COUNT(*) DESC, skill`)
 // most-requested first — the "wished it existed" gap list. Names come from the model
 // so they are shown as-is (already length-capped at insert time).
 func (d *DB) MissingSkillStats(limit int) ([]SkillStat, error) {
+	items, _, _, err := d.MissingSkillStatsPage(limit, 1)
+	return items, err
+}
+
+// MissingSkillStatsPage merges live and archived counts before computing totals
+// and applying pagination, so both summaries describe the whole ledger.
+func (d *DB) MissingSkillStatsPage(limit, page int) ([]SkillStat, int, int, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 20
+	}
+	if page <= 0 {
+		page = 1
 	}
 	rows, err := d.Query(`
 SELECT skill, COUNT(*) AS calls,
@@ -116,7 +126,7 @@ WHERE NOT found
 GROUP BY skill
 ORDER BY COUNT(*) DESC, skill`)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	defer rows.Close()
 	out := []SkillStat{}
@@ -125,7 +135,7 @@ ORDER BY COUNT(*) DESC, skill`)
 		var agents string
 		var lastUsed sql.NullTime
 		if err := rows.Scan(&s.Skill, &s.Calls, &agents, &lastUsed); err != nil {
-			return nil, err
+			return nil, 0, 0, err
 		}
 		s.Agents = []string{}
 		if agents != "" {
@@ -138,17 +148,23 @@ ORDER BY COUNT(*) DESC, skill`)
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	archived, err := d.archivedTaskAggregates()
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	out = mergeArchivedSkillStats(out, archived, true)
-	if len(out) > limit {
-		out = out[:limit]
+	total, calls := len(out), 0
+	for _, item := range out {
+		calls += item.Calls
 	}
-	return out, nil
+	if total == 0 || page > (total-1)/limit+1 {
+		return []SkillStat{}, total, calls, nil
+	}
+	start := (page - 1) * limit
+	end := start + min(limit, total-start)
+	return out[start:end], total, calls, nil
 }
 
 // SkillCall is one row of a skill's recent-call list (detail panel).
