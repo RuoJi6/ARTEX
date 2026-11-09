@@ -962,13 +962,13 @@ func (t *Traffic) Page(f PageQuery, page, size int) (rows []ExchangeMeta, total 
 	}
 	if s := strings.TrimSpace(f.Query); s != "" {
 		like := "%" + s + "%"
-		const meta = "host LIKE ? OR url LIKE ? OR url_template LIKE ? OR method LIKE ? OR content_type LIKE ? OR CAST(status AS TEXT) LIKE ?"
+		const meta = "id LIKE ? OR host LIKE ? OR url LIKE ? OR url_template LIKE ? OR method LIKE ? OR content_type LIKE ? OR CAST(status AS TEXT) LIKE ?"
 		// Metadata match OR full-text match: one search box, widest recall. Terms
 		// too short for trigram silently fall back to metadata only.
 		if cond, arg, ok := t.ftsFilter(s); ok {
-			add("(("+meta+") OR "+cond+")", like, like, like, like, like, like, arg)
+			add("(("+meta+") OR "+cond+")", like, like, like, like, like, like, like, arg)
 		} else {
-			add("("+meta+")", like, like, like, like, like, like)
+			add("("+meta+")", like, like, like, like, like, like, like)
 		}
 	}
 	// Body is the dedicated content box: it only searches captured request/response
@@ -2148,10 +2148,10 @@ func (t *Traffic) Tools() []actool.CoreTool {
 
 	get := actool.Build(actool.Spec{
 		Name:        "traffic_get",
-		Description: "按 id 取一条已抓流量的请求/响应原文（过大会截断）。配合 traffic_search 用，避免重复 curl。",
+		Description: "按 id 取一条已抓流量的请求/响应原文（过大会截断）。id 与流量页面展示的流量 ID、traffic_search 返回的 id 相同，须完整保留，不是列表行号。已知 ID 时直接读取，无需重新搜索或请求目标。",
 		Schema: map[string]any{
 			"type":       "object",
-			"properties": map[string]any{"id": map[string]any{"type": "string", "description": "traffic_search 返回的 id"}},
+			"properties": map[string]any{"id": map[string]any{"type": "string", "description": "流量页面或 traffic_search 返回的完整流量 ID（不是列表行号）"}},
 			"required":   []any{"id"},
 		},
 		ReadOnly:    ro,

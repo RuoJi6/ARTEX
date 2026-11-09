@@ -630,30 +630,38 @@ export default function FindingsPage() {
     if (flatPage > lastPage) setFlatPage(lastPage);
   }, [flat.loaded, flat.total, flatPage, flatPageSize]);
 
-  // Whole-table aggregates (stat cards + vuln-class options) — independent of the
-  // current page, so they stay exact.
+  const statsQuery = React.useMemo(
+    () => ({ severity, status, vulnclass, task, query, ...dateRange, assetScope: activeAssetScope ?? undefined }),
+    [severity, status, vulnclass, task, query, dateRange, activeAssetScope],
+  );
+  const statsFingerprint = JSON.stringify(statsQuery);
+  const activeStatsFingerprint = React.useRef(statsFingerprint);
+  activeStatsFingerprint.current = statsFingerprint;
+  const statsRequest = React.useRef(0);
+  const refreshStats = React.useCallback(async () => {
+    if (activeStatsFingerprint.current !== statsFingerprint) return;
+    const request = ++statsRequest.current;
+    try {
+      const result = await api.findingStats(statsQuery);
+      if (request !== statsRequest.current || activeStatsFingerprint.current !== statsFingerprint) return;
+      setStats(result);
+      setStatsLoaded(true);
+    } catch {
+      // Retain the previous snapshot during transient refresh failures.
+    }
+  }, [statsQuery, statsFingerprint]);
+
+  // Counts use the current filters and asset subtree, independently of pagination.
   React.useEffect(() => {
-    let alive = true;
-    const load = () => {
-      api
-        .findingStats()
-        .then((s) => {
-          if (alive) {
-            setStats(s);
-            setStatsLoaded(true);
-          }
-        })
-        .catch(() => {
-          // Keep the previous aggregate snapshot until the next poll.
-        });
-    };
-    load();
-    const t = setInterval(load, 5000);
+    if (!preferencesHydrated) return;
+    void activeRetestFingerprint;
+    void refreshStats();
+    const t = setInterval(() => void refreshStats(), 5000);
     return () => {
-      alive = false;
+      statsRequest.current++;
       clearInterval(t);
     };
-  }, []);
+  }, [preferencesHydrated, refreshStats, activeRetestFingerprint]);
 
   React.useEffect(() => {
     if (!statsLoaded) return;
@@ -677,12 +685,7 @@ export default function FindingsPage() {
         await api.setFindingStatus(f.finding_id, next);
         toast.success(`已标记为「${statusMeta("finding", next).label}」`);
         // refresh stat cards (pending count) and drop the row if it no longer matches the status filter
-        api
-          .findingStats()
-          .then(setStats)
-          .catch(() => {
-            // The row update remains valid even if the aggregate refresh fails.
-          });
+        void refreshStats();
         if (status !== "all" && next !== status) {
           setFindings((cur) => cur.filter((x) => !isSameFinding(x, f)));
           setTotal((t) => Math.max(0, t - 1));
@@ -694,7 +697,7 @@ export default function FindingsPage() {
         toast.error(`更新失败：${(e as Error).message}`);
       }
     },
-    [refreshAfterMutation, setFindings, status],
+    [refreshAfterMutation, refreshStats, setFindings, status],
   );
 
   // 行内展开的详细报告缓存按全局稳定行键存。report 是大段 Markdown,列表查询不带它,
@@ -747,12 +750,7 @@ export default function FindingsPage() {
           ),
         );
         toast.success("已保存");
-        api
-          .findingStats()
-          .then(setStats)
-          .catch(() => {
-            // The edit remains valid even if the aggregate refresh fails.
-          });
+        void refreshStats();
         refreshAfterMutation(f);
       } catch (e) {
         toast.error(`保存失败：${(e as Error).message}`);
@@ -760,7 +758,7 @@ export default function FindingsPage() {
         setSaving(false);
       }
     },
-    [edit, refreshAfterMutation, setFindings],
+    [edit, refreshAfterMutation, refreshStats, setFindings],
   );
 
   // deleteFinding 删除一个漏洞(需二次确认):删成功后从列表移除、收起行、刷新统计。
@@ -780,18 +778,13 @@ export default function FindingsPage() {
         const rowKey = findingRowKey(f);
         setExpanded((cur) => (cur === rowKey ? null : cur));
         toast.success("已删除漏洞");
-        api
-          .findingStats()
-          .then(setStats)
-          .catch(() => {
-            // The deletion remains valid even if the aggregate refresh fails.
-          });
+        void refreshStats();
         refreshAfterMutation(f, true);
       } catch (e) {
         toast.error(`删除失败：${(e as Error).message}`);
       }
     },
-    [refreshAfterMutation, setFindings],
+    [refreshAfterMutation, refreshStats, setFindings],
   );
 
   const openDeepen = React.useCallback((f: Finding) => {
@@ -822,10 +815,10 @@ export default function FindingsPage() {
   const statCards = [
     { label: "独立漏洞", value: stats.distinct?.total ?? stats.total, icon: BugIcon },
     { label: "上报记录", value: stats.total, tone: "text-amber-500", icon: ClockIcon },
-    { label: "严重", value: stats.distinct?.critical ?? stats.critical, tone: "text-rose-600", icon: ShieldAlertIcon },
-    { label: "高危", value: stats.distinct?.high ?? stats.high, tone: "text-red-500", icon: TriangleAlertIcon },
-    { label: "中危", value: stats.distinct?.medium ?? stats.medium, tone: "text-amber-500", icon: TriangleAlertIcon },
-    { label: "低危", value: stats.distinct?.low ?? stats.low, tone: "text-slate-500", icon: InfoIcon },
+    { label: "严重", value: stats.critical, tone: "text-rose-600", icon: ShieldAlertIcon },
+    { label: "高危", value: stats.high, tone: "text-red-500", icon: TriangleAlertIcon },
+    { label: "中危", value: stats.medium, tone: "text-amber-500", icon: TriangleAlertIcon },
+    { label: "低危", value: stats.low, tone: "text-slate-500", icon: InfoIcon },
   ];
 
   // 导出弹窗里「当前筛选」的条数:两个视图的筛选一致,只是统计口径来源不同。
