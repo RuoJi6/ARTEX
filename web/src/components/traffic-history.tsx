@@ -48,7 +48,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api } from "@/lib/api";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import type { TrafficDetail, TrafficExchange, TrafficHost, TrafficResp } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, copyText } from "@/lib/utils";
 
 function fmtTime(ts: string) {
   return new Date(ts).toLocaleString("zh-CN", {
@@ -92,10 +92,9 @@ function TrafficID({ id }: { id: string }) {
       aria-label={`复制流量 ID ${id}`}
       onClick={async (event) => {
         event.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(id);
+        if (await copyText(id)) {
           toast.success("已复制流量 ID");
-        } catch {
+        } else {
           toast.error("复制失败，请手动选择流量 ID");
         }
       }}
