@@ -10,6 +10,7 @@ import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
 import { FindingAutoChat } from "@/components/finding-auto-chat";
+import { FindingReportExportButton } from "@/components/finding-report-export-button";
 import { FindingReproductionPanel } from "@/components/finding-reproduction-panel";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
@@ -197,6 +198,7 @@ function FindingDetailInner() {
               调整报告
             </Button>
           ) : null}
+          <FindingReportExportButton key={`export:${id}`} findingId={id} contextTask={contextTaskId || undefined} />
           {finding.inherited && finding.source_task_id && (
             <Badge variant="outline">来源任务 #{finding.source_task_id} · 只读</Badge>
           )}
