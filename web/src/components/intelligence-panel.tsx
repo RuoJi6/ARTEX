@@ -1,10 +1,10 @@
 "use client";
-
 import * as React from "react";
 
 import Link from "next/link";
 
 import { CopyIcon, RefreshCwIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import { CredentialContent, CredentialTrafficViewer, intelligencePreview } from "@/components/credential-content";
@@ -20,23 +20,38 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { localizedError } from "@/i18n/errors";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import { statusMeta } from "@/lib/status";
 import type { IntelligenceKind, IntelligencePage, TaskIntelligence } from "@/lib/types";
 import { copyText } from "@/lib/utils";
 
-const KINDS: { value: IntelligenceKind; label: string }[] = [
-  { value: "credential", label: "凭据" },
-  { value: "lead", label: "重要线索" },
-  { value: "sensitive_data", label: "敏感数据" },
+const KINDS = (ui: UITranslate): { value: IntelligenceKind; label: string }[] => [
+  { value: "credential", label: ui("screen.2dfe17d754ddf9") },
+  { value: "lead", label: ui("screen.db9b07c21252fb") },
+  { value: "sensitive_data", label: ui("screen.9839bf384d517c") },
 ];
-const STATUS: Record<IntelligenceKind, Record<string, string>> = {
-  credential: { unverified: "未验证", verified: "已验证", invalid: "已失效" },
-  lead: { pending: "待跟进", in_progress: "跟进中", dismissed: "已排除", converted: "已转漏洞" },
-  sensitive_data: { suspected: "疑似", confirmed: "已确认", dismissed: "已排除" },
-};
-function time(value: string) {
-  return new Date(value).toLocaleString("zh-CN");
+const STATUS = (ui: UITranslate): Record<IntelligenceKind, Record<string, string>> => ({
+  credential: {
+    unverified: ui("screen.555ee27e0ac34f"),
+    verified: ui("screen.0a1b6f1b57f519"),
+    invalid: ui("screen.2fe5a8d0eee9f1"),
+  },
+  lead: {
+    pending: ui("screen.75da31470d2f9d"),
+    in_progress: ui("screen.3bb1a69df10c78"),
+    dismissed: ui("screen.c6f3c8b82c2491"),
+    converted: ui("screen.4846c46d98802a"),
+  },
+  sensitive_data: {
+    suspected: ui("screen.f81286d3cf0a66"),
+    confirmed: ui("screen.d56a511f498f7e"),
+    dismissed: ui("screen.c6f3c8b82c2491"),
+  },
+});
+function time(value: string, ui: UITranslate) {
+  return new Date(value).toLocaleString(ui("screen.91610255157661"));
 }
 
 function conversationHref(item: TaskIntelligence) {
@@ -44,6 +59,8 @@ function conversationHref(item: TaskIntelligence) {
 }
 
 function AssetLinks({ ids, onNavigate }: { ids: number[]; onNavigate?: () => void }) {
+  const { ui } = useUITranslation();
+
   return ids.length ? (
     <span className="inline-flex flex-wrap gap-x-2 gap-y-1">
       {ids.map((id) => (
@@ -52,14 +69,14 @@ function AssetLinks({ ids, onNavigate }: { ids: number[]; onNavigate?: () => voi
           href={`/function/assets?asset=${id}`}
           onClick={onNavigate}
           className="underline underline-offset-2"
-          aria-label={`查看资产 #${id}`}
+          aria-label={ui("screen.8b0c30275a36e5", { v0: id })}
         >
           #{id}
         </Link>
       ))}
     </span>
   ) : (
-    <>未关联</>
+    <>{ui("screen.6b75a35393124b")}</>
   );
 }
 
@@ -72,13 +89,16 @@ export function IntelligencePanel({
   scopeId: string;
   onNavigate?: () => void;
 }) {
+  const { ui } = useUITranslation();
+
+  const { t } = useTranslation();
   const [kind, setKind] = React.useState("all");
   const [status, setStatus] = React.useState("all");
   const [search, setSearch] = React.useState("");
   const [query, setQuery] = React.useState("");
   const [page, setPage] = React.useState(0);
   const [data, setData] = React.useState<IntelligencePage | null>(null);
-  const [error, setError] = React.useState("");
+  const [error, setError] = React.useState<Error | null>(null);
   const [refresh, setRefresh] = React.useState(0);
   const [selected, setSelected] = React.useState<TaskIntelligence | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -110,10 +130,10 @@ export function IntelligencePanel({
         const result = await api.intelligence(scope, scopeId, params);
         if (alive) {
           setData(result);
-          setError("");
+          setError(null);
         }
       } catch (e) {
-        if (alive) setError((e as Error).message);
+        if (alive) setError(e as Error);
       } finally {
         busy = false;
       }
@@ -140,34 +160,34 @@ export function IntelligencePanel({
       await api.updateIntelligence(selected.task_id, selected.id, value);
       setSelected((item) => (item ? { ...item, status: value } : null));
       setRefresh((n) => n + 1);
-      toast.success("情报状态已更新");
+      toast.success(ui("screen.bc476037600d1b"));
     } catch (e) {
-      toast.error("更新失败：" + (e as Error).message);
+      toast.error(ui("screen.4f2e8a8d4cb328") + localizedError(e, t));
     } finally {
       setSaving(false);
     }
   };
-  const statusOptions = kind === "all" ? {} : STATUS[kind as IntelligenceKind];
+  const statusOptions = kind === "all" ? {} : STATUS(ui)[kind as IntelligenceKind];
   return (
     <div className="flex min-w-0 flex-col gap-4">
       {data && !data.enabled && scope === "tasks" ? (
         <Alert>
-          <AlertTitle>自动记录已关闭</AlertTitle>
+          <AlertTitle>{ui("screen.716b48e64c796a")}</AlertTitle>
           <AlertDescription>
-            已有情报仍可查看。前往{" "}
+            {ui("screen.69c6f9dd599db6")}{" "}
             <Link href="/system/settings" className="underline">
-              系统设置
+              {ui("screen.68ea5dd4d7af20")}
             </Link>{" "}
-            开启后，Agent 将在执行中记录新增情报，并产生额外 Token 消耗。
+            {ui("screen.07ed4e299cb9cd")}
           </AlertDescription>
         </Alert>
       ) : null}
       <Card>
         <CardHeader>
-          <CardTitle>{scope === "tasks" ? "任务情报" : "资产关联情报"}</CardTitle>
+          <CardTitle>{scope === "tasks" ? ui("screen.bfaee3ed1f063c") : ui("screen.532bd2d2b50a4d")}</CardTitle>
           <CardDescription>
-            {scope === "tasks" ? "集中查看本次获取与直接关联任务继承的情报。" : "按来源任务查看此资产关联的情报。"}{" "}
-            直接展示凭据、敏感数据及来源证据，发现凭据不代表验证成功。
+            {scope === "tasks" ? ui("screen.b3e2ebefaa0c50") : ui("screen.40ca5cfc15060e")}{" "}
+            {ui("screen.b3f42ca140cc91")}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex min-w-0 flex-col gap-4">
@@ -181,11 +201,12 @@ export function IntelligencePanel({
           >
             <TabsList className="max-w-full overflow-x-auto">
               <TabsTrigger value="all">
-                全部 {data ? Object.values(data.counts).reduce((a, b) => a + b, 0) : ""}
+                {ui("screen.5c55a67935af8f")}
+                {data ? Object.values(data.counts).reduce((a, b) => a + b, 0) : ""}
               </TabsTrigger>
-              {KINDS.map((item) => (
+              {KINDS(ui).map((item) => (
                 <TabsTrigger key={item.value} value={item.value}>
-                  <ToneDot tone={statusMeta("intelligence", item.value).tone} />
+                  <ToneDot tone={statusMeta("intelligence", item.value, t).tone} />
                   {item.label} {data?.counts[item.value] ?? 0}
                 </TabsTrigger>
               ))}
@@ -193,8 +214,8 @@ export function IntelligencePanel({
           </Tabs>
           <div className="flex flex-wrap items-center gap-2">
             <Input
-              aria-label="搜索情报标题、内容或上报者"
-              placeholder="搜索标题、内容或上报者"
+              aria-label={ui("screen.05875408bc4e06")}
+              placeholder={ui("screen.e4295ec58bc3c7")}
               value={search}
               maxLength={200}
               onChange={(e) => setSearch(e.target.value)}
@@ -208,12 +229,12 @@ export function IntelligencePanel({
                   setPage(0);
                 }}
               >
-                <SelectTrigger aria-label="筛选情报状态">
+                <SelectTrigger aria-label={ui("screen.46a5a87a753cb8")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectItem value="all">全部状态</SelectItem>
+                    <SelectItem value="all">{ui("screen.0a379c1e7398fb")}</SelectItem>
                     {Object.entries(statusOptions).map(([value, label]) => (
                       <SelectItem key={value} value={value}>
                         {label}
@@ -225,13 +246,13 @@ export function IntelligencePanel({
             ) : null}
             <Button variant="outline" onClick={() => setRefresh((n) => n + 1)}>
               <RefreshCwIcon data-icon="inline-start" />
-              刷新
+              {ui("screen.aee88743413144")}
             </Button>
           </div>
           {error ? (
             <Alert variant="destructive">
-              <AlertTitle>读取情报失败</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
+              <AlertTitle>{ui("screen.5d405d1f4eff39")}</AlertTitle>
+              <AlertDescription>{localizedError(error, t)}</AlertDescription>
             </Alert>
           ) : null}
           {!data && !error ? (
@@ -249,13 +270,13 @@ export function IntelligencePanel({
               </colgroup>
               <TableHeader>
                 <TableRow>
-                  <TableHead>类别 / 标题</TableHead>
-                  <TableHead>内容 / 来源证据</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>对话</TableHead>
-                  <TableHead>资产</TableHead>
-                  <TableHead>发现时间</TableHead>
-                  <TableHead>操作</TableHead>
+                  <TableHead>{ui("screen.1d993bee31ed0b")}</TableHead>
+                  <TableHead>{ui("screen.52541bcf47e2be")}</TableHead>
+                  <TableHead>{ui("screen.6320b4a8722a85")}</TableHead>
+                  <TableHead>{ui("screen.6bf6d3f3d6261b")}</TableHead>
+                  <TableHead>{ui("screen.5f45bb826b168f")}</TableHead>
+                  <TableHead>{ui("screen.8e2a2e97e23d2a")}</TableHead>
+                  <TableHead>{ui("screen.ed31fbb483ee1b")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -276,11 +297,11 @@ export function IntelligencePanel({
                           onTraffic={(id) => setTrafficTarget({ item, id })}
                         />
                         <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-                          <span>来源证据</span>
+                          <span>{ui("screen.c1ef66481c9004")}</span>
                           <p className="whitespace-pre-wrap break-all">{intelligencePreview(item.evidence, 220)}</p>
                           {Array.from(item.evidence).length > 220 ? (
                             <button type="button" className="text-left underline" onClick={() => open(item)}>
-                              详情查看完整证据
+                              {ui("screen.51b8809cfaa069")}
                             </button>
                           ) : null}
                         </div>
@@ -288,31 +309,32 @@ export function IntelligencePanel({
                     </TableCell>
                     <TableCell className="align-top whitespace-normal [overflow-wrap:anywhere]">
                       <div className="flex flex-col items-start gap-1">
-                        <Badge variant="outline">{STATUS[item.kind][item.status] ?? item.status}</Badge>
+                        <Badge variant="outline">{STATUS(ui)[item.kind]?.[item.status] ?? item.status}</Badge>
                         <span className="text-xs text-muted-foreground">
-                          {item.confidence === "observed" ? "直接观察" : "推测"}
+                          {item.confidence === "observed" ? ui("screen.96159c750bd67e") : ui("screen.aa1259dcc001cc")}
                         </span>
                       </div>
                     </TableCell>
                     <TableCell className="align-top whitespace-normal [overflow-wrap:anywhere]">
                       <div className="flex flex-col gap-1">
                         <Link href={conversationHref(item)} onClick={navigate} className="underline">
-                          {item.source_session ? "查看对话" : "查看任务对话"}
+                          {item.source_session ? ui("screen.0ca06fc30628b1") : ui("screen.a43578959a4c12")}
                         </Link>
                         <span className="text-xs text-muted-foreground">
-                          任务 #{item.task_id} · {item.worker || "Agent"}
-                          {item.node_id ? ` · 节点 #${item.node_id}` : ""}
+                          {ui("screen.e5b1cc0dc459e5")}
+                          {item.task_id} · {item.worker || "Agent"}
+                          {item.node_id ? ui("screen.ffd66d0f33a967", { v0: item.node_id }) : ""}
                         </span>
-                        {item.inherited ? <Badge variant="outline">继承 · 只读</Badge> : null}
+                        {item.inherited ? <Badge variant="outline">{ui("screen.44630dd91821d1")}</Badge> : null}
                       </div>
                     </TableCell>
                     <TableCell className="align-top whitespace-normal [overflow-wrap:anywhere]">
                       <AssetLinks ids={item.asset_ids} onNavigate={navigate} />
                     </TableCell>
-                    <TableCell className="align-top whitespace-normal text-xs">{time(item.created_at)}</TableCell>
+                    <TableCell className="align-top whitespace-normal text-xs">{time(item.created_at, ui)}</TableCell>
                     <TableCell className="align-top whitespace-normal [overflow-wrap:anywhere]">
                       <Button size="sm" variant="outline" onClick={() => open(item)}>
-                        详情
+                        {ui("screen.979a332955c855")}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -322,23 +344,26 @@ export function IntelligencePanel({
           ) : data ? (
             <Empty>
               <EmptyHeader>
-                <EmptyTitle>暂无符合条件的情报</EmptyTitle>
+                <EmptyTitle>{ui("screen.f05fe8b62ff1f5")}</EmptyTitle>
                 <EmptyDescription>
                   {query || kind !== "all" || status !== "all"
-                    ? "尝试调整分类或筛选条件。"
+                    ? ui("screen.13062dbaa48b90")
                     : data.enabled
-                      ? "Agent 在后续执行中发现有价值的信息后，会在此显示。"
-                      : "开启自动记录后，新增情报会在此显示；历史会话不会自动补提取。"}
+                      ? ui("screen.6bcd04860e0644")
+                      : ui("screen.392b81a8a56edc")}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : null}
         </CardContent>
         <CardFooter className="flex items-center justify-between gap-2">
-          <span className="text-sm text-muted-foreground">共 {data?.total ?? 0} 条 · 每页 25 条</span>
+          <span className="text-sm text-muted-foreground">
+            {ui("screen.76e547a8fa5463")}
+            {data?.total ?? 0} {ui("screen.a2792a889b0ce9")}
+          </span>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((n) => n - 1)}>
-              上一页
+              {ui("screen.c9b9ae7a61444a")}
             </Button>
             <Button
               size="sm"
@@ -346,7 +371,7 @@ export function IntelligencePanel({
               disabled={!data || (page + 1) * 25 >= data.total}
               onClick={() => setPage((n) => n + 1)}
             >
-              下一页
+              {ui("screen.8a8542f6964852")}
             </Button>
           </div>
         </CardFooter>
@@ -359,27 +384,31 @@ export function IntelligencePanel({
       >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{selected?.title ?? "情报详情"}</DialogTitle>
-            <DialogDescription>完整展示记录内容与实际来源证据。</DialogDescription>
+            <DialogTitle>{selected?.title ?? ui("screen.7057d77bf96878")}</DialogTitle>
+            <DialogDescription>{ui("screen.ab3470fa286145")}</DialogDescription>
           </DialogHeader>
           {selected ? (
             <div className="flex min-w-0 flex-col gap-4">
               <div className="flex flex-wrap items-center gap-2">
                 <StatusBadge domain="intelligence" value={selected.kind} />
-                <Badge variant="outline">{selected.confidence === "observed" ? "直接观察" : "推测"}</Badge>
+                <Badge variant="outline">
+                  {selected.confidence === "observed" ? ui("screen.96159c750bd67e") : ui("screen.aa1259dcc001cc")}
+                </Badge>
                 <span className="text-xs text-muted-foreground">
-                  任务 #{selected.task_id}
-                  {selected.node_id ? ` · 来源节点 #${selected.node_id}` : ""} · {selected.worker || "Agent"}
+                  {ui("screen.e5b1cc0dc459e5")}
+                  {selected.task_id}
+                  {selected.node_id ? ui("screen.471ff42139451b", { v0: selected.node_id }) : ""} ·{" "}
+                  {selected.worker || "Agent"}
                 </span>
               </div>
               {scope === "tasks" && !selected.inherited ? (
                 <Select value={selected.status} disabled={saving} onValueChange={(value) => void update(value)}>
-                  <SelectTrigger aria-label="更新情报状态">
+                  <SelectTrigger aria-label={ui("screen.8762ff29949cd7")}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      {Object.entries(STATUS[selected.kind]).map(([value, label]) => (
+                      {Object.entries(STATUS(ui)[selected.kind] ?? {}).map(([value, label]) => (
                         <SelectItem key={value} value={value}>
                           {label}
                         </SelectItem>
@@ -389,21 +418,21 @@ export function IntelligencePanel({
                 </Select>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  {STATUS[selected.kind][selected.status]} · 请到来源任务修改状态
+                  {STATUS(ui)[selected.kind]?.[selected.status] ?? selected.status} {ui("screen.33d3109c8c0f85")}
                 </p>
               )}
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm">内容</span>
+                <span className="text-sm">{ui("screen.7a688306423bec")}</span>
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={async () => {
-                    if (await copyText(selected.content)) toast.success("已复制");
-                    else toast.error("复制失败，请手动选择内容复制");
+                    if (await copyText(selected.content)) toast.success(ui("screen.8f6f8d979c981c"));
+                    else toast.error(ui("screen.3889e92517c51b"));
                   }}
                 >
                   <CopyIcon data-icon="inline-start" />
-                  复制
+                  {ui("screen.63d90d977348ab")}
                 </Button>
               </div>
               <CredentialContent
@@ -424,30 +453,33 @@ export function IntelligencePanel({
                     try {
                       await api.retryCredentials(selected.task_id, selected.id);
                       setRefresh((n) => n + 1);
-                      toast.success("已加入凭据处理队列");
+                      toast.success(ui("screen.c2397476f0d8c7"));
                     } catch (e) {
-                      toast.error((e as Error).message);
+                      toast.error(localizedError(e, t));
                     } finally {
                       setRetrying(false);
                     }
                   }}
                 >
-                  重新处理凭据
+                  {ui("screen.dce0ca588989fe")}
                 </Button>
               ) : null}
-              <p className="text-sm">来源证据</p>
+              <p className="text-sm">{ui("screen.c1ef66481c9004")}</p>
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted p-3 text-xs">
                 {selected.evidence}
               </pre>
               <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                 <span>
-                  关联资产：
+                  {ui("screen.13a873aee6bb65")}
                   <AssetLinks ids={selected.asset_ids} onNavigate={navigate} />
                 </span>
-                <span>发现于 {time(selected.created_at)}</span>
+                <span>
+                  {ui("screen.6b9e2700d43205")}
+                  {time(selected.created_at, ui)}
+                </span>
               </div>
               <Link href={conversationHref(selected)} onClick={navigate} className="text-sm underline">
-                {selected.source_session ? "查看来源任务会话" : "查看来源任务"}
+                {selected.source_session ? ui("screen.b9879568404181") : ui("screen.f9b00e44eb4e57")}
               </Link>
             </div>
           ) : null}

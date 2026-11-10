@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+
 import {
   CheckIcon,
   ChevronDown,
@@ -16,22 +17,20 @@ import {
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+
+import { ApprovalDetail } from "@/components/approval-records";
 import { Markdown } from "@/components/markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ApprovalDetail } from "@/components/approval-records";
+import { localizedError } from "@/i18n/errors";
+import { useLiveTranslation } from "@/i18n/use-live-translation";
+import { api } from "@/lib/api";
+import { formatToolDetail, type ToolDetailPart, toolInputText } from "@/lib/execution-display";
 import type { Activity, InterceptPending } from "@/lib/types";
 
 // ---- per-agent lane color (planner + work#1/#2/#3 …) ---------------------------
-const workerColors = [
-  "bg-sky-600",
-  "bg-violet-600",
-  "bg-teal-600",
-  "bg-pink-600",
-  "bg-orange-600",
-];
+const workerColors = ["bg-sky-600", "bg-violet-600", "bg-teal-600", "bg-pink-600", "bg-orange-600"];
 function workerColor(name: string): string {
   if (name === "planner") return "bg-amber-600"; // the intent generator, distinct
   if (name === "mainagent") return "bg-primary";
@@ -90,7 +89,7 @@ function groupSteps(steps: Activity[], chat: boolean): Group[] {
   for (const s of steps) {
     if (s.kind === "usage") continue; // live token-usage marker — not a rendered step
     if (s.kind === "round") {
-      out.push({ type: "round", key: s.seq, label: s.summary || "新一轮" }); // planner round boundary
+      out.push({ type: "round", key: s.seq, label: s.summary }); // planner round boundary
       continue;
     }
     if (s.kind === "intercept_request") {
@@ -129,19 +128,21 @@ function groupSteps(steps: Activity[], chat: boolean): Group[] {
   return out;
 }
 
-const kindLabel = (k: string) => (k === "thinking" ? "推理" : k === "result" ? "总结" : "说明");
+const kindKey = (k: string) =>
+  k === "thinking" ? "chatUI.thinking" : k === "result" ? "chatUI.summary" : "chatUI.explanation";
 
 function ActivityTime({ ts }: { ts: string }) {
+  const { i18n } = useLiveTranslation();
   const date = new Date(ts);
   if (!ts || Number.isNaN(date.getTime())) return null;
   return (
     <time
       dateTime={date.toISOString()}
-      title={date.toLocaleString("zh-CN")}
+      title={date.toLocaleString(i18n.resolvedLanguage)}
       className="text-[10px] text-muted-foreground tabular-nums"
       suppressHydrationWarning
     >
-      {date.toLocaleString("zh-CN", {
+      {date.toLocaleString(i18n.resolvedLanguage, {
         month: "2-digit",
         day: "2-digit",
         hour: "2-digit",
@@ -152,45 +153,11 @@ function ActivityTime({ ts }: { ts: string }) {
   );
 }
 
-// toolInputText renders a tool_use input for display. For Bash it pulls the shell
-// command out of the raw input JSON ({"command":…,"description":…}) so the UI shows
-// the command itself instead of JSON; other tools fall back to the raw text.
-function toolInputText(tool: string, raw: string): string {
-  if (tool !== "Bash") return raw;
-  // full input (expanded detail): parse and pull the command out.
-  try {
-    const o = JSON.parse(raw);
-    if (o && typeof o.command === "string") return o.command;
-  } catch {
-    // collapsed-row summaries are truncated to ~200 chars by the backend, so the
-    // JSON tail is cut off and JSON.parse fails — fall through and extract the
-    // "command" field by hand, tolerating the missing closing quote.
-  }
-  const m = raw.match(/"command"\s*:\s*"((?:\\.|[^"\\])*)/);
-  if (m) {
-    try {
-      // re-wrap the captured body and parse to unescape \n, \", \\, etc.
-      return JSON.parse('"' + m[1] + '"');
-    } catch {
-      // truncated mid-escape — unescape the common sequences best-effort.
-      return m[1].replace(/\\(["\\/nrt])/g, (_s, c) =>
-        c === "n" ? "\n" : c === "r" ? "\r" : c === "t" ? "\t" : c,
-      );
-    }
-  }
-  return raw;
-}
-
 // InterceptCard renders an inline intercept_request approval card. The pending_id
 // is extracted from the summary (format: "工具 X 请求审批 (#N)") so buttons are
 // available immediately without waiting for the detail load.
-function InterceptCard({
-  step,
-  getDetail,
-}: {
-  step: Activity;
-  getDetail: (seq: number) => Promise<string>;
-}) {
+function InterceptCard({ step, getDetail }: { step: Activity; getDetail: (seq: number) => Promise<string> }) {
+  const { t: translate } = useLiveTranslation();
   // extract pending_id from summary: "工具 Bash 请求审批 (#42)"
   const pendingId = React.useMemo(() => {
     const m = /\(#(\d+)\)/.exec(step.summary);
@@ -217,25 +184,38 @@ function InterceptCard({
     getDetail(step.seq)
       .then((raw) => {
         if (!live || !raw) return;
-        try { setDetail(JSON.parse(raw)); } catch { /* ignore */ }
+        try {
+          setDetail(JSON.parse(raw));
+        } catch {
+          /* ignore */
+        }
       })
-      .catch(() => {/* ignore */});
-    return () => { live = false; };
+      .catch(() => {
+        /* ignore */
+      });
+    return () => {
+      live = false;
+    };
   }, [step.seq, getDetail]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: Retry explicitly reloads the same approval after a failed request.
   React.useEffect(() => {
     if (!pendingId) return;
     let live = true;
-    api.interceptGetOne(pendingId)
+    api
+      .interceptGetOne(pendingId)
       .then((p) => {
         if (!live) return;
         setPending(p);
         setStatusError("");
         if (p.status !== "pending") setDecided(p.status as "allowed" | "denied" | "timeout");
       })
-      .catch((error) => { if (live) setStatusError((error as Error).message || "审批详情加载失败"); });
-    return () => { live = false; };
+      .catch((error) => {
+        if (live) setStatusError((error as Error).message || "chatUI.approvalLoadFailed");
+      });
+    return () => {
+      live = false;
+    };
   }, [pendingId, retry]);
 
   async function decide(decision: "allowed" | "denied") {
@@ -244,19 +224,21 @@ function InterceptCard({
     try {
       await api.interceptDecide(pendingId, decision);
       setDecided(decision);
-      toast.success(decision === "allowed" ? "已允许执行" : "已拒绝执行");
+      toast.success(
+        decision === "allowed" ? translate("chatUI.allowedExecution") : translate("chatUI.deniedExecution"),
+      );
     } catch (e) {
-      toast.error((e as Error).message);
+      toast.error(localizedError(e, translate));
     } finally {
       setDeciding(false);
     }
   }
 
-  const inputStr = detail?.input
-    ? JSON.stringify(detail.input).slice(0, 200)
-    : null;
+  const inputStr = detail?.input ? JSON.stringify(detail.input).slice(0, 200) : null;
 
-  const row = pending ? { ...pending, status: decided || pending.status, conv_title: "", conv_agent_key: "", rule_name: "" } : null;
+  const row = pending
+    ? { ...pending, status: decided || pending.status, conv_title: "", conv_agent_key: "", rule_name: "" }
+    : null;
 
   return (
     <div className="my-2 rounded-lg border border-amber-400/50 bg-amber-50/40 dark:bg-amber-950/15 p-3 text-xs">
@@ -265,32 +247,34 @@ function InterceptCard({
           <ShieldAlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <div className="min-w-0 space-y-0.5">
             <div className="flex items-center gap-1.5 font-medium">
-              <span className="text-amber-700 dark:text-amber-400">审批请求</span>
+              <span className="text-amber-700 dark:text-amber-400">{translate("chatUI.approvalRequest")}</span>
               <code className="rounded bg-amber-100 dark:bg-amber-900/50 px-1 font-mono text-amber-800 dark:text-amber-300">
                 {toolName}
               </code>
-              {pendingId && (
-                <span className="text-muted-foreground">#{pendingId}</span>
-              )}
+              {pendingId && <span className="text-muted-foreground">#{pendingId}</span>}
             </div>
-            {inputStr && (
-              <p className="font-mono text-muted-foreground truncate">{inputStr}</p>
-            )}
+            {inputStr && <p className="font-mono text-muted-foreground truncate">{inputStr}</p>}
           </div>
         </div>
 
         {step.inherited ? (
-          <Badge variant="outline">历史记录 · 只读</Badge>
+          <Badge variant="outline">{translate("chatUI.readOnlyHistory")}</Badge>
         ) : decided ? (
-          <span className={
-            "shrink-0 rounded px-2 py-0.5 text-[11px] font-medium " +
-            (decided === "allowed"
-              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
+          <span
+            className={
+              "shrink-0 rounded px-2 py-0.5 text-[11px] font-medium " +
+              (decided === "allowed"
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
+                : decided === "timeout"
+                  ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                  : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400")
+            }
+          >
+            {decided === "allowed"
+              ? translate("chatUI.allowed")
               : decided === "timeout"
-                ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400")
-          }>
-            {decided === "allowed" ? "已允许" : decided === "timeout" ? "已超时" : "已拒绝"}
+                ? translate("chatUI.timeout")
+                : translate("chatUI.denied")}
           </span>
         ) : (
           <div className="flex shrink-0 gap-1.5">
@@ -301,7 +285,7 @@ function InterceptCard({
               onClick={() => decide("allowed")}
             >
               <CheckIcon className="h-3 w-3" />
-              允许
+              {translate("chatUI.allow")}
             </Button>
             <Button
               size="sm"
@@ -311,7 +295,7 @@ function InterceptCard({
               onClick={() => decide("denied")}
             >
               <XIcon className="h-3 w-3" />
-              拒绝
+              {translate("chatUI.deny")}
             </Button>
           </div>
         )}
@@ -319,9 +303,13 @@ function InterceptCard({
       {pendingId ? (
         <Collapsible open={expanded} onOpenChange={setExpanded} className="mt-2 min-w-0">
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm" aria-label={expanded ? "收起审批详情" : "展开审批详情"}>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={expanded ? translate("chatUI.collapseApproval") : translate("chatUI.expandApproval")}
+            >
               {expanded ? <ChevronDown data-icon="inline-start" /> : <ChevronRight data-icon="inline-start" />}
-              {expanded ? "收起审批详情" : "展开审批详情"}
+              {expanded ? translate("chatUI.collapseApproval") : translate("chatUI.expandApproval")}
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent>
@@ -337,10 +325,14 @@ function InterceptCard({
               />
             ) : statusError ? (
               <div className="flex flex-wrap items-center gap-2 p-3" role="alert">
-                <span>{statusError}</span>
-                <Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>重试详情</Button>
+                <span>{localizedError(statusError, translate)}</span>
+                <Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>
+                  {translate("chatUI.retryDetails")}
+                </Button>
               </div>
-            ) : <p className="p-3 text-muted-foreground">正在加载审批详情…</p>}
+            ) : (
+              <p className="p-3 text-muted-foreground">{translate("chatUI.loadingApproval")}</p>
+            )}
           </CollapsibleContent>
         </Collapsible>
       ) : null}
@@ -362,15 +354,18 @@ function ToolBlock({
   showWorker?: boolean;
   focused?: boolean;
 }) {
+  const { t: translate } = useLiveTranslation();
   const [open, setOpen] = React.useState(focused);
   const targetRef = React.useRef<HTMLElement>(null);
-  const [detail, setDetail] = React.useState<string | null>(null);
+  const [parts, setParts] = React.useState<{ kind: "command" | "output"; text: string; failed?: boolean }[] | null>(
+    null,
+  );
   // what we last loaded, keyed by the underlying step seqs. When the tool result
   // arrives after we expanded mid-run (command only), this key changes and the
   // effect below re-fetches — so the output shows up instead of being cached out.
   const loadedKey = React.useRef<string | null>(null);
   const { use, result } = group;
-  const toolName = use?.tool || result?.tool || "工具";
+  const toolName = use?.tool || result?.tool || translate("chatUI.tool");
   const ToolIcon = toolName === "Bash" ? Terminal : Wrench;
   const running = !result;
   const ok = !!result && !result.is_error;
@@ -383,35 +378,35 @@ function ToolBlock({
     use && use.summary.startsWith(toolName) ? use.summary.slice(toolName.length).trimStart() : (use?.summary ?? "");
   const cmd = toolInputText(toolName, rawCmd);
   // status only — the full result lives behind the expand (【输出】), not previewed inline
-  const statusText = running ? "执行中…" : ok ? "✓" : "✕ 失败";
+  const statusText = running ? translate("chatUI.executing") : ok ? "✓" : translate("chatUI.executionFailed");
 
   // key over the seqs we'd load; changes when the result (or command) arrives.
   const detailKey = `${use?.seq ?? ""}:${result?.seq ?? ""}`;
   React.useEffect(() => {
     if (!open || loadedKey.current === detailKey) return;
     let live = true;
-    const segs: { label: string; seq: number }[] = [];
-    if (use) segs.push({ label: "命令", seq: use.seq });
-    if (result) segs.push({ label: "输出" + (result.is_error ? " ✕" : " ✓"), seq: result.seq });
+    const segs: { kind: "command" | "output"; seq: number }[] = [];
+    if (use) segs.push({ kind: "command", seq: use.seq });
+    if (result) segs.push({ kind: "output", seq: result.seq });
     void Promise.all(
-      segs.map((x) =>
-        getDetail(x.seq)
-          .then((d) => d || "（空）")
-          .catch(() => "（加载失败）"),
-      ),
-    ).then((parts) => {
+      segs.map(async (segment) => {
+        try {
+          return { kind: segment.kind, text: await getDetail(segment.seq) };
+        } catch {
+          return { kind: segment.kind, text: "", failed: true };
+        }
+      }),
+    ).then((loaded) => {
       if (!live) return;
-      setDetail(
-        segs
-          .map((x, i) => `【${x.label}】\n${x.label === "命令" ? toolInputText(toolName, parts[i]) : parts[i]}`)
-          .join("\n\n"),
-      );
+      setParts(loaded);
       loadedKey.current = detailKey;
     });
     return () => {
       live = false;
     };
-  }, [open, detailKey, use, result, getDetail, toolName]);
+  }, [open, detailKey, use, result, getDetail]);
+
+  const detail = parts ? formatToolDetail(parts, toolName, !!result?.is_error, translate) : null;
 
   const scrolledRef = React.useRef(false);
   React.useEffect(() => {
@@ -457,7 +452,7 @@ function ToolBlock({
   return (
     <section
       ref={targetRef}
-      aria-label={focused ? `定位的工具调用 #${use?.seq}` : undefined}
+      aria-label={focused ? translate("chatUI.focusedCall", { seq: use?.seq }) : undefined}
       className={focused ? "rounded-lg border-2 border-primary bg-primary/5 p-3 text-xs" : "text-xs"}
     >
       <button type="button" onClick={toggle} className="flex w-full items-start gap-2 py-1 text-left hover:bg-muted/40">
@@ -472,7 +467,7 @@ function ToolBlock({
       </button>
       {open && (
         <pre className="ml-7 mb-1 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed">
-          {detail ?? "加载中…"}
+          {detail ?? translate("chatUI.loading")}
         </pre>
       )}
     </section>
@@ -490,8 +485,9 @@ function MessageBlock({
   getDetail: (seq: number) => Promise<string>;
   showWorker?: boolean;
 }) {
+  const { t: translate } = useLiveTranslation();
   const [open, setOpen] = React.useState(false);
-  const [detail, setDetail] = React.useState<string | null>(null);
+  const [parts, setParts] = React.useState<{ kind: string; text: string }[] | null>(null);
   // like ToolBlock: keyed by the group's step seqs so streamed steps arriving
   // after an early expand re-fetch instead of being cached out.
   const loadedKey = React.useRef<string | null>(null);
@@ -514,13 +510,15 @@ function MessageBlock({
       ),
     ).then((parts) => {
       if (!live) return;
-      setDetail(group.steps.map((s, i) => `【${kindLabel(s.kind)}】\n${parts[i]}`).join("\n\n"));
+      setParts(group.steps.map((step, i) => ({ kind: step.kind, text: parts[i] })));
       loadedKey.current = detailKey;
     });
     return () => {
       live = false;
     };
   }, [open, detailKey, group.steps, getDetail]);
+
+  const detail = parts?.map((part) => `【${translate(kindKey(part.kind))}】\n${part.text}`).join("\n\n") ?? null;
 
   function toggle() {
     setOpen((o) => !o);
@@ -536,12 +534,14 @@ function MessageBlock({
         {showWorker && <span className={chip(group.worker)}>{group.worker}</span>}
         <span className={"min-w-0 flex-1 truncate " + tone}>
           {body}
-          {hasThinking && <span className="ml-1 text-[10px] text-muted-foreground">· 含推理</span>}
+          {hasThinking && (
+            <span className="ml-1 text-[10px] text-muted-foreground">{translate("chatUI.includesThinking")}</span>
+          )}
         </span>
       </button>
       {open && (
         <pre className="ml-7 mb-1 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed">
-          {detail ?? "加载中…"}
+          {detail ?? translate("chatUI.loading")}
         </pre>
       )}
     </div>
@@ -579,7 +579,15 @@ function parseUserBody(body: string): { text: string; attachments: MsgAttachment
   return { text: body, attachments: [] };
 }
 
-function UserRow({ step, intent, getDetail }: { step: Activity; intent?: boolean; getDetail: (seq: number) => Promise<string> }) {
+function UserRow({
+  step,
+  intent,
+  getDetail,
+}: {
+  step: Activity;
+  intent?: boolean;
+  getDetail: (seq: number) => Promise<string>;
+}) {
   const Icon = intent ? CrosshairIcon : UserIcon;
   const [ref, inView] = useInView();
   // Optimistic echoes carry their detail inline; persisted rows lazy-load it on scroll.
@@ -689,6 +697,7 @@ function ExecView({
   fetchDetail?: (seq: number) => Promise<string>;
   focusedSeq?: number;
 }) {
+  const { t: translate } = useLiveTranslation();
   const showWorker = new Set(activity.map((a) => a.worker)).size > 1;
   // default detail fetcher: the task-scoped activity endpoint. The chat page passes
   // its own (conversation-scoped) fetcher instead.
@@ -702,7 +711,7 @@ function ExecView({
         g.type === "round" ? (
           <div key={"r" + g.key} className="my-2 flex items-center gap-2 text-[10px] font-medium text-muted-foreground">
             <span className="h-px flex-1 bg-border" />
-            {g.label}
+            {g.label || translate("chatUI.newRound")}
             <span className="h-px flex-1 bg-border" />
           </div>
         ) : g.type === "user" ? (
@@ -745,10 +754,14 @@ export function Transcript({
   fetchDetail?: (seq: number) => Promise<string>;
   focusedSeq?: number;
 }) {
+  const { t: translate } = useLiveTranslation();
   const transcriptRef = React.useRef<HTMLDivElement>(null);
   const [focusPadding, setFocusPadding] = React.useState(0);
   React.useLayoutEffect(() => {
-    if (focusedSeq == null) { setFocusPadding(0); return; }
+    if (focusedSeq == null) {
+      setFocusPadding(0);
+      return;
+    }
     const viewport = transcriptRef.current?.closest('[data-slot="scroll-area-viewport"]');
     if (!viewport) return;
     const measure = () => setFocusPadding(viewport.clientHeight / 2);
@@ -758,7 +771,11 @@ export function Transcript({
     return () => observer.disconnect();
   }, [focusedSeq]);
   return (
-    <div ref={transcriptRef} className="flex w-full min-w-0 max-w-full flex-col gap-1" style={focusPadding ? { paddingBlock: focusPadding } : undefined}>
+    <div
+      ref={transcriptRef}
+      className="flex w-full min-w-0 max-w-full flex-col gap-1"
+      style={focusPadding ? { paddingBlock: focusPadding } : undefined}
+    >
       <ExecView activity={activity} taskId={taskId} chat={chat} fetchDetail={fetchDetail} focusedSeq={focusedSeq} />
       {live && (
         <div className="flex items-center gap-2 pl-2 pt-1 text-xs text-muted-foreground">
@@ -767,7 +784,7 @@ export function Transcript({
             <span className="size-1.5 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.15s]" />
             <span className="size-1.5 animate-bounce rounded-full bg-blue-500" />
           </span>
-          实时流式中…
+          {translate("chatUI.streaming")}
         </div>
       )}
     </div>

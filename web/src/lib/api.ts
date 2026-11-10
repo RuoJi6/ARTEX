@@ -34,8 +34,6 @@ import type {
   DeleteTaskResult,
   Edge,
   EgressReport,
-  ProxyPoolEntry,
-  ProxySwitchLog,
   EvidenceBodyPreview,
   ExplorationNodePage,
   ExplorationNodeQuery,
@@ -54,8 +52,6 @@ import type {
   FindingsPage,
   FindingTraffic,
   FindingTrafficDetail,
-  RepeaterSendRequest,
-  RepeaterSendResponse,
   IntelligencePage,
   IntentAsset,
   InterceptApprovalFilter,
@@ -82,6 +78,10 @@ import type {
   NotificationMeta,
   PromptVar,
   PromptVersion,
+  ProxyPoolEntry,
+  ProxySwitchLog,
+  RepeaterSendRequest,
+  RepeaterSendResponse,
   SessionTokenUsage,
   Settings,
   Severity,
@@ -90,6 +90,7 @@ import type {
   SSProject,
   SSTask,
   Stats,
+  SystemMetrics,
   Task,
   TaskArchive,
   TaskArchivePage,
@@ -118,7 +119,6 @@ import type {
   UsageStats,
   WorkspaceFile,
   WorkspaceListing,
-  SystemMetrics,
 } from "@/lib/types";
 
 /**
@@ -162,6 +162,17 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
   return response;
 }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly code?: string,
+    public readonly params?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   if (MOCK) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
   const token = getToken();
@@ -173,26 +184,29 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers as Record<string, string> | undefined),
     },
   });
-  if (r.status === 401) {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("artex_token");
-      document.cookie = "artex_token=; path=/; max-age=0";
-      window.location.href = "/login";
-    }
-    throw new Error("未授权");
-  }
   if (!r.ok) {
-    const fallback = `${init?.method ?? "GET"} ${path}: ${r.status}`;
+    const fallback = r.status === 401 ? "未授权" : `${init?.method ?? "GET"} ${path}: ${r.status}`;
     let message = fallback;
+    let code: string | undefined = r.status === 401 ? "unauthorized" : undefined;
+    let params: Record<string, unknown> | undefined;
     try {
-      const payload = (await r.json()) as { error?: unknown };
+      const payload = (await r.json()) as { error?: unknown; code?: unknown; params?: unknown };
       if (typeof payload.error === "string" && payload.error.trim()) {
         message = payload.error.trim();
+      }
+      if (typeof payload.code === "string") code = payload.code;
+      if (payload.params && typeof payload.params === "object" && !Array.isArray(payload.params)) {
+        params = payload.params as Record<string, unknown>;
       }
     } catch {
       // Keep the status-based fallback for empty or non-JSON error responses.
     }
-    throw new Error(message);
+    if (r.status === 401 && typeof window !== "undefined") {
+      localStorage.removeItem("artex_token");
+      document.cookie = "artex_token=; path=/; max-age=0";
+      window.location.href = "/login";
+    }
+    throw new ApiError(message, code, params);
   }
   if (r.status === 204) return undefined as T;
   return r.json();
@@ -412,8 +426,10 @@ export const api = {
   runScheduleNow: (id: number) =>
     post<{ ok: boolean; started: number; errors?: string[] }>(`/schedules/${id}/run-now`, {}),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
-  updateTask: (id: string, input: { name?: string; pinned?: boolean; remark?: string; share_global_assets?: boolean }) =>
-    patch<Task>(`/tasks/${id}`, input),
+  updateTask: (
+    id: string,
+    input: { name?: string; pinned?: boolean; remark?: string; share_global_assets?: boolean },
+  ) => patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),
   pinTask: (id: string, pinned: boolean) => patch<Task>(`/tasks/${id}`, { pinned }),
   createTaskCategory: (name: string) => post<TaskCategory>("/task-categories", { name }),
@@ -429,11 +445,19 @@ export const api = {
     }),
   taskTemplates: () => get<{ templates: TaskTemplate[] }>("/task-templates").then((r) => arr(r.templates)),
   createTaskTemplate: (
-    input: Pick<TaskTemplate, "name" | "description" | "goal" | "remark" | "category_id" | "intercept_rules" | "worker_count">,
+    input: Pick<
+      TaskTemplate,
+      "name" | "description" | "goal" | "remark" | "category_id" | "intercept_rules" | "worker_count"
+    >,
   ) => post<TaskTemplate>("/task-templates", input),
   updateTaskTemplate: (
     id: number,
-    input: Partial<Pick<TaskTemplate, "name" | "description" | "goal" | "remark" | "category_id" | "intercept_rules" | "worker_count">>,
+    input: Partial<
+      Pick<
+        TaskTemplate,
+        "name" | "description" | "goal" | "remark" | "category_id" | "intercept_rules" | "worker_count"
+      >
+    >,
   ) => patch<TaskTemplate>(`/task-templates/${id}`, input),
   deleteTaskTemplate: (id: number) => del<{ deleted: number }>(`/task-templates/${id}`),
   updateTaskLLMProfiles: (id: string, llmProfileIds: number[], activeLLMProfileId?: number) =>
@@ -1008,7 +1032,25 @@ export const api = {
 
   // ---- app settings (runtime toggles) ----
   intelligence: (scope: "tasks" | "assets", id: string, query: URLSearchParams) =>
-    get<IntelligencePage>(`/${scope}/${id}/intelligence?${query.toString()}`),
+    get<IntelligencePage>(`/${scope}/${id}/intelligence?${query.toString()}`).then((page) => {
+      if (
+        !page ||
+        !Array.isArray(page.items) ||
+        !page.counts ||
+        typeof page.counts !== "object" ||
+        Array.isArray(page.counts) ||
+        !["credential", "lead", "sensitive_data"].every((kind) => {
+          const count = page.counts[kind as keyof typeof page.counts];
+          return Number.isSafeInteger(count) && count >= 0;
+        }) ||
+        !Number.isSafeInteger(page.total) ||
+        page.total < 0 ||
+        typeof page.enabled !== "boolean"
+      ) {
+        throw new ApiError("情报数据响应不完整，请刷新后重试", "intelligence_response_invalid");
+      }
+      return page;
+    }),
   intelligenceDetail: (scope: "tasks" | "assets", id: string, intelligenceId: number) =>
     get<TaskIntelligence>(`/${scope}/${id}/intelligence/${intelligenceId}`),
   updateIntelligence: (taskId: number, intelligenceId: number, status: string) =>
@@ -1070,7 +1112,15 @@ export const api = {
   // ---- 漏洞 IM 推送 ----
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
   // 不塞进扁平的 settings 键值里。
-  notifyMeta: () => get<NotificationMeta>(`/notify/meta`),
+  notifyMeta: () =>
+    get<NotificationMeta>(`/notify/meta`).then((meta) => {
+      // An empty demo/proxy response must enter the page's load-error path,
+      // rather than crash the render when it reads kinds.find or stats.
+      if (!meta || !Array.isArray(meta.kinds) || !meta.stats || !meta.defaults) {
+        throw new Error("通知配置响应不完整，请刷新后重试");
+      }
+      return meta;
+    }),
   notifyChannels: () => get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
   notifyCreateChannel: (payload: {
     name: string;

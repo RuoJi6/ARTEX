@@ -2,6 +2,8 @@
 
 import * as React from "react";
 
+import { useTranslation } from "react-i18next";
+
 import { cn } from "@/lib/utils";
 
 function formatClock(value: Date) {
@@ -10,6 +12,7 @@ function formatClock(value: Date) {
 }
 
 export function LiveClock({ className }: { className?: string }) {
+  const { t } = useTranslation();
   const [now, setNow] = React.useState<Date | null>(null);
 
   React.useEffect(() => {
@@ -27,8 +30,8 @@ export function LiveClock({ className }: { className?: string }) {
         className,
       )}
       dateTime={now?.toISOString()}
-      aria-label="当前时间"
-      title="当前本地时间"
+      aria-label={t("clock.current")}
+      title={t("clock.local")}
     >
       {now ? formatClock(now) : "---- -- -- --:--:--"}
     </time>

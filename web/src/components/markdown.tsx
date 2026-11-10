@@ -1,20 +1,19 @@
 "use client";
-
 import * as React from "react";
-import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
+import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
+import remarkGfm from "remark-gfm";
+
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { apiFetch } from "@/lib/api";
 import { auth } from "@/lib/auth";
 
-function AuthenticatedImage({
-  src,
-  alt,
-  ...props
-}: React.ImgHTMLAttributes<HTMLImageElement>) {
+function AuthenticatedImage({ src, alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) {
+  const { ui, liveUI } = useUITranslation();
+
   const [objectURL, setObjectURL] = React.useState<string | null>(null);
   const [captureTimestamp, setCaptureTimestamp] = React.useState<string | null>(null);
   const [zoomed, setZoomed] = React.useState(false);
@@ -45,7 +44,7 @@ function AuthenticatedImage({
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     })
       .then((response) => {
-        if (!response.ok) throw new Error(`图片读取失败: ${response.status}`);
+        if (!response.ok) throw new Error(liveUI("screen.3cb4ca5e3686db", { v0: response.status }));
         setCaptureTimestamp(response.headers.get("X-Report-Screenshot-Timestamp"));
         return response.blob();
       })
@@ -62,7 +61,7 @@ function AuthenticatedImage({
       cancelled = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [imageSrc]);
+  }, [imageSrc, liveUI]);
 
   const renderedSrc = objectURL ?? imageSrc;
   const timestamp = captureTimestamp ? (
@@ -77,9 +76,15 @@ function AuthenticatedImage({
         type="button"
         className="relative my-2 inline-block max-w-full cursor-zoom-in rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => renderedSrc && setZoomed(true)}
-        aria-label="放大查看报告截图"
+        aria-label={ui("screen.c0f272b3250d7d")}
       >
-        <img {...props} src={renderedSrc} alt={alt || "报告截图，点击放大"} draggable={false} onDragStart={(event) => event.preventDefault()} />
+        <img
+          {...props}
+          src={renderedSrc}
+          alt={alt || ui("screen.1d1ee9f8536a82")}
+          draggable={false}
+          onDragStart={(event) => event.preventDefault()}
+        />
         {timestamp}
       </button>
       <Dialog
@@ -112,13 +117,18 @@ function AuthenticatedImage({
               dragRef.current = null;
               event.currentTarget.releasePointerCapture?.(event.pointerId);
             }}
-            onPointerCancel={() => { dragRef.current = null; }}
+            onPointerCancel={() => {
+              dragRef.current = null;
+            }}
             style={{ cursor: zoomScale > 1 ? (dragRef.current ? "grabbing" : "grab") : "default" }}
           >
-            <div className="relative inline-block origin-center" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoomScale})` }}>
+            <div
+              className="relative inline-block origin-center"
+              style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoomScale})` }}
+            >
               <img
                 src={renderedSrc}
-                alt={alt || "报告截图"}
+                alt={alt || ui("screen.9ed32db8d64833")}
                 draggable={false}
                 onDragStart={(event) => event.preventDefault()}
                 className="max-h-[90dvh] max-w-[90vw] rounded-md object-contain"
@@ -134,8 +144,8 @@ function AuthenticatedImage({
               className="text-white hover:bg-white/20 hover:text-white"
               onClick={() => setZoomScale((value) => Math.max(0.5, Number((value - 0.25).toFixed(2))))}
               disabled={zoomScale <= 0.5}
-              title="缩小"
-              aria-label="缩小图片"
+              title={ui("screen.290f68030501cd")}
+              aria-label={ui("screen.c655cffc7e83ee")}
             >
               <ZoomOutIcon />
             </Button>
@@ -145,8 +155,8 @@ function AuthenticatedImage({
               className="text-white hover:bg-white/20 hover:text-white"
               onClick={() => setZoomScale(1)}
               disabled={zoomScale === 1}
-              title="重置大小"
-              aria-label="重置图片大小"
+              title={ui("screen.cac21ee48d7687")}
+              aria-label={ui("screen.bfe737d41bd9d0")}
             >
               <RotateCcwIcon />
             </Button>
@@ -156,8 +166,8 @@ function AuthenticatedImage({
               className="text-white hover:bg-white/20 hover:text-white"
               onClick={() => setZoomScale((value) => Math.min(3, Number((value + 0.25).toFixed(2))))}
               disabled={zoomScale >= 3}
-              title="放大"
-              aria-label="放大图片"
+              title={ui("screen.80f8fbcfa01176")}
+              aria-label={ui("screen.c4189466c4c406")}
             >
               <ZoomInIcon />
             </Button>
@@ -170,7 +180,7 @@ function AuthenticatedImage({
 
 // Tailwind-styled element overrides (no typography plugin in this project, so we
 // style each element). `node` is stripped — it's not a valid DOM attribute.
-const components: Components = {
+const components = (ui: UITranslate): Components => ({
   h1: ({ node, ...p }) => <div className="mt-2.5 text-base font-semibold" {...p} />,
   h2: ({ node, ...p }) => <div className="mt-2 text-sm font-semibold" {...p} />,
   h3: ({ node, ...p }) => <div className="mt-1.5 text-sm font-medium text-foreground/90" {...p} />,
@@ -188,13 +198,13 @@ const components: Components = {
         ? `/api/workspace/preview?path=${encodeURIComponent(src.slice("workspace://".length))}`
         : typeof src === "string" && src.startsWith("findings/screenshots/")
           ? `/api/workspace/preview?path=${encodeURIComponent(src)}`
-        : src;
+          : src;
     return (
       <AuthenticatedImage
         {...p}
         className="my-2 max-h-[520px] max-w-full rounded-md border object-contain"
         src={resolvedSrc}
-        alt={alt || "报告截图"}
+        alt={alt || ui("screen.9ed32db8d64833")}
         // Report screenshots are evidence and must be fetched while the report is
         // rendered; Edge may replace lazy images with placeholders indefinitely
         // when the markdown section is outside the initial viewport.
@@ -208,7 +218,10 @@ const components: Components = {
     <blockquote className="my-1 border-l-2 border-border pl-2.5 text-muted-foreground" {...p} />
   ),
   pre: ({ node, ...p }) => (
-    <pre className="my-1.5 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/70 p-2.5 text-xs leading-relaxed [overflow-wrap:anywhere]" {...p} />
+    <pre
+      className="my-1.5 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/70 p-2.5 text-xs leading-relaxed [overflow-wrap:anywhere]"
+      {...p}
+    />
   ),
   code: ({ node, className, children, ...rest }) => {
     const block = /language-/.test(className || "");
@@ -229,14 +242,16 @@ const components: Components = {
   ),
   th: ({ node, ...p }) => <th className="border border-border bg-muted/60 px-2 py-1 text-left font-medium" {...p} />,
   td: ({ node, ...p }) => <td className="border border-border px-2 py-1 align-top [overflow-wrap:anywhere]" {...p} />,
-};
+});
 
 export function Markdown({ text }: { text: string }) {
+  const { ui } = useUITranslation();
+
   return (
     <div className="min-w-0 max-w-full break-words [overflow-wrap:anywhere] space-y-1.5 text-sm [&>*:first-child]:mt-0">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={components}
+        components={components(ui)}
         urlTransform={(url) =>
           url.startsWith("workspace://") || url.startsWith("findings/screenshots/") ? url : defaultUrlTransform(url)
         }

@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -18,6 +17,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import type { FindingAssetKind, FindingAssetNode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -33,16 +33,16 @@ const KIND_ICON: Record<FindingAssetKind, LucideIcon> = {
   none: CircleDashedIcon,
 };
 
-const KIND_LABEL: Record<FindingAssetKind, string> = {
-  company: "企业",
-  root_domain: "根域名",
-  subdomain: "子域名",
+const KIND_LABEL = (ui: UITranslate): Record<FindingAssetKind, string> => ({
+  company: ui("screen.409d0719010a46"),
+  root_domain: ui("screen.bc208f697acff9"),
+  subdomain: ui("screen.4b4788120c34db"),
   ip: "IP",
-  app: "应用",
-  service: "服务",
-  endpoint: "接口",
-  none: "未关联",
-};
+  app: ui("screen.63c73c4730f447"),
+  service: ui("screen.ec309ab207ef7f"),
+  endpoint: ui("screen.c80d519245a7e8"),
+  none: ui("screen.6b75a35393124b"),
+});
 
 // TreeNode 是节点数组组装出来的树。后端已按「同父下发现多的在前」排好序,
 // 这里只需按数组顺序挂载。
@@ -192,6 +192,8 @@ export function AssetTree({
   findingTotal,
   onRefresh,
 }: AssetTreeProps) {
+  const { ui } = useUITranslation();
+
   const [keyword, setKeyword] = React.useState("");
   const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set());
   // 记住用户手动折叠过的节点,免得「默认展开顶层」在每次刷新后又把它们撑开。
@@ -233,9 +235,9 @@ export function AssetTree({
     [isExpanded],
   );
 
-  let emptyHint = "当前筛选下没有关联到资产的发现。";
-  if (loading) emptyHint = "加载中…";
-  else if (searching) emptyHint = "没有匹配的资产。";
+  let emptyHint = ui("screen.e62adc3d64b53c");
+  if (loading) emptyHint = ui("screen.4927a53bcc886a");
+  else if (searching) emptyHint = ui("screen.19e42884b04f66");
 
   const rows: React.ReactNode[] = [];
   const pushRows = (list: TreeNode[]) => {
@@ -264,8 +266,8 @@ export function AssetTree({
             type="search"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
-            placeholder="过滤资产"
-            aria-label="过滤资产"
+            placeholder={ui("screen.4c705950098156")}
+            aria-label={ui("screen.4c705950098156")}
           />
           <InputGroupAddon>
             <SearchIcon aria-hidden="true" />
@@ -278,8 +280,8 @@ export function AssetTree({
             className="size-8 shrink-0 text-muted-foreground"
             onClick={onRefresh}
             disabled={loading}
-            aria-label="刷新资产树"
-            title="刷新资产树"
+            aria-label={ui("screen.e917acbdf123cd")}
+            title={ui("screen.e917acbdf123cd")}
           >
             <RefreshCwIcon className={cn("size-4", loading && "animate-spin")} />
           </Button>
@@ -294,7 +296,7 @@ export function AssetTree({
           selected === null ? "bg-accent font-medium" : "hover:bg-accent/50",
         )}
       >
-        <span>全部资产</span>
+        <span>{ui("screen.036f4b70eb7f43")}</span>
         <span className="text-xs tabular-nums text-muted-foreground">{findingTotal}</span>
       </button>
 
@@ -307,8 +309,9 @@ export function AssetTree({
 
       {truncated && (
         <p className="px-1 text-xs text-muted-foreground">
-          资产过多，已隐藏{(droppedKinds ?? []).map((k) => KIND_LABEL[k as FindingAssetKind] ?? k).join(" / ")}
-          层级（计数仍已计入上层）。用筛选或过滤框收窄可看到完整层级。
+          {ui("screen.c8d003649b73d6")}
+          {(droppedKinds ?? []).map((k) => KIND_LABEL(ui)[k as FindingAssetKind] ?? k).join(" / ")}
+          {ui("screen.1c533dab29dc88")}
         </p>
       )}
     </div>
@@ -328,6 +331,8 @@ function AssetTreeRow({
   onToggle: () => void;
   onSelect: () => void;
 }) {
+  const { ui } = useUITranslation();
+
   const Icon = KIND_ICON[node.kind] ?? GlobeIcon;
   const hasChildren = node.children.length > 0;
   return (
@@ -343,7 +348,7 @@ function AssetTreeRow({
           type="button"
           onClick={onToggle}
           className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          aria-label={open ? "折叠" : "展开"}
+          aria-label={open ? ui("screen.84a07f292f1f78") : ui("screen.00bd3960fea8ea")}
           aria-expanded={open}
         >
           <ChevronRightIcon className={cn("size-3.5 transition-transform", open && "rotate-90")} />
@@ -355,23 +360,23 @@ function AssetTreeRow({
         type="button"
         onClick={onSelect}
         className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
-        title={`${KIND_LABEL[node.kind] ?? node.kind} · ${node.label}`}
+        title={`${KIND_LABEL(ui)[node.kind] ?? node.kind} · ${node.label}`}
       >
         <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className={cn("min-w-0 truncate", selected && "font-medium")}>{node.display}</span>
       </button>
       <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums">
         {node.critical > 0 && (
-          <span className="text-rose-600" title={`严重 ${node.critical}`}>
+          <span className="text-rose-600" title={ui("screen.68b15a384cd9e0", { v0: node.critical })}>
             {node.critical}
           </span>
         )}
         {node.high > 0 && (
-          <span className="text-red-500" title={`高危 ${node.high}`}>
+          <span className="text-red-500" title={ui("screen.be7026df3cf53a", { v0: node.high })}>
             {node.high}
           </span>
         )}
-        <span className="text-muted-foreground" title={`共 ${node.total} 条发现`}>
+        <span className="text-muted-foreground" title={ui("screen.01ff867118a799", { v0: node.total })}>
           {node.total}
         </span>
       </span>

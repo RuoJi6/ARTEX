@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { SendIcon, Settings2 } from "lucide-react";
@@ -19,6 +18,8 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { translateFixedUIText } from "@/i18n/fixed-ui-text";
+import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 
 import {
@@ -57,6 +58,8 @@ function responseTextFor(response: RepeaterTab["response"], mode: "raw" | "prett
 }
 
 export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
+  const { ui } = useUITranslation();
+
   const { useProxy, insecure, response } = tab;
   const updateTab = useRepeaterStore((state) => state.updateTab);
   const busy = useRepeaterStore((state) => state.inflight[tab.id] !== undefined);
@@ -85,7 +88,7 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
     try {
       parsed = parseRawRequest(requestText, targetOrigin);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(translateFixedUIText((error as Error).message, ui));
       return;
     }
     const { method, url: target, headersText, body, httpVersion } = parsed;
@@ -115,21 +118,22 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
         at: new Date().toISOString(),
       });
     } catch (error) {
-      if (store.isCurrentSend(tab.id, requestGeneration)) toast.error((error as Error).message);
+      if (store.isCurrentSend(tab.id, requestGeneration))
+        toast.error(translateFixedUIText((error as Error).message, ui));
     } finally {
       store.clearInflight(tab.id, requestGeneration);
     }
   }
 
   return (
-    <section aria-label="请求编辑器" className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+    <section aria-label={ui("screen.befa5956fe887a")} className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2 border-b px-1 pb-2">
-        <span className="text-muted-foreground text-xs">目标</span>
+        <span className="text-muted-foreground text-xs">{ui("screen.repeaterDestination")}</span>
         <code
           className="min-w-0 max-w-[min(60vw,44rem)] truncate rounded bg-muted px-2 py-1 font-mono text-xs"
           title={targetOrigin || tab.url}
         >
-          {targetOrigin || connectionOrigin(tab.url) || "按 Host 请求头（默认 HTTPS）"}
+          {targetOrigin || connectionOrigin(tab.url) || ui("screen.39a3f10a88f084")}
         </code>
         <Button
           variant="outline"
@@ -141,15 +145,15 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
           }}
         >
           <Settings2 data-icon="inline-start" />
-          目标设置
+          {ui("screen.4b89afb659e056")}
         </Button>
         <Button className="ml-auto" disabled={busy} onClick={() => void send()}>
           <SendIcon data-icon="inline-start" />
-          {busy ? "发送中…" : "发送"}
+          {busy ? ui("screen.364970d8168ca5") : ui("screen.edecf0ae6e5144")}
         </Button>
       </div>
       <FieldSet className="flex-row flex-wrap items-center gap-3 border-b px-1 pb-2 text-xs">
-        <FieldLegend className="sr-only">发送选项</FieldLegend>
+        <FieldLegend className="sr-only">{ui("screen.efcebfb4344ea3")}</FieldLegend>
         <FieldLabel className="flex items-center gap-2" htmlFor="repeater-use-proxy">
           <Checkbox
             id="repeater-use-proxy"
@@ -157,7 +161,7 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
             checked={useProxy}
             onCheckedChange={(value) => setUseProxy(value === true)}
           />
-          经流量代理
+          {ui("screen.2cb22ee35dbdee")}
         </FieldLabel>
         <FieldLabel className="flex items-center gap-2" htmlFor="repeater-insecure">
           <Checkbox
@@ -166,7 +170,7 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
             checked={insecure}
             onCheckedChange={(value) => setInsecure(value === true)}
           />
-          跳过 TLS 校验
+          {ui("screen.683941dc5b47f8")}
         </FieldLabel>
         {response ? (
           <div className="ml-auto flex items-center gap-2 text-muted-foreground text-xs">
@@ -176,15 +180,17 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
               </Badge>
             ) : null}
             <span>{response.elapsed_ms} ms</span>
-            <span>{response.body_bytes.toLocaleString()} 字节</span>
-            {response.body_truncated ? <Badge variant="outline">正文已截断</Badge> : null}
+            <span>
+              {response.body_bytes.toLocaleString()} {ui("screen.b1c5e73e1471e8")}
+            </span>
+            {response.body_truncated ? <Badge variant="outline">{ui("screen.63cd4db0a40ac1")}</Badge> : null}
           </div>
         ) : null}
       </FieldSet>
       <div className="grid min-h-0 flex-1 auto-rows-[minmax(300px,1fr)] gap-2 overflow-hidden lg:auto-rows-auto lg:grid-cols-2">
         <RepeaterTextPane
           id="repeater-request"
-          label="请求"
+          label={ui("screen.393e1241552b18")}
           value={requestText}
           onChange={changeRequest}
           disabled={busy}
@@ -199,14 +205,16 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
         <div className="flex min-h-[300px] min-w-0 flex-col gap-2 xl:min-h-0">
           {response?.error ? (
             <Alert variant={response.status ? "default" : "destructive"}>
-              <AlertDescription className="break-all font-mono text-xs">{response.error}</AlertDescription>
+              <AlertDescription className="break-all font-mono text-xs">
+                {translateFixedUIText(response.error, ui)}
+              </AlertDescription>
             </Alert>
           ) : null}
           <RepeaterTextPane
             id="repeater-response"
-            label="响应"
+            label={ui("screen.3b1f210d39e388")}
             value={responseText}
-            placeholder="发送后显示原始响应"
+            placeholder={ui("screen.faa84a93a99248")}
             syntaxHighlight
             panelClassName="bg-background"
             toolbar={
@@ -237,10 +245,8 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
       <Dialog open={targetOpen} onOpenChange={setTargetOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>修改发送目标</DialogTitle>
-            <DialogDescription>
-              设置连接地址和 HTTP/HTTPS。方法、路径和 Host 均在左侧报文中编辑；Host 可以与连接目标不同。
-            </DialogDescription>
+            <DialogTitle>{ui("screen.20e622d0d3dd25")}</DialogTitle>
+            <DialogDescription>{ui("screen.7ef4829f724875")}</DialogDescription>
           </DialogHeader>
           <form
             className="flex flex-col gap-4"
@@ -248,7 +254,7 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
               event.preventDefault();
               const origin = targetDraft.trim() ? connectionOrigin(targetDraft.trim()) : "";
               if (targetDraft.trim() && !origin) {
-                toast.error("请填写 http:// 或 https:// 开头的地址");
+                toast.error(ui("screen.a9f06a262b8e17"));
                 return;
               }
               try {
@@ -261,19 +267,19 @@ export function RepeaterEditor({ tab }: { tab: RepeaterTab }) {
             }}
           >
             <Field>
-              <FieldLabel htmlFor="repeater-target">发送目标</FieldLabel>
+              <FieldLabel htmlFor="repeater-target">{ui("screen.89017d56a4f875")}</FieldLabel>
               <Input
                 id="repeater-target"
-                placeholder="https://example.com:443，留空按 Host 连接"
+                placeholder={ui("screen.af47a076cf69f8")}
                 value={targetDraft}
                 onChange={(event) => setTargetDraft(event.target.value)}
               />
             </Field>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setTargetOpen(false)}>
-                取消
+                {ui("screen.2cd0f3be8738a8")}
               </Button>
-              <Button type="submit">保存目标</Button>
+              <Button type="submit">{ui("screen.6fc46974c237ae")}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

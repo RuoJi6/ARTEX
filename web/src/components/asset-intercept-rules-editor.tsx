@@ -7,6 +7,7 @@ import { PlusIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { useLiveTranslation } from "@/i18n/use-live-translation";
 import type { AssetInterceptKind, AssetInterceptRuleInput } from "@/lib/types";
 
 // 用 NativeSelect（原生 <select>）而非 shadcn Select：这个编辑器会用在 Sheet 抽屉内，
@@ -34,6 +35,7 @@ export function AssetInterceptRulesEditor({
   value: AssetInterceptRuleInput[];
   onChange: (v: AssetInterceptRuleInput[]) => void;
 }) {
+  const { t: translate } = useLiveTranslation();
   function update(i: number, patch: Partial<AssetInterceptRuleInput>) {
     onChange(value.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   }
@@ -52,34 +54,37 @@ export function AssetInterceptRulesEditor({
           <div key={i} className="flex items-center gap-2">
             <NativeSelect
               size="sm"
-              className="w-[84px] shrink-0"
+              className="w-[100px] shrink-0"
+              aria-label={translate("taskUI.assetRule.action")}
               value={r.action}
               onChange={(e) => update(i, { action: e.target.value as "block" | "allow" })}
             >
-              <NativeSelectOption value="block">拦截</NativeSelectOption>
-              <NativeSelectOption value="allow">允许</NativeSelectOption>
+              <NativeSelectOption value="block">{translate("taskUI.assetRule.block")}</NativeSelectOption>
+              <NativeSelectOption value="allow">{translate("taskUI.assetRule.allow")}</NativeSelectOption>
             </NativeSelect>
             <NativeSelect
               size="sm"
               className="w-[120px] shrink-0"
+              aria-label={translate("taskUI.assetRule.kind")}
               value={r.kind}
               onChange={(e) => update(i, { kind: e.target.value as AssetInterceptKind })}
             >
               {ASSET_INTERCEPT_KIND_OPTIONS.map((o) => (
                 <NativeSelectOption key={o.value} value={o.value}>
-                  {o.label}
+                  {translate(`taskUI.assetRule.${o.value}`)}
                 </NativeSelectOption>
               ))}
             </NativeSelect>
             <Input
               className="flex-1"
+              aria-label={translate("taskUI.assetRule.pattern")}
               placeholder={ph}
               value={r.pattern}
               onChange={(e) => update(i, { pattern: e.target.value })}
             />
             <Input
               className="w-[120px] shrink-0"
-              placeholder="备注(可选)"
+              placeholder={translate("taskUI.assetRule.noteOptional")}
               value={r.note}
               onChange={(e) => update(i, { note: e.target.value })}
             />
@@ -88,6 +93,7 @@ export function AssetInterceptRulesEditor({
               size="icon"
               variant="ghost"
               className="text-destructive hover:text-destructive size-8 shrink-0"
+              aria-label={translate("taskUI.assetRule.remove")}
               onClick={() => remove(i)}
             >
               <Trash2Icon className="size-4" />
@@ -96,7 +102,7 @@ export function AssetInterceptRulesEditor({
         );
       })}
       <Button type="button" size="sm" variant="outline" className="w-fit" onClick={add}>
-        <PlusIcon className="size-4" /> 添加一条
+        <PlusIcon className="size-4" /> {translate("taskUI.assetRule.add")}
       </Button>
     </div>
   );

@@ -139,6 +139,8 @@ const maps = {
 
 export type StatusDomain = keyof typeof maps;
 
-export function statusMeta(domain: StatusDomain, key: string): StatusMeta {
-  return maps[domain][key] ?? { label: key, tone: "neutral" };
+export function statusMeta(domain: StatusDomain, key: string, translate?: (key: string) => string): StatusMeta {
+  const meta = maps[domain][key];
+  if (!meta) return { label: key, tone: "neutral" };
+  return { ...meta, label: translate ? translate(`status.${domain}.${key}`) : meta.label };
 }

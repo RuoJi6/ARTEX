@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Combobox, ComboboxContent, ComboboxInput, ComboboxItem, ComboboxList } from "@/components/ui/combobox";
@@ -92,7 +93,7 @@ export function TimeSelect({
   value,
   onValueChange,
   optional = false,
-  placeholder = "选择时间",
+  placeholder,
   "aria-label": ariaLabel,
 }: {
   value?: string;
@@ -101,19 +102,23 @@ export function TimeSelect({
   placeholder?: string;
   "aria-label"?: string;
 }) {
+  const { t } = useTranslation();
   const selected = splitTime(value);
   const hasValue = Boolean(selected.hour && selected.minute);
   const updateHour = (hour: string) => onValueChange(`${hour}:${selected.minute ?? "00"}`);
   const updateMinute = (minute: string) => onValueChange(`${selected.hour ?? "00"}:${minute}`);
 
   return (
-    <div className="flex w-[9.25rem] min-w-0 items-center gap-1.5" title={optional && !hasValue ? placeholder : undefined}>
+    <div
+      className="flex w-[9.25rem] min-w-0 items-center gap-1.5"
+      title={optional && !hasValue ? (placeholder ?? t("time.select")) : undefined}
+    >
       <TimePart
         value={selected.hour}
         items={hours}
         max={23}
-        placeholder="小时"
-        ariaLabel={ariaLabel ? `${ariaLabel} 小时` : "小时"}
+        placeholder={t("time.hour")}
+        ariaLabel={ariaLabel ? t("time.hourLabel", { label: ariaLabel }) : t("time.hour")}
         onValueChange={updateHour}
       />
       <span className="font-medium text-muted-foreground">:</span>
@@ -121,8 +126,8 @@ export function TimeSelect({
         value={selected.minute}
         items={minutes}
         max={59}
-        placeholder="分钟"
-        ariaLabel={ariaLabel ? `${ariaLabel} 分钟` : "分钟"}
+        placeholder={t("time.minute")}
+        ariaLabel={ariaLabel ? t("time.minuteLabel", { label: ariaLabel }) : t("time.minute")}
         onValueChange={updateMinute}
       />
       {optional && hasValue && (
@@ -132,8 +137,8 @@ export function TimeSelect({
           size="icon-sm"
           className="shrink-0"
           onClick={() => onValueChange("")}
-          aria-label="清除结束时间"
-          title="不设置结束时间"
+          aria-label={t("time.clearEnd")}
+          title={t("time.noEnd")}
         >
           <X />
         </Button>

@@ -1,3 +1,7 @@
+"use client";
+
+import { useTranslation } from "react-i18next";
+
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
@@ -63,35 +67,37 @@ function PaginationLink({
 
 function PaginationPrevious({
   className,
-  text = "Previous",
+  text,
   ...props
 }: React.ComponentProps<typeof PaginationLink> & { text?: string }) {
+ const { t } = useTranslation();
   return (
     <PaginationLink
-      aria-label="Go to previous page"
+      aria-label={t("common.previous")}
       size="default"
       className={cn("pl-1.5!", className)}
       {...props}
     >
       <ChevronLeftIcon data-icon="inline-start" />
-      <span className="hidden sm:block">{text}</span>
+      <span className="hidden sm:block">{text ?? t("common.previous")}</span>
     </PaginationLink>
   )
 }
 
 function PaginationNext({
   className,
-  text = "Next",
+  text,
   ...props
 }: React.ComponentProps<typeof PaginationLink> & { text?: string }) {
+ const { t } = useTranslation();
   return (
     <PaginationLink
-      aria-label="Go to next page"
+      aria-label={t("common.next")}
       size="default"
       className={cn("pr-1.5!", className)}
       {...props}
     >
-      <span className="hidden sm:block">{text}</span>
+      <span className="hidden sm:block">{text ?? t("common.next")}</span>
       <ChevronRightIcon data-icon="inline-end" />
     </PaginationLink>
   )
@@ -101,6 +107,7 @@ function PaginationEllipsis({
   className,
   ...props
 }: React.ComponentProps<"span">) {
+ const { t } = useTranslation();
   return (
     <span
       aria-hidden
@@ -113,7 +120,7 @@ function PaginationEllipsis({
     >
       <MoreHorizontalIcon
       />
-      <span className="sr-only">More pages</span>
+      <span className="sr-only">{t("ui.morePages")}</span>
     </span>
   )
 }

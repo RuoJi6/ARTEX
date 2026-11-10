@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { Library, Plus, X } from "lucide-react";
@@ -29,11 +28,13 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { repeaterGroupLabel, translateFixedUIText } from "@/i18n/fixed-ui-text";
+import { useUITranslation } from "@/i18n/use-ui-translation";
 import { cn } from "@/lib/utils";
 
 import { RepeaterEditor } from "./repeater-editor";
 import { RepeaterNavigator } from "./repeater-navigator";
-import { useRepeaterStore } from "./repeater-store";
+import { setRepeaterMessageFormatter, useRepeaterStore } from "./repeater-store";
 
 const METHOD_COLORS: Record<string, string> = {
   GET: "text-sky-600 dark:text-sky-400",
@@ -56,10 +57,13 @@ function statusColor(status: number) {
 }
 
 export function RepeaterWorkspace() {
+  const { ui, liveUI } = useUITranslation();
+
   const store = useRepeaterStore();
   const { workspace, hydrate } = store;
   const [rename, setRename] = React.useState<{ kind: "tab" | "group"; id: string; name: string } | null>(null);
   const [libraryOpen, setLibraryOpen] = React.useState(false);
+  React.useEffect(() => setRepeaterMessageFormatter((message) => translateFixedUIText(message, liveUI)), [liveUI]);
   React.useEffect(() => {
     hydrate();
   }, [hydrate]);
@@ -78,33 +82,33 @@ export function RepeaterWorkspace() {
     <div className="flex min-h-[calc(100dvh-7rem)] min-w-0 flex-col gap-2 xl:h-[calc(100dvh-8rem)] xl:min-h-[600px]">
       <div className="flex flex-wrap items-center gap-2 border-b pb-2">
         <div className="min-w-0">
-          <h1 className="font-semibold text-lg tracking-tight">请求重发</h1>
-          <p className="text-muted-foreground text-xs">Repeater · 草稿与历史响应保存在此浏览器</p>
+          <h1 className="font-semibold text-lg tracking-tight">{ui("screen.ce86a82edb4fcb")}</h1>
+          <p className="text-muted-foreground text-xs">{ui("screen.27f58568eecd1f")}</p>
         </div>
         <div className="ml-auto flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => setLibraryOpen(true)}>
             <Library data-icon="inline-start" />
-            请求库
+            {ui("screen.429070b64d1e8a")}
           </Button>
           <Button size="sm" onClick={() => store.createTab()}>
             <Plus data-icon="inline-start" />
-            新建请求
+            {ui("screen.b5eb32f7d94071")}
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="outline" size="sm">
-                清空工作区
+                {ui("screen.c5fc8f26afb352")}
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>清空请求重发工作区？</AlertDialogTitle>
-                <AlertDialogDescription>所有分组、标签、请求草稿和历史响应都会被删除。</AlertDialogDescription>
+                <AlertDialogTitle>{ui("screen.e55eb32c87cfa6")}</AlertDialogTitle>
+                <AlertDialogDescription>{ui("screen.c91d1912e7fce4")}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogCancel>{ui("screen.2cd0f3be8738a8")}</AlertDialogCancel>
                 <AlertDialogAction variant="destructive" onClick={() => store.clearWorkspace()}>
-                  确认清空
+                  {ui("screen.3c7a4fb3566dd1")}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -144,7 +148,7 @@ export function RepeaterWorkspace() {
                   variant="ghost"
                   size="icon-xs"
                   className="mr-0.5 opacity-60 hover:opacity-100"
-                  aria-label={`关闭请求 ${tab.title}`}
+                  aria-label={ui("screen.c7b80c714428cf", { v0: tab.title })}
                   onClick={() => store.closeTab(tab.id)}
                 >
                   <X />
@@ -153,7 +157,12 @@ export function RepeaterWorkspace() {
             );
           })}
         </div>
-        <Button variant="ghost" size="icon-sm" aria-label="新建请求" onClick={() => store.createTab()}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={ui("screen.b5eb32f7d94071")}
+          onClick={() => store.createTab()}
+        >
           <Plus />
         </Button>
       </div>
@@ -166,7 +175,7 @@ export function RepeaterWorkspace() {
               </span>
               <Field orientation="horizontal" className="ml-auto w-auto gap-2">
                 <FieldLabel htmlFor="repeater-group" className="text-muted-foreground text-xs">
-                  分组
+                  {ui("screen.399ee69347726c")}
                 </FieldLabel>
                 <Select value={active.groupId} onValueChange={(id) => store.setTabGroup(active.id, id)}>
                   <SelectTrigger id="repeater-group" className="h-7 w-32 text-xs">
@@ -176,7 +185,7 @@ export function RepeaterWorkspace() {
                     <SelectGroup>
                       {workspace.groups.map((group) => (
                         <SelectItem key={group.id} value={group.id}>
-                          {group.name}
+                          {repeaterGroupLabel(group, ui)}
                         </SelectItem>
                       ))}
                     </SelectGroup>
@@ -187,14 +196,14 @@ export function RepeaterWorkspace() {
             <RepeaterEditor key={active.id} tab={active} />
           </div>
         ) : (
-          <Button onClick={() => store.createTab()}>新建请求</Button>
+          <Button onClick={() => store.createTab()}>{ui("screen.b5eb32f7d94071")}</Button>
         )}
       </main>
       <Sheet open={libraryOpen} onOpenChange={setLibraryOpen}>
         <SheetContent side="left" className="w-[min(92vw,380px)] max-w-none p-3">
           <SheetHeader className="px-1 pb-1">
-            <SheetTitle>请求库</SheetTitle>
-            <SheetDescription>搜索、分组和恢复请求历史。</SheetDescription>
+            <SheetTitle>{ui("screen.429070b64d1e8a")}</SheetTitle>
+            <SheetDescription>{ui("screen.60cfe38a72de0a")}</SheetDescription>
           </SheetHeader>
           <RepeaterNavigator
             workspace={workspace}
@@ -211,12 +220,14 @@ export function RepeaterWorkspace() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{rename?.kind === "group" ? "重命名分组" : "重命名标签"}</DialogTitle>
-            <DialogDescription>输入便于识别的名称。</DialogDescription>
+            <DialogTitle>
+              {rename?.kind === "group" ? ui("screen.5218cd8d059e94") : ui("screen.89f853cdb5288c")}
+            </DialogTitle>
+            <DialogDescription>{ui("screen.316ee6e899fcd9")}</DialogDescription>
           </DialogHeader>
           <form onSubmit={saveName} className="flex flex-col gap-4">
             <Field>
-              <FieldLabel htmlFor="repeater-name">名称</FieldLabel>
+              <FieldLabel htmlFor="repeater-name">{ui("screen.d44e9b3d3b31d3")}</FieldLabel>
               <Input
                 id="repeater-name"
                 value={rename?.name ?? ""}
@@ -227,10 +238,10 @@ export function RepeaterWorkspace() {
             </Field>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setRename(null)}>
-                取消
+                {ui("screen.2cd0f3be8738a8")}
               </Button>
               <Button type="submit" disabled={!rename?.name.trim()}>
-                保存
+                {ui("screen.a3030bf8f16dc6")}
               </Button>
             </DialogFooter>
           </form>

@@ -146,13 +146,13 @@ func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 			if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/basic-auth/check" || r.URL.Path == "/api/health" {
 				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted", charset="UTF-8"`)
 			}
-			writeErr(w, http.StatusUnauthorized, "请先完成 HTTP Basic Auth 验证")
+			writeProductError(w, http.StatusUnauthorized, "basic_auth_required", "请先完成 HTTP Basic Auth 验证", nil)
 			return
 		}
 		// Browser API requests already use Authorization: Bearer. A separate
 		// HttpOnly cookie keeps the gate satisfied without replacing that header.
 		if err := s.setBasicAuthCookie(w, r, cfg); err != nil {
-			writeErr(w, 500, "认证会话生成失败")
+			writeProductError(w, 500, "auth_session_failed", "认证会话生成失败", nil)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -175,7 +175,7 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 		Password string  `json:"password"`
 	}
 	if err := decode(r, &req); err != nil {
-		writeErr(w, 400, "请求格式错误")
+		writeProductError(w, 400, "invalid_request", "请求格式错误", nil)
 		return
 	}
 	g := &s.basicAuth
@@ -185,7 +185,7 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 	cfg, store := g.cfg, g.store
 	g.mu.RUnlock()
 	if store == nil {
-		writeErr(w, 503, errDataSourceUnavailable)
+		writeProductError(w, 503, "data_unavailable", errDataSourceUnavailable, nil)
 		return
 	}
 	if req.Enabled != nil {
@@ -195,23 +195,24 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 		cfg.Username = strings.TrimSpace(*req.Username)
 	}
 	if (cfg.Enabled || cfg.Username != "") && !validBasicUsername(cfg.Username) {
-		writeErr(w, 400, "Basic Auth 用户名不能为空、超过 128 字节或包含冒号及控制字符")
+		writeProductError(w, 400, "basic_auth_username_invalid", "Basic Auth 用户名不能为空、超过 128 字节或包含冒号及控制字符", nil)
 		return
 	}
 	if req.Password != "" {
 		if msg := validatePassword(req.Password); msg != "" {
-			writeErr(w, 400, msg)
+			code, params := passwordValidationCode(req.Password)
+			writeProductError(w, 400, code, msg, params)
 			return
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			writeErr(w, 500, "密码加密失败")
+			writeProductError(w, 500, "password_hash_failed", "密码加密失败", nil)
 			return
 		}
 		cfg.PasswordHash = string(hash)
 	}
 	if cfg.Enabled && cfg.PasswordHash == "" {
-		writeErr(w, 400, "请先设置 Basic Auth 密码")
+		writeProductError(w, 400, "basic_auth_password_required", "请先设置 Basic Auth 密码", nil)
 		return
 	}
 	// Every save revokes previous gate cookies, including disable/re-enable.
@@ -220,7 +221,7 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), basicAuthSaveTimeout)
 	defer cancel()
 	if err != nil || store.SetSettingContext(ctx, basicAuthKey, string(data)) != nil {
-		writeErr(w, 503, "Basic Auth 配置保存失败，请重试")
+		writeProductError(w, 503, "basic_auth_save_failed", "Basic Auth 配置保存失败，请重试", nil)
 		return
 	}
 	// Hashing, persistence and response output never hold the request mutex.
@@ -232,7 +233,7 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	// Keep the administrator who just saved the settings in their session.
 	if err := s.setBasicAuthCookie(w, r, cfg); err != nil {
-		writeErr(w, 500, "认证会话生成失败")
+		writeProductError(w, 500, "auth_session_failed", "认证会话生成失败", nil)
 		return
 	}
 	writeJSON(w, 200, basicAuthPublicSettings(cfg))

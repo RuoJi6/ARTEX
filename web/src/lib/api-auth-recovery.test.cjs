@@ -33,7 +33,7 @@ function client(fetch) {
   return { ...exports, state, location, document };
 }
 
-const gateFailure = () => new Response('{"error":"请先完成 HTTP Basic Auth 验证"}', {
+const gateFailure = () => new Response('{"error":"请先完成 HTTP Basic Auth 验证","code":"basic_auth_required"}', {
   status: 401, headers: { "X-Artex-Auth": "basic" },
 });
 
@@ -82,7 +82,12 @@ test("a late admin 401 cannot clear the token once gate recovery has started", a
 
 test("an ordinary expired admin JWT still clears the login and opens /login", async () => {
   const c = client(async () => new Response('{"error":"token 无效或已过期"}', { status: 401 }));
-  await assert.rejects(c.http("/version"), /未授权/);
+  await assert.rejects(c.http("/version"), (error) => {
+    assert.equal(error.name, "ApiError");
+    assert.equal(error.code, "unauthorized");
+    assert.equal(error.message, "token 无效或已过期");
+    return true;
+  });
   assert.equal(c.state.token, null);
   assert.equal(c.location.href, "/login");
   assert.equal(c.state.reloads, 0);

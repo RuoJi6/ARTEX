@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -27,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type {
   AssetInterceptKind,
@@ -55,29 +55,30 @@ function cacheHitRate(cacheRead: number, input: number): string {
 }
 
 // 测试范围一条的显示值：域名 / 网段 / 公司。
-function scopeValue(row: TaskScopeRow): string {
+function scopeValue(row: TaskScopeRow, ui: UITranslate): string {
   if (row.value) return row.value;
   if (row.domain) return row.domain;
   if (row.net) return row.net;
-  if (row.company_id) return row.company_name?.trim() ? row.company_name : `企业 #${row.company_id}`;
+  if (row.company_id)
+    return row.company_name?.trim() ? row.company_name : ui("screen.ef6e5841efc6ef", { v0: row.company_id });
   return "—";
 }
 
-const SCOPE_KIND_LABELS: Record<TaskScopeRow["kind"], string> = {
-  company: "公司",
-  root_domain: "根域名",
-  subdomain: "子域名",
+const SCOPE_KIND_LABELS = (ui: UITranslate): Record<TaskScopeRow["kind"], string> => ({
+  company: ui("screen.e06ff957ed48e8"),
+  root_domain: ui("screen.bc208f697acff9"),
+  subdomain: ui("screen.4b4788120c34db"),
   ip: "IP",
-  cidr: "网段",
+  cidr: ui("screen.097e79b99ea5ca"),
   icp: "ICP",
-  keyword: "关键词",
-};
+  keyword: ui("screen.1f7f0db90f932d"),
+});
 
-const SCOPE_SOURCE_LABELS: Record<TaskScopeRow["source"], string> = {
-  auto: "自动",
+const SCOPE_SOURCE_LABELS = (ui: UITranslate): Record<TaskScopeRow["source"], string> => ({
+  auto: ui("screen.7eb336e42cb507"),
   agent: "Agent",
-  manual: "手动",
-};
+  manual: ui("screen.962f41ef825b72"),
+});
 
 function StatCard({
   label,
@@ -104,6 +105,8 @@ function StatCard({
 }
 
 export function OverviewTab({ taskId }: { taskId: string }) {
+  const { ui } = useUITranslation();
+
   const [task, setTask] = React.useState<Task | null>(null);
   const [stats, setStats] = React.useState<Stats | null>(null);
   const [intents, setIntents] = React.useState<TaskNode[]>([]);
@@ -183,7 +186,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       setGoalVuln("");
       await loadGoals();
     } catch (e) {
-      setGoalErr(e instanceof Error ? e.message : "添加失败");
+      setGoalErr(e instanceof Error ? e.message : ui("screen.2ca15f1e2bb7d9"));
     } finally {
       setGoalBusy(false);
     }
@@ -211,7 +214,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       cancelEditGoal();
       await loadGoals();
     } catch (e) {
-      setGoalErr(e instanceof Error ? e.message : "保存失败");
+      setGoalErr(e instanceof Error ? e.message : ui("screen.6309a3bb5ba4c7"));
     } finally {
       setGoalBusy(false);
     }
@@ -245,7 +248,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       setConText("");
       await loadConstraints();
     } catch (e) {
-      setConErr(e instanceof Error ? e.message : "添加失败");
+      setConErr(e instanceof Error ? e.message : ui("screen.2ca15f1e2bb7d9"));
     } finally {
       setConBusy(false);
     }
@@ -273,7 +276,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       cancelEditConstraint();
       await loadConstraints();
     } catch (e) {
-      setConErr(e instanceof Error ? e.message : "保存失败");
+      setConErr(e instanceof Error ? e.message : ui("screen.6309a3bb5ba4c7"));
     } finally {
       setConBusy(false);
     }
@@ -298,7 +301,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       setScopeValueInput("");
       await loadScope();
     } catch (e) {
-      setScopeErr(e instanceof Error ? e.message : "添加失败");
+      setScopeErr(e instanceof Error ? e.message : ui("screen.2ca15f1e2bb7d9"));
     } finally {
       setScopeBusy(false);
     }
@@ -436,16 +439,16 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <TargetIcon className="size-4 text-primary" /> 任务描述与目标
+            <TargetIcon className="size-4 text-primary" /> {ui("screen.dcd70cbdff463d")}
           </CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
-            <div className="text-xs font-medium text-muted-foreground">描述</div>
+            <div className="text-xs font-medium text-muted-foreground">{ui("screen.dc2ba467fc7ac9")}</div>
             <p className="text-sm whitespace-pre-wrap break-words">{task?.description?.trim() || "—"}</p>
           </div>
           <div className="flex flex-col gap-1.5">
-            <div className="text-xs font-medium text-muted-foreground">目标</div>
+            <div className="text-xs font-medium text-muted-foreground">{ui("screen.57060c88a36bf3")}</div>
             <p className="text-sm whitespace-pre-wrap break-words">{task?.goal?.trim() || "—"}</p>
           </div>
         </CardContent>
@@ -455,9 +458,10 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <ListChecksIcon className="size-4 text-primary" /> 目标管理
+            <ListChecksIcon className="size-4 text-primary" /> {ui("screen.5cb4a135cb1231")}
             <span className="text-muted-foreground text-xs font-normal">
-              （最终可核验的目标，共 {goals.length} 条；新增/修改会通知规划者并复活任务）
+              {ui("screen.414cc950518ecd")}
+              {goals.length} {ui("screen.d968fad4df505c")}
             </span>
           </CardTitle>
         </CardHeader>
@@ -466,7 +470,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
           <div className="flex flex-wrap items-center gap-2">
             <Input
               className="h-7 min-w-56 flex-1 text-sm"
-              placeholder="新增目标，如『拿到管理员账号的越权访问』"
+              placeholder={ui("screen.27c7741caebcad")}
               value={goalText}
               onChange={(e) => setGoalText(e.target.value)}
               onKeyDown={(e) => {
@@ -476,7 +480,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             />
             <Input
               className="h-7 w-32 text-sm"
-              placeholder="漏洞类(可选)"
+              placeholder={ui("screen.bded0a7d463a70")}
               value={goalVuln}
               onChange={(e) => setGoalVuln(e.target.value)}
               onKeyDown={(e) => {
@@ -485,7 +489,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               disabled={goalBusy}
             />
             <Button size="sm" variant="outline" disabled={goalBusy || !goalText.trim()} onClick={() => void addGoal()}>
-              <PlusIcon className="size-3.5" /> 添加
+              <PlusIcon className="size-3.5" /> {ui("screen.7a8a11ead50742")}
             </Button>
             {goalErr && <span className="text-xs text-red-500">{goalErr}</span>}
           </div>
@@ -508,7 +512,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                     />
                     <Input
                       className="h-7 w-32 text-sm"
-                      placeholder="漏洞类(可选)"
+                      placeholder={ui("screen.bded0a7d463a70")}
                       value={editVuln}
                       onChange={(e) => setEditVuln(e.target.value)}
                       onKeyDown={(e) => {
@@ -568,7 +572,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               )}
             </div>
           ) : (
-            <p className="text-muted-foreground text-sm">暂无目标，添加后规划者会据此派发探索意图并判定达成。</p>
+            <p className="text-muted-foreground text-sm">{ui("screen.6ca1f2eb099b5e")}</p>
           )}
         </CardContent>
       </Card>
@@ -578,9 +582,10 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <ShieldAlertIcon className="size-4 text-amber-500" /> 操作约束
+            <ShieldAlertIcon className="size-4 text-amber-500" /> {ui("screen.a8e4b260e16c59")}
             <span className="text-muted-foreground text-xs font-normal">
-              （框定 planner/worker 的探索边界，共 {constraints.length} 条；改动下一轮规划生效）
+              {ui("screen.691f172a77731d")}
+              {constraints.length} {ui("screen.e8bc17b1cbc7c0")}
             </span>
           </CardTitle>
         </CardHeader>
@@ -592,12 +597,12 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               value={conKind}
               onChange={(e) => setConKind(e.target.value as TaskConstraint["kind"])}
             >
-              <NativeSelectOption value="deny">禁止</NativeSelectOption>
-              <NativeSelectOption value="allow">允许</NativeSelectOption>
+              <NativeSelectOption value="deny">{ui("screen.b645c326ce3ecb")}</NativeSelectOption>
+              <NativeSelectOption value="allow">{ui("screen.ce7ef28b670ade")}</NativeSelectOption>
             </NativeSelect>
             <Input
               className="h-7 min-w-56 flex-1 text-sm"
-              placeholder="一条操作约束，如『仅测当前端口，不扫其他端口』"
+              placeholder={ui("screen.8a26794f3e2cef")}
               value={conText}
               onChange={(e) => setConText(e.target.value)}
               onKeyDown={(e) => {
@@ -611,7 +616,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               disabled={conBusy || !conText.trim()}
               onClick={() => void addConstraint()}
             >
-              <PlusIcon className="size-3.5" /> 添加
+              <PlusIcon className="size-3.5" /> {ui("screen.7a8a11ead50742")}
             </Button>
             {conErr && <span className="text-xs text-red-500">{conErr}</span>}
           </div>
@@ -626,8 +631,8 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                       value={editConKind}
                       onChange={(e) => setEditConKind(e.target.value as TaskConstraint["kind"])}
                     >
-                      <NativeSelectOption value="deny">禁止</NativeSelectOption>
-                      <NativeSelectOption value="allow">允许</NativeSelectOption>
+                      <NativeSelectOption value="deny">{ui("screen.b645c326ce3ecb")}</NativeSelectOption>
+                      <NativeSelectOption value="allow">{ui("screen.ce7ef28b670ade")}</NativeSelectOption>
                     </NativeSelect>
                     <Input
                       className="h-7 min-w-56 flex-1 text-sm"
@@ -668,7 +673,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                           : "bg-red-500/15 text-red-600 dark:text-red-400"
                       }`}
                     >
-                      {c.kind === "allow" ? "允许" : "禁止"}
+                      {c.kind === "allow" ? ui("screen.ce7ef28b670ade") : ui("screen.b645c326ce3ecb")}
                     </span>
                     <span className="min-w-0 flex-1 break-words">{c.text}</span>
                     <Button
@@ -694,9 +699,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               )}
             </div>
           ) : (
-            <p className="text-muted-foreground text-sm">
-              暂无操作约束。建任务时会自动从描述/目标抽取；也可在此手动增删改，用来框定「允许/禁止做哪些操作」。
-            </p>
+            <p className="text-muted-foreground text-sm">{ui("screen.fbc65e7a177185")}</p>
           )}
         </CardContent>
       </Card>
@@ -705,8 +708,8 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <TargetIcon className="size-4 text-emerald-500" /> 资产测试覆盖度
-              <span className="text-muted-foreground text-xs font-normal">（粗估，仅供参考）</span>
+              <TargetIcon className="size-4 text-emerald-500" /> {ui("screen.1f3fea8ba99368")}
+              <span className="text-muted-foreground text-xs font-normal">{ui("screen.3bbf3619429b58")}</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -715,7 +718,9 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                 {coverage.pct != null ? Math.round(coverage.pct * 100) + "%" : "—"}
               </span>
               <span className="text-muted-foreground text-sm">
-                已测 {coverage.tested} / 范围内 {coverage.denominator}
+                {ui("screen.a5b4e9d5e4e0f1")}
+                {coverage.tested} {ui("screen.aac19d278a1d06")}
+                {coverage.denominator}
               </span>
             </div>
             {coverage.pct != null && <Progress value={Math.round(coverage.pct * 100)} />}
@@ -738,9 +743,11 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <CoinsIcon className="size-4 text-amber-500" /> LLM Token 用量
+            <CoinsIcon className="size-4 text-amber-500" /> {ui("screen.a9f27504fc5dfa")}
             <span className="text-muted-foreground text-xs font-normal">
-              （按模型统计{tokenTotals.calls > 0 ? `，共 ${tokenTotals.calls} 次调用` : ""}）
+              {ui("screen.518ff9cbbd34ee")}
+              {tokenTotals.calls > 0 ? ui("screen.8ae5affe549abb", { v0: tokenTotals.calls }) : ""}
+              {ui("punctuation.f2e44c6c95")}
             </span>
           </CardTitle>
         </CardHeader>
@@ -750,19 +757,19 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               {/* 合计总览 */}
               <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
                 <span className="tabular-nums">
-                  <span className="text-muted-foreground">输入 </span>
+                  <span className="text-muted-foreground">{ui("screen.2087c777c06fef")}</span>
                   <span className="font-semibold">{fmtTokens(tokenTotals.input)}</span>
                 </span>
                 <span className="tabular-nums">
-                  <span className="text-muted-foreground">输出 </span>
+                  <span className="text-muted-foreground">{ui("screen.fb04addb4c2654")}</span>
                   <span className="font-semibold">{fmtTokens(tokenTotals.output)}</span>
                 </span>
                 <span className="tabular-nums">
-                  <span className="text-muted-foreground">缓存读 </span>
+                  <span className="text-muted-foreground">{ui("screen.ae5090199fb03c")}</span>
                   <span className="font-semibold">{fmtTokens(tokenTotals.cacheRead)}</span>
                 </span>
                 <span className="tabular-nums">
-                  <span className="text-muted-foreground">缓存命中率 </span>
+                  <span className="text-muted-foreground">{ui("screen.13b61c5f697b67")}</span>
                   <span className="font-semibold text-emerald-500">
                     {cacheHitRate(tokenTotals.cacheRead, tokenTotals.input)}
                   </span>
@@ -773,12 +780,12 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-muted-foreground border-b text-left text-xs">
-                      <th className="py-1.5 pr-3 font-medium">模型</th>
-                      <th className="py-1.5 pr-3 text-right font-medium">调用</th>
-                      <th className="py-1.5 pr-3 text-right font-medium">输入</th>
-                      <th className="py-1.5 pr-3 text-right font-medium">输出</th>
-                      <th className="py-1.5 pr-3 text-right font-medium">缓存读</th>
-                      <th className="py-1.5 text-right font-medium">命中率</th>
+                      <th className="py-1.5 pr-3 font-medium">{ui("screen.c98e118e0a43f0")}</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">{ui("screen.653b123c956d3b")}</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">{ui("screen.2087c777c06fef")}</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">{ui("screen.fb04addb4c2654")}</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">{ui("screen.ae5090199fb03c")}</th>
+                      <th className="py-1.5 text-right font-medium">{ui("screen.da9e37af918721")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -801,7 +808,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               </div>
             </>
           ) : (
-            <p className="text-muted-foreground text-sm">暂无 LLM 用量（任务尚未产生调用，或记录仍在写入）。</p>
+            <p className="text-muted-foreground text-sm">{ui("screen.2cba33889bbb40")}</p>
           )}
         </CardContent>
       </Card>
@@ -809,9 +816,10 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <ShieldCheckIcon className="size-4 text-emerald-500" /> 测试范围
+            <ShieldCheckIcon className="size-4 text-emerald-500" /> {ui("screen.018520e616738b")}
             <span className="text-muted-foreground text-xs font-normal">
-              （覆盖度分母 + 授权边界，共 {scope.length} 条）
+              {ui("screen.74ca645474f495")}
+              {scope.length} {ui("screen.34265e57698b1a")}
             </span>
           </CardTitle>
         </CardHeader>
@@ -823,26 +831,26 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               value={scopeKind}
               onChange={(e) => setScopeKind(e.target.value as TaskScopeRow["kind"])}
             >
-              <NativeSelectOption value="root_domain">根域名</NativeSelectOption>
-              <NativeSelectOption value="subdomain">子域名</NativeSelectOption>
+              <NativeSelectOption value="root_domain">{ui("screen.bc208f697acff9")}</NativeSelectOption>
+              <NativeSelectOption value="subdomain">{ui("screen.4b4788120c34db")}</NativeSelectOption>
               <NativeSelectOption value="ip">IP</NativeSelectOption>
-              <NativeSelectOption value="cidr">网段</NativeSelectOption>
+              <NativeSelectOption value="cidr">{ui("screen.097e79b99ea5ca")}</NativeSelectOption>
               <NativeSelectOption value="icp">ICP</NativeSelectOption>
-              <NativeSelectOption value="keyword">关键词</NativeSelectOption>
-              <NativeSelectOption value="company">公司</NativeSelectOption>
+              <NativeSelectOption value="keyword">{ui("screen.1f7f0db90f932d")}</NativeSelectOption>
+              <NativeSelectOption value="company">{ui("screen.e06ff957ed48e8")}</NativeSelectOption>
             </NativeSelect>
             <Input
               className="h-7 w-56 text-sm"
               placeholder={
                 scopeKind === "company"
-                  ? "公司名或 id"
+                  ? ui("screen.8df2fce4fbb7e2")
                   : scopeKind === "ip" || scopeKind === "cidr"
-                    ? "如 10.0.0.1 或 10.0.0.0/24"
+                    ? ui("screen.af924e597043e2")
                     : scopeKind === "icp"
-                      ? "如 京ICP备12345678号-1"
+                      ? ui("screen.e1be8d821d9d6a")
                       : scopeKind === "keyword"
-                        ? "如 企业名称关键词"
-                        : "如 example.com"
+                        ? ui("screen.ecb61a559391db")
+                        : ui("screen.f51539de19d5cf")
               }
               value={scopeValueInput}
               onChange={(e) => setScopeValueInput(e.target.value)}
@@ -857,7 +865,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               disabled={scopeBusy || !scopeValueInput.trim()}
               onClick={() => void addScope()}
             >
-              <PlusIcon className="size-3.5" /> 添加
+              <PlusIcon className="size-3.5" /> {ui("screen.7a8a11ead50742")}
             </Button>
             {scopeErr && <span className="text-xs text-red-500">{scopeErr}</span>}
           </div>
@@ -867,10 +875,10 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               {scope.map((row) => (
                 <div key={row.id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
                   <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-xs">
-                    {SCOPE_KIND_LABELS[row.kind]}
+                    {SCOPE_KIND_LABELS(ui)[row.kind]}
                   </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{scopeValue(row)}</span>
-                  <span className="text-muted-foreground shrink-0 text-xs">{SCOPE_SOURCE_LABELS[row.source]}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{scopeValue(row, ui)}</span>
+                  <span className="text-muted-foreground shrink-0 text-xs">{SCOPE_SOURCE_LABELS(ui)[row.source]}</span>
                   {row.task_id.toString() === taskId ? (
                     <Button
                       size="sm"
@@ -881,13 +889,13 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                       <Trash2Icon className="size-3.5 text-red-500" />
                     </Button>
                   ) : (
-                    <span className="text-muted-foreground shrink-0 text-xs">继承</span>
+                    <span className="text-muted-foreground shrink-0 text-xs">{ui("screen.49f1e2b9d18b55")}</span>
                   )}
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-muted-foreground text-sm">暂无测试范围，添加后可作为资产覆盖度的分母。</p>
+            <p className="text-muted-foreground text-sm">{ui("screen.1a08b3ad372db3")}</p>
           )}
         </CardContent>
       </Card>
@@ -895,12 +903,12 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <ActivityIcon className="size-4 text-blue-500" /> 心跳
+            <ActivityIcon className="size-4 text-blue-500" /> {ui("screen.07b960cac23749")}
           </CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div>
-            <div className="text-xs text-muted-foreground">引擎态</div>
+            <div className="text-xs text-muted-foreground">{ui("screen.98085443a99345")}</div>
             <StatusBadge
               domain="engine"
               value={stats?.engine_mode ?? task?.engine_mode ?? "idle"}
@@ -909,28 +917,29 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             />
           </div>
           <div>
-            <div className="text-xs text-muted-foreground">运行中 Worker</div>
+            <div className="text-xs text-muted-foreground">{ui("screen.9c99a71f148510")}</div>
             <div className="mt-1 text-lg font-semibold tabular-nums">{running.length}</div>
           </div>
           <div>
-            <div className="text-xs text-muted-foreground">最近活动</div>
+            <div className="text-xs text-muted-foreground">{ui("screen.41f5cada11edbc")}</div>
             <div className="mt-1 inline-flex items-center gap-1 text-sm">
               <ClockIcon className="size-3.5" />
-              {task?.last_activity ? new Date(task.last_activity).toLocaleTimeString("zh-CN") : "—"}
+              {task?.last_activity ? new Date(task.last_activity).toLocaleTimeString(ui("screen.91610255157661")) : "—"}
             </div>
           </div>
           <div>
             <div className="text-xs text-muted-foreground">
-              目标 {task?.goals_met ?? 0}/{task?.goals_total ?? 0}
+              {ui("screen.57060c88a36bf3")}
+              {task?.goals_met ?? 0}/{task?.goals_total ?? 0}
             </div>
             <Progress value={goalsPct} className="mt-2" />
           </div>
           {task?.completed_unix && task.completed_unix > 0 ? (
             <div>
-              <div className="text-xs text-muted-foreground">完成时间</div>
+              <div className="text-xs text-muted-foreground">{ui("screen.9a62e0a4ea3a9a")}</div>
               <div className="mt-1 inline-flex items-center gap-1 text-sm">
                 <ClockIcon className="size-3.5" />
-                {new Date(task.completed_unix * 1000).toLocaleString("zh-CN")}
+                {new Date(task.completed_unix * 1000).toLocaleString(ui("screen.91610255157661"))}
               </div>
             </div>
           ) : null}
@@ -942,7 +951,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <TargetIcon className="size-4" /> 进行中意图
+              <TargetIcon className="size-4" /> {ui("screen.842c9e7e8d7ab6")}
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
@@ -952,32 +961,32 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                 <span className="min-w-0 flex-1 truncate">{i.payload}</span>
               </div>
             ))}
-            {running.length === 0 && <p className="text-sm text-muted-foreground">暂无进行中意图</p>}
+            {running.length === 0 && <p className="text-sm text-muted-foreground">{ui("screen.4dfaa77fa8af91")}</p>}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <AlertTriangleIcon className="size-4 text-amber-500" /> 需要关注
+              <AlertTriangleIcon className="size-4 text-amber-500" /> {ui("screen.f121ab742cefcb")}
             </CardTitle>
           </CardHeader>
           <CardContent className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <div className="text-2xl font-semibold tabular-nums text-red-600">{taskFindings.length}</div>
-              <div className="text-xs text-muted-foreground">确认漏洞</div>
+              <div className="text-xs text-muted-foreground">{ui("screen.a940e35ffc6283")}</div>
             </div>
             <div>
               <div className="text-2xl font-semibold tabular-nums text-blue-600">{running.length}</div>
-              <div className="text-xs text-muted-foreground">执行中</div>
+              <div className="text-xs text-muted-foreground">{ui("screen.5026a63b58cdf0")}</div>
             </div>
             <div>
               <div className="text-2xl font-semibold tabular-nums">{open.length}</div>
-              <div className="text-xs text-muted-foreground">frontier 待领</div>
+              <div className="text-xs text-muted-foreground">{ui("screen.0ac94398d88ecd")}</div>
             </div>
             <div>
               <div className="text-2xl font-semibold tabular-nums text-red-600">{blocked.length}</div>
-              <div className="text-xs text-muted-foreground">被拦意图</div>
+              <div className="text-xs text-muted-foreground">{ui("screen.25ec4d893a00a9")}</div>
             </div>
           </CardContent>
         </Card>
@@ -985,7 +994,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <BugIcon className="size-4 text-red-500" /> 最近发现
+              <BugIcon className="size-4 text-red-500" /> {ui("screen.d4aa8ba1b15d71")}
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
@@ -995,7 +1004,9 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                 <span className="min-w-0 flex-1 truncate">{f.summary}</span>
               </div>
             ))}
-            {taskFindings.length === 0 && <p className="text-sm text-muted-foreground">暂无发现</p>}
+            {taskFindings.length === 0 && (
+              <p className="text-sm text-muted-foreground">{ui("screen.138d19c2925d1d")}</p>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -1006,12 +1017,15 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         <Card className="border-red-500/30">
           <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
             <CardTitle className="flex items-center gap-2 text-sm">
-              <AlertTriangleIcon className="size-4 text-red-500" /> 被拦/出错意图
-              <span className="text-xs font-normal text-muted-foreground">（共 {blocked.length} 条，可重跑）</span>
+              <AlertTriangleIcon className="size-4 text-red-500" /> {ui("screen.2dc354cfa59d7b")}
+              <span className="text-xs font-normal text-muted-foreground">
+                {ui("screen.b0257eb240e922")}
+                {blocked.length} {ui("screen.bd8a7397256a08")}
+              </span>
             </CardTitle>
             <Button size="sm" variant="outline" disabled={rerunning.has("__all__")} onClick={() => void rerunAll()}>
               <RefreshCwIcon className={`size-3.5 ${rerunning.has("__all__") ? "animate-spin" : ""}`} />
-              全部重跑
+              {ui("screen.70efdf3891038f")}
             </Button>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
@@ -1027,13 +1041,14 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                   onClick={() => void rerunOne(i.id)}
                 >
                   <RefreshCwIcon className={`size-3 ${rerunning.has(i.id) ? "animate-spin" : ""}`} />
-                  重跑
+                  {ui("screen.70defdcf7512ed")}
                 </Button>
               </div>
             ))}
             {blocked.length > 20 && (
               <p className="text-xs text-muted-foreground">
-                仅显示前 20 条，点「全部重跑」处理剩余 {blocked.length - 20} 条。
+                {ui("screen.be83f016e96dd9")}
+                {blocked.length - 20} {ui("screen.a2e6dacd32869b")}
               </p>
             )}
           </CardContent>
@@ -1042,31 +1057,49 @@ export function OverviewTab({ taskId }: { taskId: string }) {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-        <StatCard label="待领意图" value={open.length} icon={ShieldCheckIcon} sub="frontier 开放" />
-        <StatCard label="确认发现" value={taskFindings.length} icon={BugIcon} sub="本任务" />
-        <StatCard label="意图总数" value={intents.length} icon={AlertTriangleIcon} sub="本任务全部意图" />
+        <StatCard
+          label={ui("screen.9f88c35d452d19")}
+          value={open.length}
+          icon={ShieldCheckIcon}
+          sub={ui("screen.9bc3090f533434")}
+        />
+        <StatCard
+          label={ui("screen.00fc7aa53d600f")}
+          value={taskFindings.length}
+          icon={BugIcon}
+          sub={ui("screen.1a6c2ec67a79f0")}
+        />
+        <StatCard
+          label={ui("screen.00e0be2055794e")}
+          value={intents.length}
+          icon={AlertTriangleIcon}
+          sub={ui("screen.9751ecad2cdb7d")}
+        />
       </div>
     </div>
   );
 }
 
-const TASK_RULE_KIND_OPTIONS: { value: AssetInterceptKind; label: string; placeholder: string }[] = [
-  { value: "exact_domain", label: "域名(全等)", placeholder: "example.gov.cn" },
-  { value: "exact_ip", label: "IP(全等)", placeholder: "203.0.113.10" },
-  { value: "exact_url", label: "URL(全等)", placeholder: "https://example.com/login" },
-  { value: "fuzzy_domain", label: "域名(模糊)", placeholder: ".gov.cn" },
-  { value: "fuzzy_ip", label: "IP(模糊)", placeholder: "203.0.113." },
-  { value: "fuzzy_url", label: "URL(模糊)", placeholder: "/admin" },
-  { value: "cidr", label: "CIDR 网段", placeholder: "192.168.0.0/16" },
+const TASK_RULE_KIND_OPTIONS = (
+  ui: UITranslate,
+): { value: AssetInterceptKind; label: string; placeholder: string }[] => [
+  { value: "exact_domain", label: ui("screen.0197fed8c2149d"), placeholder: "example.gov.cn" },
+  { value: "exact_ip", label: ui("screen.bece7fde434202"), placeholder: "203.0.113.10" },
+  { value: "exact_url", label: ui("screen.bc6e5cd63310d1"), placeholder: "https://example.com/login" },
+  { value: "fuzzy_domain", label: ui("screen.0958b6ce71b44e"), placeholder: ".gov.cn" },
+  { value: "fuzzy_ip", label: ui("screen.2f565eee814bb7"), placeholder: "203.0.113." },
+  { value: "fuzzy_url", label: ui("screen.2100659ebbb4df"), placeholder: "/admin" },
+  { value: "cidr", label: ui("screen.cc8f71b98fccc4"), placeholder: "192.168.0.0/16" },
 ];
 
-const TASK_RULE_KIND_LABEL: Record<AssetInterceptKind, string> = Object.fromEntries(
-  TASK_RULE_KIND_OPTIONS.map((o) => [o.value, o.label]),
-) as Record<AssetInterceptKind, string>;
+const TASK_RULE_KIND_LABEL = (ui: UITranslate): Record<AssetInterceptKind, string> =>
+  Object.fromEntries(TASK_RULE_KIND_OPTIONS(ui).map((o) => [o.value, o.label])) as Record<AssetInterceptKind, string>;
 
 // TaskInterceptRulesCard 在任务详情总览里管理「任务级资产拦截 / 允许规则」：
 // 列表 + 新增 + 行内编辑 + 删除 + 启用开关。规则仅本任务生效，不进全局表。
 function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
+  const { ui } = useUITranslation();
+
   const [rules, setRules] = React.useState<AssetInterceptRule[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState("");
@@ -1162,15 +1195,16 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
     }
   }
 
-  const placeholder = TASK_RULE_KIND_OPTIONS.find((o) => o.value === newKind)?.placeholder ?? "";
+  const placeholder = TASK_RULE_KIND_OPTIONS(ui).find((o) => o.value === newKind)?.placeholder ?? "";
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <ShieldCheckIcon className="size-4 text-sky-500" /> 任务级资产拦截 / 允许
+          <ShieldCheckIcon className="size-4 text-sky-500" /> {ui("screen.3b84e275738c44")}
           <span className="text-muted-foreground text-xs font-normal">
-            （仅本任务生效，不进全局；先拦截后允许，共 {rules.length} 条）
+            {ui("screen.8e67b6bf7df911")}
+            {rules.length} {ui("screen.34265e57698b1a")}
           </span>
         </CardTitle>
       </CardHeader>
@@ -1178,11 +1212,11 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
         {/* 新增表单 */}
         <div className="flex flex-wrap items-center gap-2">
           <NativeSelect size="sm" value={newAction} onChange={(e) => setNewAction(e.target.value as "block" | "allow")}>
-            <NativeSelectOption value="block">拦截</NativeSelectOption>
-            <NativeSelectOption value="allow">允许</NativeSelectOption>
+            <NativeSelectOption value="block">{ui("screen.bf33347e3c8572")}</NativeSelectOption>
+            <NativeSelectOption value="allow">{ui("screen.ce7ef28b670ade")}</NativeSelectOption>
           </NativeSelect>
           <NativeSelect size="sm" value={newKind} onChange={(e) => setNewKind(e.target.value as AssetInterceptKind)}>
-            {TASK_RULE_KIND_OPTIONS.map((o) => (
+            {TASK_RULE_KIND_OPTIONS(ui).map((o) => (
               <NativeSelectOption key={o.value} value={o.value}>
                 {o.label}
               </NativeSelectOption>
@@ -1200,13 +1234,13 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
           />
           <Input
             className="h-7 w-36 text-sm"
-            placeholder="备注(可选)"
+            placeholder={ui("screen.60f5d305b71a06")}
             value={newNote}
             onChange={(e) => setNewNote(e.target.value)}
             disabled={busy}
           />
           <Button size="sm" variant="outline" disabled={busy || !newPattern.trim()} onClick={() => void add()}>
-            <PlusIcon className="size-3.5" /> 添加
+            <PlusIcon className="size-3.5" /> {ui("screen.7a8a11ead50742")}
           </Button>
           {err && <span className="text-xs text-red-500">{err}</span>}
         </div>
@@ -1221,15 +1255,15 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
                     value={editAction}
                     onChange={(e) => setEditAction(e.target.value as "block" | "allow")}
                   >
-                    <NativeSelectOption value="block">拦截</NativeSelectOption>
-                    <NativeSelectOption value="allow">允许</NativeSelectOption>
+                    <NativeSelectOption value="block">{ui("screen.bf33347e3c8572")}</NativeSelectOption>
+                    <NativeSelectOption value="allow">{ui("screen.ce7ef28b670ade")}</NativeSelectOption>
                   </NativeSelect>
                   <NativeSelect
                     size="sm"
                     value={editKind}
                     onChange={(e) => setEditKind(e.target.value as AssetInterceptKind)}
                   >
-                    {TASK_RULE_KIND_OPTIONS.map((o) => (
+                    {TASK_RULE_KIND_OPTIONS(ui).map((o) => (
                       <NativeSelectOption key={o.value} value={o.value}>
                         {o.label}
                       </NativeSelectOption>
@@ -1248,7 +1282,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
                   />
                   <Input
                     className="h-7 w-36 text-sm"
-                    placeholder="备注(可选)"
+                    placeholder={ui("screen.60f5d305b71a06")}
                     value={editNote}
                     onChange={(e) => setEditNote(e.target.value)}
                     disabled={busy}
@@ -1281,9 +1315,9 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
                         : "bg-red-500/15 text-red-600 dark:text-red-400"
                     }`}
                   >
-                    {r.action === "allow" ? "允许" : "拦截"}
+                    {r.action === "allow" ? ui("screen.ce7ef28b670ade") : ui("screen.bf33347e3c8572")}
                   </span>
-                  <span className="text-muted-foreground shrink-0 text-xs">{TASK_RULE_KIND_LABEL[r.kind]}</span>
+                  <span className="text-muted-foreground shrink-0 text-xs">{TASK_RULE_KIND_LABEL(ui)[r.kind]}</span>
                   <code className="bg-muted min-w-0 flex-1 truncate rounded px-1.5 py-0.5 text-xs">{r.pattern}</code>
                   {r.note && (
                     <span className="text-muted-foreground max-w-[120px] shrink-0 truncate text-xs">{r.note}</span>
@@ -1312,9 +1346,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
             )}
           </div>
         ) : (
-          <p className="text-muted-foreground text-sm">
-            暂无任务级规则。「拦截」命中即禁止测试；「允许」为白名单——配置后本任务只允许命中允许规则的资产（未配置则不启用白名单）。
-          </p>
+          <p className="text-muted-foreground text-sm">{ui("screen.fc8a845b142807")}</p>
         )}
       </CardContent>
     </Card>

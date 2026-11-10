@@ -1,3 +1,5 @@
+import { translateFixedUIText } from "@/i18n/fixed-ui-text";
+import type { UITranslate } from "@/i18n/use-ui-translation";
 import type { NewAssetType } from "@/lib/types";
 
 const ASSET_TYPE_LABELS: Record<NewAssetType, string> = {
@@ -20,10 +22,12 @@ const TASK_ASSET_SOURCE_LABELS: Record<string, string> = {
   task: "任务初始化",
 };
 
-export function taskAssetTypeLabel(type: NewAssetType): string {
-  return ASSET_TYPE_LABELS[type];
+export function taskAssetTypeLabel(type: NewAssetType, ui?: UITranslate): string {
+  const label = ASSET_TYPE_LABELS[type];
+  return ui ? translateFixedUIText(label, ui) : label;
 }
 
-export function taskAssetSourceLabel(source: string): string {
-  return TASK_ASSET_SOURCE_LABELS[source] ?? source;
+export function taskAssetSourceLabel(source: string, ui?: UITranslate): string {
+  const label = TASK_ASSET_SOURCE_LABELS[source] ?? source;
+  return ui ? translateFixedUIText(label, ui) : label;
 }

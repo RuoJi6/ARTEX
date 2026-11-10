@@ -5,12 +5,12 @@
 // 单独放一个文件后，新增渠道只需要动这里，页面本身不必改。
 // 渠道类型的展示名与简介。放在前端是因为它只影响文案，后端不需要知道。
 export const KIND_LABEL: Record<string, string> = {
-  dingtalk: "钉钉",
-  feishu: "飞书",
-  wecom: "企业微信",
-  webhook: "通用 Webhook",
+  dingtalk: "notify.kinds.dingtalk",
+  feishu: "notify.kinds.feishu",
+  wecom: "notify.kinds.wecom",
+  webhook: "notify.kinds.webhook",
   telegram: "Telegram",
-  email: "邮件",
+  email: "notify.kinds.email",
 };
 
 // 各渠道的配置字段定义。
@@ -34,56 +34,63 @@ export const CHANNEL_FIELDS: Record<string, FieldDef[]> = {
   dingtalk: [
     {
       key: "webhook",
-      label: "Webhook 地址",
+      label: "notify.fields.webhook",
       kind: "text",
       placeholder: "https://oapi.dingtalk.com/robot/send?access_token=...",
     },
     {
       key: "secret",
-      label: "加签密钥",
+      label: "notify.fields.signingSecret",
       kind: "password",
-      help: "机器人安全设置选「加签」时填写；选「自定义关键词」或未开启安全设置则留空",
+      help: "notify.fields.dingtalkSecretHelp",
     },
   ],
   feishu: [
     {
       key: "webhook",
-      label: "Webhook 地址",
+      label: "notify.fields.webhook",
       kind: "text",
       placeholder: "https://open.feishu.cn/open-apis/bot/v2/hook/...",
     },
-    { key: "secret", label: "签名校验密钥", kind: "password", help: "机器人开启「签名校验」时填写，否则留空" },
+    {
+      key: "secret",
+      label: "notify.fields.verificationSecret",
+      kind: "password",
+      help: "notify.fields.feishuSecretHelp",
+    },
   ],
   wecom: [
     {
       key: "webhook",
-      label: "Webhook 地址",
+      label: "notify.fields.webhook",
       kind: "text",
       placeholder: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
     },
   ],
   webhook: [
-    { key: "url", label: "目标 URL", kind: "text", placeholder: "https://your-endpoint.example.com/hook" },
+    {
+      key: "url",
+      label: "notify.fields.targetUrl",
+      kind: "text",
+      placeholder: "https://your-endpoint.example.com/hook",
+    },
     {
       key: "method",
-      label: "请求方法",
+      label: "notify.fields.method",
       kind: "select",
       options: [
-        { value: "POST", label: "POST（带请求体）" },
-        { value: "PUT", label: "PUT（带请求体）" },
-        { value: "PATCH", label: "PATCH（带请求体）" },
-        { value: "GET", label: "GET（不带请求体）" },
+        { value: "POST", label: "notify.fields.post" },
+        { value: "PUT", label: "notify.fields.put" },
+        { value: "PATCH", label: "notify.fields.patch" },
+        { value: "GET", label: "notify.fields.get" },
       ],
     },
-    { key: "headers", label: "自定义请求头", kind: "kv", help: "每行 KEY=VALUE，例如 Authorization=Bearer xxx" },
+    { key: "headers", label: "notify.fields.headers", kind: "kv", help: "notify.fields.headersHelp" },
     {
       key: "body_template",
-      label: "请求体模板",
+      label: "notify.fields.bodyTemplate",
       kind: "textarea",
-      help:
-        "留空用内置默认模板。变量：{{.Title}} {{.Batch}} {{.Count}} {{.HomeURL}} {{.SentAt}}，" +
-        "以及 range .Items 下的 .Name/.VulnClass/.Severity/.Summary/.Assets/.DetailURL/.StatusLabel。" +
-        "插入字符串请用 {{json .Xxx}} 而不是 {{.Xxx}}，否则标题里的引号会破坏 JSON。",
+      help: "notify.fields.bodyTemplateHelp",
     },
   ],
   telegram: [
@@ -91,35 +98,35 @@ export const CHANNEL_FIELDS: Record<string, FieldDef[]> = {
     { key: "chat_id", label: "Chat ID", kind: "text", placeholder: "-1001234567890" },
     {
       key: "base_url",
-      label: "API 地址",
+      label: "notify.fields.apiUrl",
       kind: "text",
       placeholder: "https://api.telegram.org",
-      help: "留空用官方地址；自建 Bot API 反代时填写",
+      help: "notify.fields.apiUrlHelp",
     },
   ],
   email: [
-    { key: "host", label: "SMTP 服务器", kind: "text", placeholder: "smtp.example.com" },
+    { key: "host", label: "notify.fields.smtpHost", kind: "text", placeholder: "smtp.example.com" },
     {
       key: "port",
-      label: "端口",
+      label: "notify.fields.port",
       kind: "number",
       placeholder: "587",
-      help: "587 走 STARTTLS；465 请把「隐式 TLS」打开",
+      help: "notify.fields.portHelp",
     },
-    { key: "username", label: "账号", kind: "text" },
-    { key: "password", label: "密码 / 授权码", kind: "password" },
-    { key: "from", label: "发件人", kind: "text", placeholder: "artex@example.com" },
-    { key: "to", label: "收件人", kind: "list", help: "多个地址用逗号分隔" },
-    { key: "tls", label: "隐式 TLS", kind: "switch", help: "465 端口打开；587 保持关闭（会自动 STARTTLS）" },
+    { key: "username", label: "notify.fields.username", kind: "text" },
+    { key: "password", label: "notify.fields.password", kind: "password" },
+    { key: "from", label: "notify.fields.from", kind: "text", placeholder: "artex@example.com" },
+    { key: "to", label: "notify.fields.to", kind: "list", help: "notify.fields.toHelp" },
+    { key: "tls", label: "notify.fields.tls", kind: "switch", help: "notify.fields.tlsHelp" },
   ],
 };
 
 export const SEVERITY_OPTIONS = [
-  { value: "", label: "不限" },
-  { value: "low", label: "低危及以上" },
-  { value: "medium", label: "中危及以上" },
-  { value: "high", label: "高危及以上" },
-  { value: "critical", label: "仅严重" },
+  { value: "", label: "notify.severity.any" },
+  { value: "low", label: "notify.severity.low" },
+  { value: "medium", label: "notify.severity.medium" },
+  { value: "high", label: "notify.severity.high" },
+  { value: "critical", label: "notify.severity.critical" },
 ];
 
 export type ChannelForm = {

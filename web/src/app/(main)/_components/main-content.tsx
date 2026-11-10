@@ -4,6 +4,9 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import { usePathname } from "next/navigation";
 
+import { useTranslation } from "react-i18next";
+
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -42,6 +45,7 @@ export function MainContent({ children }: { children: ReactNode }) {
 }
 
 function MainContentInner({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const currentUser = useCurrentUser();
   const pathname = usePathname();
   const [version, setVersion] = useState("");
@@ -80,9 +84,12 @@ function MainContentInner({ children }: { children: ReactNode }) {
           <div className="flex shrink-0 items-center gap-2">
             <LiveClock />
             {version && (
-              <span className="font-medium text-muted-foreground text-xs tabular-nums">版本 · {version}</span>
+              <span className="font-medium text-muted-foreground text-xs tabular-nums">
+                {t("common.version")} · {version}
+              </span>
             )}
             <UpdateBadge />
+            <LanguageSwitcher />
             <LayoutControls />
             <ThemeSwitcher />
             <AccountSwitcher users={[currentUser]} />

@@ -10,19 +10,22 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { localizedError } from "@/i18n/errors";
+import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
 
 export function BasicAuthCard() {
+  const { t } = useLiveTranslation();
   const [enabled, setEnabled] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [passwordSet, setPasswordSet] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ key: string; cause: unknown } | null>(null);
 
   const load = useCallback(async () => {
-    setError("");
+    setError(null);
     try {
       const settings = await api.basicAuthSettings();
       setEnabled(settings.enabled);
@@ -30,7 +33,7 @@ export function BasicAuthCard() {
       setPasswordSet(settings.password_set);
       setLoaded(true);
     } catch (e) {
-      setError(`读取失败：${(e as Error).message}`);
+      setError({ key: "settings.readFailed", cause: e });
     }
   }, []);
 
@@ -41,16 +44,16 @@ export function BasicAuthCard() {
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
-    setError("");
+    setError(null);
     try {
       const settings = await api.setBasicAuthSettings({ enabled, username: username.trim(), password });
       setEnabled(settings.enabled);
       setUsername(settings.username);
       setPasswordSet(settings.password_set);
       setPassword("");
-      toast.success(settings.enabled ? "HTTP Basic Auth 已开启，当前浏览器保持访问" : "HTTP Basic Auth 已关闭");
+      toast.success(settings.enabled ? t("settings.basicAuthEnabled") : t("settings.basicAuthDisabled"));
     } catch (e) {
-      setError(`保存失败：${(e as Error).message}`);
+      setError({ key: "settings.saveFailed", cause: e });
     } finally {
       setSaving(false);
     }
@@ -63,15 +66,13 @@ export function BasicAuthCard() {
           <ShieldCheckIcon className="size-4" />
           HTTP Basic Auth
         </CardTitle>
-        <CardDescription>
-          开启后，访客需先通过浏览器原生账号密码验证，再进入 ARTEX 登录页。默认关闭，保存后立即生效。
-        </CardDescription>
+        <CardDescription>{t("settings.basicAuthHelp")}</CardDescription>
       </CardHeader>
       <form onSubmit={save}>
         <CardContent>
           <FieldGroup>
             <Field orientation="horizontal">
-              <FieldLabel htmlFor="basic-auth-enabled">启用访问验证</FieldLabel>
+              <FieldLabel htmlFor="basic-auth-enabled">{t("settings.enableBasicAuth")}</FieldLabel>
               <Switch
                 id="basic-auth-enabled"
                 checked={enabled}
@@ -80,7 +81,7 @@ export function BasicAuthCard() {
               />
             </Field>
             <Field>
-              <FieldLabel htmlFor="basic-auth-username">验证用户名</FieldLabel>
+              <FieldLabel htmlFor="basic-auth-username">{t("settings.basicAuthUsername")}</FieldLabel>
               <Input
                 id="basic-auth-username"
                 autoComplete="off"
@@ -88,12 +89,12 @@ export function BasicAuthCard() {
                 required={enabled}
                 disabled={!loaded || saving}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="独立于 ARTEX 登录账号"
+                placeholder={t("settings.basicAuthUsernamePlaceholder")}
               />
-              <FieldDescription>不能包含冒号，最长 128 字节。</FieldDescription>
+              <FieldDescription>{t("settings.basicAuthUsernameHelp")}</FieldDescription>
             </Field>
             <Field>
-              <FieldLabel htmlFor="basic-auth-password">验证密码</FieldLabel>
+              <FieldLabel htmlFor="basic-auth-password">{t("settings.basicAuthPassword")}</FieldLabel>
               <Input
                 id="basic-auth-password"
                 type="password"
@@ -102,27 +103,25 @@ export function BasicAuthCard() {
                 required={enabled && !passwordSet}
                 disabled={!loaded || saving}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={passwordSet ? "已设置，留空保持原密码" : "至少 8 位，最多 72 字节"}
+                placeholder={passwordSet ? t("settings.keepPassword") : t("settings.basicAuthPasswordPlaceholder")}
               />
-              <FieldDescription>与 ARTEX 登录密码独立。公网访问请使用 HTTPS。</FieldDescription>
+              <FieldDescription>{t("settings.basicAuthPasswordHelp")}</FieldDescription>
             </Field>
-            <FieldDescription>
-              保存不会中断当前浏览器访问。可用无痕窗口检查验证弹窗；浏览器可能缓存凭据。关闭后保留账号密码，便于再次开启。
-            </FieldDescription>
+            <FieldDescription>{t("settings.basicAuthSessionHelp")}</FieldDescription>
             {error ? (
               <p role="alert" className="text-destructive text-sm">
-                {error}
+                {t(error.key, { message: localizedError(error.cause, t) })}
               </p>
             ) : null}
           </FieldGroup>
         </CardContent>
         <CardFooter className="mt-4 gap-2">
           <Button type="submit" disabled={!loaded || saving}>
-            {saving ? "保存中…" : "保存访问验证"}
+            {saving ? t("settings.saving") : t("settings.saveBasicAuth")}
           </Button>
           {!loaded && error ? (
             <Button type="button" variant="outline" onClick={load}>
-              重新加载
+              {t("settings.reload")}
             </Button>
           ) : null}
         </CardFooter>
