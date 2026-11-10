@@ -7,6 +7,7 @@ import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { apiFetch } from "@/lib/api";
 import { auth } from "@/lib/auth";
 
 function AuthenticatedImage({
@@ -39,7 +40,7 @@ function AuthenticatedImage({
 
     const token = auth.getToken();
     setCaptureTimestamp(null);
-    fetch(imageSrc, {
+    apiFetch(imageSrc, {
       credentials: "same-origin",
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     })
