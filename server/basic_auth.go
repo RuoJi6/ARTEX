@@ -139,7 +139,13 @@ func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 		username, password, ok := r.BasicAuth()
 		if !ok || len(password) > maxPasswordBytes || username != cfg.Username ||
 			bcrypt.CompareHashAndPassword([]byte(cfg.PasswordHash), []byte(password)) != nil {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted", charset="UTF-8"`)
+			// Background requests use Bearer auth. Challenging them with Basic
+			// can trap the browser in repeated native dialogs. Let the client
+			// reload the current page once to renew only the outer session.
+			w.Header().Set("X-Artex-Auth", "basic")
+			if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/basic-auth/check" || r.URL.Path == "/api/health" {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted", charset="UTF-8"`)
+			}
 			writeErr(w, http.StatusUnauthorized, "请先完成 HTTP Basic Auth 验证")
 			return
 		}

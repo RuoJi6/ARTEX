@@ -279,8 +279,14 @@ func TestBasicAuthGate(t *testing.T) {
 			if w.Code != tc.want {
 				t.Fatalf("status=%d want %d: %s", w.Code, tc.want, w.Body.String())
 			}
-			if w.Code == 401 && w.Header().Get("WWW-Authenticate") != `Basic realm="Restricted", charset="UTF-8"` {
-				t.Fatal("missing browser challenge")
+			if w.Code == 401 {
+				wantChallenge := !strings.HasPrefix(tc.path, "/api/") || tc.path == "/api/basic-auth/check" || tc.path == "/api/health"
+				if got := w.Header().Get("WWW-Authenticate"); (got != "") != wantChallenge {
+					t.Fatalf("browser challenge=%q, want challenge=%v", got, wantChallenge)
+				}
+				if w.Header().Get("X-Artex-Auth") != "basic" {
+					t.Fatal("missing gate failure marker")
+				}
 			}
 		})
 	}
@@ -481,8 +487,8 @@ func TestBasicAuthPostgresLoginFlow(t *testing.T) {
 	r = httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(loginBody))
 	w = httptest.NewRecorder()
 	restarted.Handler().ServeHTTP(w, r)
-	if w.Code != 401 || w.Header().Get("WWW-Authenticate") == "" {
-		t.Fatal("login was not protected after restart")
+	if w.Code != 401 || w.Header().Get("X-Artex-Auth") != "basic" || w.Header().Get("WWW-Authenticate") != "" {
+		t.Fatal("login must fail with a recoverable gate error after restart")
 	}
 	r = httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(loginBody))
 	r.SetBasicAuth("entry", "entry-password")
@@ -502,5 +508,68 @@ func TestBasicAuthPostgresLoginFlow(t *testing.T) {
 	restarted.Handler().ServeHTTP(w, r)
 	if w.Code != 200 {
 		t.Fatalf("disable with gate cookie and JWT: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// An expired gate must be recoverable without discarding the independent admin
+// session. API failures must never open native Basic dialogs themselves.
+func TestBasicAuthExpiredSessionRecovery(t *testing.T) {
+	s, _ := basicAuthTestServer(t)
+	w := saveBasicAuthForTest(s, `{"enabled":true,"username":"entry","password":"entry-password"}`)
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	cfg := s.basicAuth.snapshot()
+	expired, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+		Subject: cfg.Revision, Audience: jwt.ClaimStrings{"artex-basic-auth"},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Minute)),
+	}).SignedString(s.basicAuthSigningKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJWT, err := signJWT(s.jwtKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.Handler()
+	for _, path := range []string{"/api/version", "/api/auth/status", "/api/logs/stream", "/api/workspace/upload", "/api/workspace/download"} {
+		t.Run(strings.TrimPrefix(path, "/"), func(t *testing.T) {
+			r := httptest.NewRequest("GET", path, nil)
+			r.Header.Set("Authorization", "Bearer "+adminJWT)
+			r.AddCookie(&http.Cookie{Name: basicAuthCookie, Value: expired})
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 401 || w.Header().Get("X-Artex-Auth") != "basic" || w.Header().Get("WWW-Authenticate") != "" {
+				t.Fatalf("API must signal recovery without a browser challenge: %d %v", w.Code, w.Header())
+			}
+			if w.Header().Get("Cache-Control") != "no-store" || len(w.Result().Cookies()) != 0 {
+				t.Fatal("gate failure must not cache or change the admin session")
+			}
+		})
+	}
+	// Reloading the current document can use Basic authorization, while the
+	// admin JWT stays in its cookie for subsequent API requests.
+	r := httptest.NewRequest("GET", "/function/tasks/", nil)
+	r.AddCookie(&http.Cookie{Name: "artex_token", Value: adminJWT})
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 401 || w.Header().Get("WWW-Authenticate") == "" {
+		t.Fatal("document navigation must still prompt for Basic authentication")
+	}
+	r = httptest.NewRequest("GET", "/api/basic-auth/check", nil)
+	r.SetBasicAuth("entry", "entry-password")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusNoContent || len(w.Result().Cookies()) != 1 {
+		t.Fatalf("reauthentication failed: %d %s", w.Code, w.Body.String())
+	}
+	renewed := w.Result().Cookies()[0]
+	r = httptest.NewRequest("GET", "/api/version", nil)
+	r.AddCookie(renewed)
+	r.Header.Set("Authorization", "Bearer "+adminJWT)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 || w.Header().Get("WWW-Authenticate") != "" {
+		t.Fatalf("original admin session did not recover: %d %s", w.Code, w.Body.String())
 	}
 }
