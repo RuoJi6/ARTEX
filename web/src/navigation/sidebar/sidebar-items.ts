@@ -100,3 +100,16 @@ export const sidebarItems: NavGroup[] = [
     ],
   },
 ];
+
+// Rebuild display labels when the active language changes; IDs and URLs stay stable.
+export function getSidebarItems(t: (key: string) => string): NavGroup[] {
+  return sidebarItems.map((group) => ({
+    ...group,
+    label: t(group.id === 1 ? "nav.features" : "nav.system"),
+    items: group.items.map((item) => ({
+      ...item,
+      title: t(`nav.${item.id}`),
+      ...(item.subItems ? { subItems: item.subItems.map((sub) => ({ ...sub, title: t(`nav.${sub.id}`) })) } : {}),
+    })),
+  }));
+}

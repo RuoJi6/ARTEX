@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import Link from "next/link";
@@ -15,17 +14,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { FindingRetest } from "@/lib/types";
 
-const statusLabels = {
-  pending: "等待启动",
-  running: "复测中",
-  completed: "已完成",
-  failed: "复测失败",
-  stopped: "已停止",
-};
-const verdictLabels = { reproduced: "仍可复现", fixed: "已修复", inconclusive: "无法确认" };
+const statusLabels = (ui: UITranslate) => ({
+  pending: ui("screen.8c50c1341b8619"),
+  running: ui("screen.9426ed1cf45977"),
+  completed: ui("screen.f28461bb49c856"),
+  failed: ui("screen.cf754809185d48"),
+  stopped: ui("screen.f006455e3baf2b"),
+});
+const verdictLabels = (ui: UITranslate) => ({
+  reproduced: ui("screen.a92df06d2cb3b5"),
+  fixed: ui("screen.74752935511725"),
+  inconclusive: ui("screen.effdfa4936e84e"),
+});
 
 function active(r: FindingRetest) {
   return r.status === "pending" || r.status === "running";
@@ -42,6 +46,8 @@ export function FindingRetestPanel({
   readOnly?: boolean;
   onCompleted?: () => void;
 }) {
+  const { ui } = useUITranslation();
+
   const [items, setItems] = React.useState<FindingRetest[] | null>(null);
   const [error, setError] = React.useState("");
   const [open, setOpen] = React.useState(false);
@@ -84,21 +90,21 @@ export function FindingRetestPanel({
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1.5">
-          <CardTitle>漏洞复测</CardTitle>
-          <CardDescription>在独立会话中验证当前状态，保留每次复测的结论与证据。</CardDescription>
+          <CardTitle>{ui("screen.34e46240160a0e")}</CardTitle>
+          <CardDescription>{ui("screen.3b1058214c4125")}</CardDescription>
         </div>
         {running?.conversation_id != null ? (
           <Button asChild variant="outline" size="sm">
-            <Link href={`/chat?c=${running.conversation_id}`} title="查看正在进行的复测会话">
+            <Link href={`/chat?c=${running.conversation_id}`} title={ui("screen.5a43849420b2d1")}>
               <Spinner data-icon="inline-start" aria-hidden="true" />
-              复测中
+              {ui("screen.9426ed1cf45977")}
             </Link>
           </Button>
         ) : null}
         {!running && !readOnly ? (
           <Button size="sm" onClick={() => setOpen(true)} disabled={items === null || !!error}>
             <RotateCcwIcon data-icon="inline-start" />
-            发起复测
+            {ui("screen.6ab221ef2cd0f3")}
           </Button>
         ) : null}
       </CardHeader>
@@ -106,9 +112,10 @@ export function FindingRetestPanel({
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>
-              加载复测记录失败：{error}
+              {ui("screen.ad033600815ca0")}
+              {error}
               <Button variant="outline" size="sm" onClick={() => void load()}>
-                重试
+                {ui("screen.b8784c8dd5636f")}
               </Button>
             </AlertDescription>
           </Alert>
@@ -117,8 +124,8 @@ export function FindingRetestPanel({
         {!error && items?.length === 0 ? (
           <Empty>
             <EmptyHeader>
-              <EmptyTitle>暂无复测记录</EmptyTitle>
-              <EmptyDescription>修复部署完成后，可发起复测并比较新旧证据。</EmptyDescription>
+              <EmptyTitle>{ui("screen.4b33fc3e8fa350")}</EmptyTitle>
+              <EmptyDescription>{ui("screen.b999f8c638bf88")}</EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : null}
@@ -130,18 +137,18 @@ export function FindingRetestPanel({
                     variant={item.status === "completed" && item.verdict === "reproduced" ? "destructive" : "secondary"}
                   >
                     {item.status === "completed" && item.verdict
-                      ? verdictLabels[item.verdict]
-                      : statusLabels[item.status]}
+                      ? verdictLabels(ui)[item.verdict]
+                      : statusLabels(ui)[item.status]}
                   </Badge>
                   <span className="text-muted-foreground text-xs">
-                    #{item.id} · {new Date(item.created_at).toLocaleString("zh-CN")}
+                    #{item.id} · {new Date(item.created_at).toLocaleString(ui("screen.91610255157661"))}
                   </span>
                   {item.conversation_id != null ? (
                     <Button asChild variant="ghost" size="sm" className="ml-auto">
-                      <Link href={`/chat?c=${item.conversation_id}`}>查看会话</Link>
+                      <Link href={`/chat?c=${item.conversation_id}`}>{ui("screen.f2b4237b35f0b3")}</Link>
                     </Button>
                   ) : (
-                    <span className="text-muted-foreground text-xs">会话已删除</span>
+                    <span className="text-muted-foreground text-xs">{ui("screen.495e7952925d71")}</span>
                   )}
                 </div>
                 {item.status === "completed" && item.summary ? (
@@ -152,12 +159,13 @@ export function FindingRetestPanel({
                 ) : null}
                 {item.notes ? (
                   <p className="whitespace-pre-wrap break-words text-muted-foreground text-xs">
-                    补充说明：{item.notes}
+                    {ui("screen.3788b51dd962ff")}
+                    {item.notes}
                   </p>
                 ) : null}
                 {item.status === "completed" && item.evidence ? (
                   <details className="min-w-0">
-                    <summary className="cursor-pointer text-sm">复测证据</summary>
+                    <summary className="cursor-pointer text-sm">{ui("screen.081f05b74d3d58")}</summary>
                     <div className="mt-3 overflow-x-auto">
                       <Markdown text={item.evidence} />
                     </div>

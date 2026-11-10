@@ -27,10 +27,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { localizedError } from "@/i18n/errors";
+import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api, type ScheduleInput } from "@/lib/api";
+import { scheduleDisplay } from "@/lib/schedule-display";
 import type { Task, TaskSchedule } from "@/lib/types";
-
-const weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
 const blank: ScheduleInput = {
   name: "",
@@ -43,126 +44,7 @@ const blank: ScheduleInput = {
   start_immediately: false,
 };
 
-function statusText(s: TaskSchedule) {
-  return (
-    (
-      {
-        waiting: "等待窗口",
-        running: "窗口运行中",
-        outside: "窗口外",
-        completed: "已完成",
-        error: "错误",
-        paused: "已暂停",
-      } as Record<string, string>
-    )[s.status] ?? "未知状态"
-  );
-}
-
-function formatTime(value?: string) {
-  return value ? new Date(value).toLocaleString("zh-CN") : "—";
-}
-
-function formatDateValue(value?: string) {
-  if (!value) return "未设置";
-  const [year, month, day] = value.split("-");
-  return year && month && day ? `${year}年${Number(month)}月${Number(day)}日` : value;
-}
-
-function formatClock(value?: string) {
-  return value ? value.slice(0, 5) : "未设置";
-}
-
-function periodLabel(item: TaskSchedule) {
-  if (item.schedule_type === "once") {
-    return item.end_date
-      ? `一次性 · ${formatDateValue(item.run_date)} 至 ${formatDateValue(item.end_date)}`
-      : `一次性 · ${formatDateValue(item.run_date)}`;
-  }
-  const selected = item.weekdays.map((day) => weekdays[day - 1]).filter(Boolean);
-  return `每周 · ${selected.length ? selected.join("、") : "未选择星期"}`;
-}
-
-function windowLabel(item: TaskSchedule) {
-  const start = formatClock(item.start_time);
-  const end = formatClock(item.end_time);
-  if (item.schedule_type === "once") {
-    const startText = `${formatDateValue(item.run_date)} ${start}`;
-    if (item.end_date) return `${startText} 至 ${formatDateValue(item.end_date)} ${item.end_time ? end : "24:00"}`;
-    if (!item.end_time) return `${startText} 起持续运行`;
-    return `${startText} 至 ${end}${end <= start ? "（次日）" : ""}`;
-  }
-  if (!item.end_time) return `${start} 起持续运行`;
-  return `${start} 至 ${end}${end <= start ? "（次日）" : ""}`;
-}
-
-function startLabel(item: TaskSchedule) {
-  return item.schedule_type === "once"
-    ? `${formatDateValue(item.run_date)} ${formatClock(item.start_time)}`
-    : formatClock(item.start_time);
-}
-
-function endLabel(item: TaskSchedule) {
-  if (item.schedule_type === "once" && item.end_date) {
-    return `${formatDateValue(item.end_date)} ${item.end_time ? formatClock(item.end_time) : "24:00"}`;
-  }
-  if (!item.end_time) return "持续运行";
-  const end = formatClock(item.end_time);
-  const start = formatClock(item.start_time);
-  return `${end}${end <= start ? "（次日）" : ""}`;
-}
-
-function timezoneLabel(item: TaskSchedule) {
-  return item.timezone_mode === "beijing" ? "中国北京时间" : `系统时区${item.timezone ? `（${item.timezone}）` : ""}`;
-}
-
-function nextWindowLabel(value?: string, timezone?: string) {
-  if (!value) return "—";
-  try {
-    const timeZone = timezone && timezone !== "Local" ? timezone : undefined;
-    return new Intl.DateTimeFormat("zh-CN", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).format(new Date(value));
-  } catch {
-    return formatTime(value);
-  }
-}
-
-function scheduleErrorText(value?: string) {
-  if (!value) return "";
-  return value
-    .replaceAll("end_date", "截止日期")
-    .replaceAll("run_date", "开始日期")
-    .replaceAll("start_time", "开始时间")
-    .replaceAll("end_time", "结束时间")
-    .replaceAll("weekdays", "星期")
-    .replaceAll("timezone_mode", "时区")
-    .replaceAll("schedule_type", "规则");
-}
-
 type ScheduleHistoryEntry = NonNullable<TaskSchedule["history"]>[number];
-
-function historyActionText(action: string) {
-  return (
-    (
-      {
-        running: "窗口开始",
-        outside: "窗口结束",
-        completed: "计划完成",
-        waiting: "等待窗口",
-        paused: "计划暂停",
-        resume: "恢复任务",
-        pause: "暂停任务",
-        error: "执行错误",
-      } as Record<string, string>
-    )[action] ?? "状态变化"
-  );
-}
 
 function historyEventClass(event: ScheduleHistoryEntry) {
   if (!event.success)
@@ -184,11 +66,16 @@ function historyDotClass(event: ScheduleHistoryEntry) {
 }
 
 function ScheduleTimeline({ schedule, loading }: { schedule?: TaskSchedule; loading: boolean }) {
+  const { t: translate, i18n } = useLiveTranslation();
+  const { formatTime, historyActionText, scheduleErrorText } = scheduleDisplay(
+    translate,
+    i18n.resolvedLanguage ?? "zh-CN",
+  );
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-4 text-muted-foreground text-sm">
         <Loader2 className="size-4 animate-spin" />
-        加载运行时间线…
+        {translate("schedule.loadingTimeline")}
       </div>
     );
   }
@@ -196,13 +83,15 @@ function ScheduleTimeline({ schedule, loading }: { schedule?: TaskSchedule; load
   // visible immediately when a row is expanded.
   const events = schedule?.history ?? [];
   if (!events.length) {
-    return <div className="py-4 text-muted-foreground text-sm">暂无运行记录，计划进入第一个窗口后会显示时间线。</div>;
+    return <div className="py-4 text-muted-foreground text-sm">{translate("schedule.emptyTimeline")}</div>;
   }
   return (
     <div className="grid gap-3 rounded-lg border bg-muted/20 p-4">
       <div className="flex items-center justify-between gap-3">
-        <div className="font-medium text-sm">运行时间线</div>
-        <span className="text-muted-foreground text-xs">最近 {Math.min(events.length, 20)} 条记录</span>
+        <div className="font-medium text-sm">{translate("schedule.timeline")}</div>
+        <span className="text-muted-foreground text-xs">
+          {translate("schedule.recentRecords", { count: Math.min(events.length, 20) })}
+        </span>
       </div>
       <div className="grid gap-0">
         {events.slice(0, 20).map((event, index) => (
@@ -220,11 +109,13 @@ function ScheduleTimeline({ schedule, loading }: { schedule?: TaskSchedule; load
                   {historyActionText(event.action)}
                 </Badge>
                 <span className="text-muted-foreground">{formatTime(event.created_at)}</span>
-                <span className="text-muted-foreground">{event.task_id ? `任务 #${event.task_id}` : "计划任务"}</span>
+                <span className="text-muted-foreground">
+                  {event.task_id ? translate("schedule.taskId", { id: event.task_id }) : translate("schedule.title")}
+                </span>
               </div>
               {event.message ? (
                 <div className={`mt-1 text-xs ${event.success ? "text-muted-foreground" : "text-destructive"}`}>
-                  {event.message}
+                  {scheduleErrorText(event.message)}
                 </div>
               ) : null}
             </div>
@@ -264,6 +155,8 @@ function ScheduleForm({
   onCancel?: () => void;
   saving: boolean;
 }) {
+  const { t: translate, i18n } = useLiveTranslation();
+  const { weekdays } = scheduleDisplay(translate, i18n.resolvedLanguage ?? "zh-CN");
   const [draft, setDraft] = React.useState(value);
   const [taskQuery, setTaskQuery] = React.useState("");
   const set = (patch: Partial<ScheduleInput>) => setDraft((v) => ({ ...v, ...patch }));
@@ -286,16 +179,16 @@ function ScheduleForm({
   }, [taskQuery, tasks]);
   let taskListContent: React.ReactNode;
   if (tasks.length === 0) {
-    taskListContent = <span className="text-muted-foreground text-sm">暂无任务</span>;
+    taskListContent = <span className="text-muted-foreground text-sm">{translate("schedule.noTasks")}</span>;
   } else if (filteredTasks.length === 0) {
-    taskListContent = <span className="text-muted-foreground text-sm">没有匹配的任务</span>;
+    taskListContent = <span className="text-muted-foreground text-sm">{translate("schedule.noMatchingTasks")}</span>;
   } else {
     taskListContent = filteredTasks.map((task) => (
       <div key={task.id} className="flex items-center gap-2 py-1 text-sm">
         <Checkbox
           id={`schedule-task-${task.id}`}
-          checked={(draft.task_ids ?? []).includes(Number(task.id))}
-          onCheckedChange={(v) => toggleTask(Number(task.id), !!v)}
+          checked={(draft.task_ids ?? []).includes(Number(task.numeric_id ?? task.id))}
+          onCheckedChange={(v) => toggleTask(Number(task.numeric_id ?? task.id), !!v)}
         />
         <Label htmlFor={`schedule-task-${task.id}`} className="truncate">
           #{task.id} {task.name || task.description}
@@ -306,12 +199,16 @@ function ScheduleForm({
   return (
     <div className="grid gap-4 rounded-lg border p-4">
       <div className="grid gap-2">
-        <Label>计划名称</Label>
-        <Input value={draft.name} onChange={(e) => set({ name: e.target.value })} placeholder="例如：周末持续扫描" />
+        <Label>{translate("schedule.name")}</Label>
+        <Input
+          value={draft.name}
+          onChange={(e) => set({ name: e.target.value })}
+          placeholder={translate("schedule.nameExample")}
+        />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="grid gap-2">
-          <Label>规则</Label>
+          <Label>{translate("schedule.rule")}</Label>
           <Select
             value={draft.schedule_type}
             onValueChange={(value) => set({ schedule_type: value as ScheduleInput["schedule_type"] })}
@@ -320,13 +217,13 @@ function ScheduleForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="weekly">按周</SelectItem>
-              <SelectItem value="once">指定日期</SelectItem>
+              <SelectItem value="weekly">{translate("schedule.weekly")}</SelectItem>
+              <SelectItem value="once">{translate("schedule.once")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div className="grid gap-2">
-          <Label>时区</Label>
+          <Label>{translate("schedule.timezone")}</Label>
           <Select
             value={draft.timezone_mode}
             onValueChange={(value) => set({ timezone_mode: value as ScheduleInput["timezone_mode"] })}
@@ -335,8 +232,8 @@ function ScheduleForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="beijing">中国北京时间</SelectItem>
-              <SelectItem value="system">系统当前时区</SelectItem>
+              <SelectItem value="beijing">{translate("schedule.beijing")}</SelectItem>
+              <SelectItem value="system">{translate("schedule.systemTimezone")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -344,27 +241,27 @@ function ScheduleForm({
       {draft.schedule_type === "once" ? (
         <div className="grid grid-cols-2 gap-3">
           <div className="grid gap-2">
-            <Label>开始日期</Label>
+            <Label>{translate("schedule.startDate")}</Label>
             <DateSelect
               value={draft.run_date ?? ""}
               onValueChange={(value) => set({ run_date: value })}
-              aria-label="开始日期"
+              aria-label={translate("schedule.startDate")}
             />
           </div>
           <div className="grid gap-2">
-            <Label>截止日期（可选）</Label>
+            <Label>{translate("schedule.endDateOptional")}</Label>
             <DateSelect
               value={draft.end_date ?? ""}
               onValueChange={(value) => set({ end_date: value })}
               optional
-              placeholder="不设置截止日期"
-              aria-label="截止日期，可选"
+              placeholder={translate("schedule.noEndDate")}
+              aria-label={translate("schedule.endDateAccessible")}
             />
           </div>
         </div>
       ) : (
         <div className="grid gap-2">
-          <Label>星期</Label>
+          <Label>{translate("schedule.weekdays")}</Label>
           <div className="flex flex-wrap gap-3">
             {weekdays.map((label, index) => (
               <div key={label} className="flex items-center gap-2 text-sm">
@@ -381,45 +278,45 @@ function ScheduleForm({
       )}
       <div className="grid grid-cols-2 gap-3">
         <div className="grid gap-2">
-          <Label>开始时间</Label>
+          <Label>{translate("schedule.startTime")}</Label>
           <TimeSelect
             value={draft.start_time}
             onValueChange={(value) => set({ start_time: value })}
-            aria-label="开始时间"
+            aria-label={translate("schedule.startTime")}
           />
         </div>
         <div className="grid gap-2">
-          <Label>结束时间（可选）</Label>
+          <Label>{translate("schedule.endTimeOptional")}</Label>
           <TimeSelect
             value={draft.end_time ?? ""}
             onValueChange={(value) => set({ end_time: value })}
             optional
-            aria-label="结束时间，可选"
+            aria-label={translate("schedule.endTimeAccessible")}
           />
         </div>
       </div>
-      <p className="text-muted-foreground text-xs">
-        一次性计划可设置截止日期；截止日期为空时仅按结束时间控制。结束时间为空表示持续运行，结束时间早于开始时间表示跨午夜窗口。
-      </p>
+      <p className="text-muted-foreground text-xs">{translate("schedule.windowHelp")}</p>
       <div className="flex items-center gap-2 text-sm">
         <Checkbox
           id="schedule-start-immediately"
           checked={draft.start_immediately}
           onCheckedChange={(v) => set({ start_immediately: !!v })}
         />
-        <Label htmlFor="schedule-start-immediately">创建后立即启动，不等待第一个窗口</Label>
+        <Label htmlFor="schedule-start-immediately">{translate("schedule.startImmediately")}</Label>
       </div>
       <div className="grid gap-2">
         <div className="flex items-center justify-between gap-3">
-          <Label>绑定任务</Label>
-          <span className="text-muted-foreground text-xs">已选 {(draft.task_ids ?? []).length} 个</span>
+          <Label>{translate("schedule.boundTasks")}</Label>
+          <span className="text-muted-foreground text-xs">
+            {translate("schedule.selectedTasks", { count: (draft.task_ids ?? []).length })}
+          </span>
         </div>
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={taskQuery}
             onChange={(event) => setTaskQuery(event.target.value)}
-            placeholder="检索任务名称、描述或 ID"
+            placeholder={translate("schedule.searchTasks")}
             className="h-9 pl-8"
           />
         </div>
@@ -427,10 +324,11 @@ function ScheduleForm({
       </div>
       <div className="flex justify-end gap-2">
         <Button variant="outline" onClick={onCancel}>
-          取消
+          {translate("schedule.cancel")}
         </Button>
         <Button disabled={saving} onClick={() => onSave(draft)}>
-          {saving && <Loader2 className="animate-spin" data-icon="inline-start" />}保存计划
+          {saving && <Loader2 className="animate-spin" data-icon="inline-start" />}
+          {translate("schedule.save")}
         </Button>
       </div>
     </div>
@@ -438,6 +336,17 @@ function ScheduleForm({
 }
 
 export default function SchedulesPage() {
+  const { t: translate, liveT, i18n } = useLiveTranslation();
+  const {
+    periodLabel,
+    startLabel,
+    endLabel,
+    timezoneLabel,
+    nextWindowLabel,
+    formatTime,
+    statusText,
+    scheduleErrorText,
+  } = scheduleDisplay(translate, i18n.resolvedLanguage ?? "zh-CN");
   const [items, setItems] = React.useState<TaskSchedule[]>([]);
   const [tasks, setTasks] = React.useState<Task[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -457,24 +366,27 @@ export default function SchedulesPage() {
       setItems(s);
       setTasks(t.tasks);
     } catch (e) {
-      toast.error((e as Error).message);
+      toast.error(localizedError(e, liveT));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [liveT]);
   React.useEffect(() => {
     void load();
   }, [load]);
-  const filteredItems = React.useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return items;
-    return items.filter((item) =>
-      [item.name, String(item.id), periodLabel(item), windowLabel(item), ...item.task_ids.map(String)]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalized),
-    );
-  }, [items, query]);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredItems = !normalizedQuery
+    ? items
+    : items.filter((item) => {
+        const translations = ["zh-CN", "en"].flatMap((locale) => {
+          const display = scheduleDisplay(i18n.getFixedT(locale), locale);
+          return [display.periodLabel(item), display.windowLabel(item)];
+        });
+        return [item.name, String(item.id), ...translations, ...item.task_ids.map(String)]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedQuery);
+      });
   const size = Number(pageSize);
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / size));
   const visibleItems = filteredItems.slice((page - 1) * size, page * size);
@@ -514,7 +426,7 @@ export default function SchedulesPage() {
       const detail = await api.schedule(id);
       setTimelineById((current) => ({ ...current, [id]: detail }));
     } catch (e) {
-      toast.error((e as Error).message);
+      toast.error(scheduleErrorText(localizedError(e, translate)));
     } finally {
       setTimelineLoadingId(null);
     }
@@ -543,24 +455,24 @@ export default function SchedulesPage() {
       !value.start_time ||
       (value.schedule_type === "once" ? !value.run_date : !value.weekdays?.length)
     ) {
-      toast.error("请补全计划名称、日期/星期和开始时间");
+      toast.error(translate("schedule.required"));
       return;
     }
     setSaving(true);
     try {
       if (editing?.id) await api.updateSchedule(editing.id, value);
       else await api.createSchedule(value);
-      toast.success("计划已保存");
+      toast.success(translate("schedule.saved"));
       setEditing(null);
       await load();
     } catch (e) {
-      toast.error((e as Error).message);
+      toast.error(scheduleErrorText(localizedError(e, translate)));
     } finally {
       setSaving(false);
     }
   };
   const remove = async (id: number) => {
-    if (!window.confirm("确定删除这个计划吗？")) return;
+    if (!window.confirm(translate("schedule.confirmDelete"))) return;
     try {
       await api.deleteSchedule(id);
       setTimelineById((current) => {
@@ -571,7 +483,7 @@ export default function SchedulesPage() {
       if (expandedId === id) setExpandedId(null);
       await load();
     } catch (e) {
-      toast.error((e as Error).message);
+      toast.error(scheduleErrorText(localizedError(e, translate)));
     }
   };
   const action = async (id: number, type: "pause" | "resume" | "run") => {
@@ -582,16 +494,20 @@ export default function SchedulesPage() {
         const result = await api.runScheduleNow(id);
         if (result.errors?.length) {
           toast.warning(
-            `已启动 ${result.started} 个任务，但有 ${result.errors.length} 个任务未启动：${result.errors.join("；")}`,
+            translate("schedule.startedWithErrors", {
+              started: result.started,
+              failed: result.errors.length,
+              errors: result.errors.map(scheduleErrorText).join("; "),
+            }),
           );
         } else {
-          toast.success(`已立即运行 ${result.started} 个任务`);
+          toast.success(translate("schedule.started", { count: result.started }));
         }
       }
       await invalidateTimeline(id);
       await load();
     } catch (e) {
-      toast.error((e as Error).message);
+      toast.error(scheduleErrorText(localizedError(e, translate)));
     }
   };
   const bulkRun = async () => {
@@ -602,16 +518,29 @@ export default function SchedulesPage() {
     const results = await Promise.allSettled(ids.map((id) => api.runScheduleNow(id)));
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        errors.push(`计划 #${ids[index]}：${(result.reason as Error).message}`);
+        errors.push(
+          translate("schedule.scheduleError", {
+            id: ids[index],
+            message: scheduleErrorText(localizedError(result.reason, translate)),
+          }),
+        );
         return;
       }
       started += result.value.started;
-      if (result.value.errors?.length) errors.push(`计划 #${ids[index]}：${result.value.errors.join("；")}`);
+      if (result.value.errors?.length)
+        errors.push(
+          translate("schedule.scheduleError", {
+            id: ids[index],
+            message: result.value.errors.map(scheduleErrorText).join("; "),
+          }),
+        );
     });
     if (errors.length) {
-      toast.warning(`已启动 ${started} 个任务，但有 ${errors.length} 项未完成：${errors.join("；")}`);
+      toast.warning(
+        translate("schedule.bulkStartedWithErrors", { started, failed: errors.length, errors: errors.join("; ") }),
+      );
     } else {
-      toast.success(`已立即运行 ${started} 个任务`);
+      toast.success(translate("schedule.started", { count: started }));
     }
     setSelectedIds([]);
     await Promise.all(ids.map((id) => invalidateTimeline(id)));
@@ -619,11 +548,11 @@ export default function SchedulesPage() {
   };
   const bulkRemove = async () => {
     const ids = [...selectedIds];
-    if (!ids.length || !window.confirm(`确定删除选中的 ${ids.length} 个计划吗？`)) return;
+    if (!ids.length || !window.confirm(translate("schedule.confirmBulkDelete", { count: ids.length }))) return;
     const results = await Promise.allSettled(ids.map((id) => api.deleteSchedule(id)));
     const failed = results.filter((result) => result.status === "rejected").length;
-    if (failed) toast.warning(`已删除 ${ids.length - failed} 个计划，${failed} 个计划删除失败`);
-    else toast.success(`已删除 ${ids.length} 个计划`);
+    if (failed) toast.warning(translate("schedule.deletedWithErrors", { deleted: ids.length - failed, failed }));
+    else toast.success(translate("schedule.deleted", { count: ids.length }));
     setTimelineById((current) => {
       const next = { ...current };
       ids.forEach((id) => {
@@ -640,15 +569,13 @@ export default function SchedulesPage() {
     scheduleContent = (
       <div className="flex items-center gap-2 text-muted-foreground">
         <Loader2 className="animate-spin" />
-        加载计划中…
+        {translate("schedule.loading")}
       </div>
     );
   } else if (items.length === 0) {
     scheduleContent = (
       <Card>
-        <CardContent className="py-10 text-center text-muted-foreground">
-          暂无计划任务，点击“新建计划”开始。
-        </CardContent>
+        <CardContent className="py-10 text-center text-muted-foreground">{translate("schedule.empty")}</CardContent>
       </Card>
     );
   } else {
@@ -660,46 +587,50 @@ export default function SchedulesPage() {
             <Input
               value={query}
               onChange={(event) => updateQuery(event.target.value)}
-              placeholder="检索计划名称、计划 ID 或任务 ID"
+              placeholder={translate("schedule.search")}
               className="h-9 pl-8"
             />
           </div>
           <div className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">每页</span>
+            <span className="text-muted-foreground">{translate("schedule.perPage")}</span>
             <Select value={pageSize} onValueChange={updatePageSize}>
               <SelectTrigger className="h-9 w-24 bg-background">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="10">10 条</SelectItem>
-                <SelectItem value="20">20 条</SelectItem>
-                <SelectItem value="50">50 条</SelectItem>
+                <SelectItem value="10">{translate("schedule.rows", { count: 10 })}</SelectItem>
+                <SelectItem value="20">{translate("schedule.rows", { count: 20 })}</SelectItem>
+                <SelectItem value="50">{translate("schedule.rows", { count: 50 })}</SelectItem>
               </SelectContent>
             </Select>
-            <span className="text-muted-foreground">共 {filteredItems.length} 条</span>
+            <span className="text-muted-foreground">
+              {translate("schedule.total", { count: filteredItems.length })}
+            </span>
           </div>
         </div>
         {selectedIds.length ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
-            <span className="text-sm">已选 {selectedIds.length} 个计划</span>
+            <span className="text-sm">{translate("schedule.selectedSchedules", { count: selectedIds.length })}</span>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={() => void bulkRun()}>
                 <Zap data-icon="inline-start" />
-                立即运行
+                {translate("schedule.runNow")}
               </Button>
               <Button size="sm" variant="destructive" onClick={() => void bulkRemove()}>
                 <Trash2 data-icon="inline-start" />
-                删除
+                {translate("schedule.delete")}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setSelectedIds([])}>
-                清空选择
+                {translate("schedule.clearSelection")}
               </Button>
             </div>
           </div>
         ) : null}
         {filteredItems.length === 0 ? (
           <Card>
-            <CardContent className="py-10 text-center text-muted-foreground">没有匹配的计划任务。</CardContent>
+            <CardContent className="py-10 text-center text-muted-foreground">
+              {translate("schedule.noMatches")}
+            </CardContent>
           </Card>
         ) : (
           <div className="overflow-x-auto rounded-lg border bg-card">
@@ -708,22 +639,22 @@ export default function SchedulesPage() {
                 <TableRow>
                   <TableHead className="w-12">
                     <Checkbox
-                      aria-label="选择当前页计划"
+                      aria-label={translate("schedule.selectPage")}
                       checked={headerSelectionState}
                       onCheckedChange={(checked) => toggleAllVisible(checked === true)}
                     />
                   </TableHead>
                   <TableHead className="font-mono">ID</TableHead>
-                  <TableHead className="min-w-44">计划名称</TableHead>
-                  <TableHead className="w-px">备注</TableHead>
-                  <TableHead className="w-28">时间线</TableHead>
-                  <TableHead className="min-w-48">运行周期</TableHead>
-                  <TableHead className="min-w-40">开始时间</TableHead>
-                  <TableHead className="min-w-40">结束时间</TableHead>
-                  <TableHead className="min-w-24 text-center">运行次数</TableHead>
-                  <TableHead className="min-w-36">绑定任务</TableHead>
-                  <TableHead className="min-w-32">状态</TableHead>
-                  <TableHead className="min-w-72 text-right">操作</TableHead>
+                  <TableHead className="min-w-44">{translate("schedule.name")}</TableHead>
+                  <TableHead className="w-px">{translate("schedule.remark")}</TableHead>
+                  <TableHead className="w-28">{translate("schedule.timelineColumn")}</TableHead>
+                  <TableHead className="min-w-48">{translate("schedule.period")}</TableHead>
+                  <TableHead className="min-w-40">{translate("schedule.startTime")}</TableHead>
+                  <TableHead className="min-w-40">{translate("schedule.endTime")}</TableHead>
+                  <TableHead className="min-w-24 text-center">{translate("schedule.runCount")}</TableHead>
+                  <TableHead className="min-w-36">{translate("schedule.boundTasks")}</TableHead>
+                  <TableHead className="min-w-32">{translate("schedule.statusLabel")}</TableHead>
+                  <TableHead className="min-w-72 text-right">{translate("schedule.actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -732,7 +663,7 @@ export default function SchedulesPage() {
                     <TableRow className="group">
                       <TableCell className="w-12">
                         <Checkbox
-                          aria-label={`选择计划 ${item.name}`}
+                          aria-label={translate("schedule.selectSchedule", { name: item.name })}
                           checked={selectedIds.includes(item.id)}
                           onCheckedChange={(checked) => toggleSelected(item.id, checked === true)}
                         />
@@ -743,21 +674,25 @@ export default function SchedulesPage() {
                       <TableCell className="font-medium">
                         <ScheduleNameEditor
                           value={item.name}
-                          label={`计划 #${item.id}`}
+                          label={translate("schedule.scheduleId", { id: item.id })}
                           onSave={async (name) => {
                             const updated = await api.renameSchedule(item.id, name);
-                            setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, name: updated.name } : entry));
+                            setItems((current) =>
+                              current.map((entry) => (entry.id === item.id ? { ...entry, name: updated.name } : entry)),
+                            );
                           }}
                         />
                       </TableCell>
                       <TableCell>
                         <RemarkEditor
                           value={item.remark}
-                          label={`计划 #${item.id} ${item.name}`}
+                          label={translate("schedule.scheduleLabel", { id: item.id, name: item.name })}
                           onSave={async (remark) => {
                             const updated = await api.updateScheduleRemark(item.id, remark);
                             setItems((current) =>
-                              current.map((entry) => entry.id === item.id ? { ...entry, remark: updated.remark } : entry),
+                              current.map((entry) =>
+                                entry.id === item.id ? { ...entry, remark: updated.remark } : entry,
+                              ),
                             );
                           }}
                         />
@@ -769,7 +704,7 @@ export default function SchedulesPage() {
                           ) : (
                             <ChevronRight data-icon="inline-start" />
                           )}
-                          {expandedId === item.id ? "收起" : "查看"}
+                          {expandedId === item.id ? translate("schedule.collapse") : translate("schedule.view")}
                         </Button>
                       </TableCell>
                       <TableCell className="text-sm">{periodLabel(item)}</TableCell>
@@ -777,7 +712,9 @@ export default function SchedulesPage() {
                         {startLabel(item)}
                         {item.next_start ? (
                           <div className="mt-1 text-muted-foreground text-xs">
-                            下次：{nextWindowLabel(item.next_start, item.timezone)}
+                            {translate("schedule.nextWindow", {
+                              time: nextWindowLabel(item.next_start, item.timezone),
+                            })}
                           </div>
                         ) : null}
                       </TableCell>
@@ -785,21 +722,25 @@ export default function SchedulesPage() {
                         {endLabel(item)}
                         {item.next_end ? (
                           <div className="mt-1 text-muted-foreground text-xs">
-                            下次：{nextWindowLabel(item.next_end, item.timezone)}
+                            {translate("schedule.nextWindow", { time: nextWindowLabel(item.next_end, item.timezone) })}
                           </div>
                         ) : null}
                       </TableCell>
                       <TableCell className="text-center text-sm tabular-nums">
                         {item.run_count ?? 0}
                         {item.last_run_at ? (
-                          <div className="mt-1 text-muted-foreground text-xs">最近 {formatTime(item.last_run_at)}</div>
+                          <div className="mt-1 text-muted-foreground text-xs">
+                            {translate("schedule.lastRun", { time: formatTime(item.last_run_at) })}
+                          </div>
                         ) : null}
                       </TableCell>
                       <TableCell
                         className="max-w-52 truncate text-sm"
-                        title={item.task_ids.map((id) => `#${id}`).join("、")}
+                        title={item.task_ids.map((id) => `#${id}`).join(", ")}
                       >
-                        {item.task_ids.length ? item.task_ids.map((id) => `#${id}`).join("、") : "无"}
+                        {item.task_ids.length
+                          ? item.task_ids.map((id) => `#${id}`).join(", ")
+                          : translate("schedule.none")}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className={statusClass(item.status)}>
@@ -807,7 +748,7 @@ export default function SchedulesPage() {
                         </Badge>
                         <div className="mt-1 text-muted-foreground text-xs">{timezoneLabel(item)}</div>
                         <div className="mt-1 text-muted-foreground text-xs">
-                          最近：{formatTime(item.last_transition_at)}
+                          {translate("schedule.lastTransition", { time: formatTime(item.last_transition_at) })}
                         </div>
                         {item.last_error ? (
                           <div
@@ -842,26 +783,26 @@ export default function SchedulesPage() {
                               })
                             }
                           >
-                            编辑
+                            {translate("schedule.edit")}
                           </Button>
                           {item.enabled ? (
                             <Button size="sm" variant="outline" onClick={() => void action(item.id, "pause")}>
                               <Pause data-icon="inline-start" />
-                              暂停
+                              {translate("schedule.pause")}
                             </Button>
                           ) : (
                             <Button size="sm" variant="outline" onClick={() => void action(item.id, "resume")}>
                               <Play data-icon="inline-start" />
-                              启用
+                              {translate("schedule.enable")}
                             </Button>
                           )}
                           <Button size="sm" variant="outline" onClick={() => void action(item.id, "run")}>
                             <Zap data-icon="inline-start" />
-                            立即运行
+                            {translate("schedule.runNow")}
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => void remove(item.id)}>
                             <Trash2 data-icon="inline-start" />
-                            删除
+                            {translate("schedule.delete")}
                           </Button>
                         </div>
                       </TableCell>
@@ -880,12 +821,10 @@ export default function SchedulesPage() {
           </div>
         )}
         <div className="flex items-center justify-between gap-3 text-sm">
-          <span className="text-muted-foreground">
-            第 {page} / {totalPages} 页
-          </span>
+          <span className="text-muted-foreground">{translate("schedule.page", { page, totalPages })}</span>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((current) => current - 1)}>
-              上一页
+              {translate("schedule.previous")}
             </Button>
             <Button
               size="sm"
@@ -893,7 +832,7 @@ export default function SchedulesPage() {
               disabled={page >= totalPages}
               onClick={() => setPage((current) => current + 1)}
             >
-              下一页
+              {translate("schedule.next")}
             </Button>
           </div>
         </div>
@@ -906,20 +845,20 @@ export default function SchedulesPage() {
         <div>
           <h1 className="flex items-center gap-2 font-semibold text-xl">
             <CalendarClock />
-            计划任务
+            {translate("schedule.title")}
           </h1>
-          <p className="mt-1 text-muted-foreground text-sm">按北京时间或系统时区控制扫描任务的开始、暂停和恢复。</p>
+          <p className="mt-1 text-muted-foreground text-sm">{translate("schedule.description")}</p>
         </div>
         <Button onClick={() => setEditing({ value: { ...blank, task_ids: [] } })}>
           <Plus data-icon="inline-start" />
-          新建计划
+          {translate("schedule.create")}
         </Button>
       </div>
       {editing && (
         <Card>
           <CardHeader>
-            <CardTitle>{editing.id ? "编辑计划" : "新建计划"}</CardTitle>
-            <CardDescription>计划结束时会暂停任务，下一次有效窗口自动继续。</CardDescription>
+            <CardTitle>{editing.id ? translate("schedule.editSchedule") : translate("schedule.create")}</CardTitle>
+            <CardDescription>{translate("schedule.pauseHelp")}</CardDescription>
           </CardHeader>
           <CardContent>
             <ScheduleForm

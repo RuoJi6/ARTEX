@@ -1,180 +1,180 @@
 "use client";
-
 import * as React from "react";
 
 import { SearchIcon } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { cn } from "@/lib/utils";
 
 // ── DSL autocomplete ──────────────────────────────────────────────────────────
 // Shared by the global asset view (/function/assets) and the per-task 测试资产
 // search, so both search boxes behave and look identical.
 
-const DSL_FIELDS: { name: string; desc: string; ops: { op: string; desc: string }[] }[] = [
+const DSL_FIELDS = (ui: UITranslate): { name: string; desc: string; ops: { op: string; desc: string }[] }[] => [
   {
     name: "domain",
-    desc: "域名（根域名/子域名/服务域名）",
+    desc: ui("screen.57099007fa308d"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "ip",
-    desc: "IPv4/IPv6 地址",
+    desc: ui("screen.d6bccb5525b543"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "url",
-    desc: "完整 URL（服务/接口）",
+    desc: ui("screen.3e78ecd2c1c29e"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "root_domain",
-    desc: "根域名",
+    desc: ui("screen.bc208f697acff9"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "page_title",
-    desc: "页面标题（HTTP 服务）",
+    desc: ui("screen.69e532a0a63349"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "icp",
-    desc: "ICP 备案号",
+    desc: ui("screen.94a539470270db"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "service_name",
-    desc: "服务名称（非 HTTP 服务）",
+    desc: ui("screen.c481d537b52090"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "app_name",
-    desc: "应用名称",
+    desc: ui("screen.e4569e38b854a1"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "bundle_id",
-    desc: "应用 Bundle ID",
+    desc: ui("screen.40a99c183eef6d"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "category",
-    desc: "应用分类",
+    desc: ui("screen.5315ee8353ac3f"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "app_icp",
-    desc: "应用 ICP 备案",
+    desc: ui("screen.1482fa61ead67e"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "method",
-    desc: "HTTP 方法 GET/POST/PUT/…",
+    desc: ui("screen.6b3e518f24ef15"),
     ops: [
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "service_type",
-    desc: "服务类型：http | other",
+    desc: ui("screen.6fa8aac3e7f6dc"),
     ops: [
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "record_type",
-    desc: "DNS 解析类型 A/CNAME/MX/…",
+    desc: ui("screen.98614bf0dfd16e"),
     ops: [
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "technology",
-    desc: "技术指纹（数组字段）",
+    desc: ui("screen.cf68ad2b6bffb4"),
     ops: [
-      { op: "=", desc: "模糊匹配" },
-      { op: "==", desc: "精确匹配" },
-      { op: "!=", desc: "排除" },
+      { op: "=", desc: ui("screen.11d3fca99fc591") },
+      { op: "==", desc: ui("screen.391fe725d014c9") },
+      { op: "!=", desc: ui("screen.ac83d3972fe9fd") },
     ],
   },
   {
     name: "port",
-    desc: "端口号（整数）",
+    desc: ui("screen.b54804697609f5"),
     ops: [
-      { op: "==", desc: "等于" },
-      { op: "!=", desc: "不等于" },
-      { op: ">", desc: "大于" },
-      { op: ">=", desc: "大于等于" },
-      { op: "<", desc: "小于" },
-      { op: "<=", desc: "小于等于" },
+      { op: "==", desc: ui("screen.4bc69a0562ff8e") },
+      { op: "!=", desc: ui("screen.9678e3a7cb3c9c") },
+      { op: ">", desc: ui("screen.b4614ab230a531") },
+      { op: ">=", desc: ui("screen.e1feef07d1b87b") },
+      { op: "<", desc: ui("screen.a39accd3595fa6") },
+      { op: "<=", desc: ui("screen.035d78382d6fae") },
     ],
   },
   {
     name: "status_code",
-    desc: "HTTP 状态码（整数）",
+    desc: ui("screen.b4d43dea84773f"),
     ops: [
-      { op: "==", desc: "等于" },
-      { op: "!=", desc: "不等于" },
-      { op: ">", desc: "大于" },
-      { op: ">=", desc: "大于等于" },
-      { op: "<", desc: "小于" },
-      { op: "<=", desc: "小于等于" },
+      { op: "==", desc: ui("screen.4bc69a0562ff8e") },
+      { op: "!=", desc: ui("screen.9678e3a7cb3c9c") },
+      { op: ">", desc: ui("screen.b4614ab230a531") },
+      { op: ">=", desc: ui("screen.e1feef07d1b87b") },
+      { op: "<", desc: ui("screen.a39accd3595fa6") },
+      { op: "<=", desc: ui("screen.035d78382d6fae") },
     ],
   },
-  { name: "company_id", desc: "归属企业 ID（整数）", ops: [{ op: "==", desc: "等于" }] },
-  { name: "task_id", desc: "来源任务 ID（整数）", ops: [{ op: "==", desc: "等于" }] },
+  { name: "company_id", desc: ui("screen.ddf430978fe51e"), ops: [{ op: "==", desc: ui("screen.4bc69a0562ff8e") }] },
+  { name: "task_id", desc: ui("screen.e64f0ccf4690d2"), ops: [{ op: "==", desc: ui("screen.4bc69a0562ff8e") }] },
 ];
 
-const LOGIC_OPS = [
-  { label: "AND", desc: "且（两个条件都满足）" },
-  { label: "OR", desc: "或（满足其中之一）" },
+const LOGIC_OPS = (ui: UITranslate) => [
+  { label: "AND", desc: ui("screen.c68c81f1b693b1") },
+  { label: "OR", desc: ui("screen.6a5ea76d398f8b") },
 ];
 
 interface DslSuggestion {
@@ -186,7 +186,7 @@ interface DslSuggestion {
   insertText: string;
 }
 
-function getDslSuggestions(text: string, cursor: number): DslSuggestion[] {
+function getDslSuggestions(text: string, cursor: number, ui: UITranslate): DslSuggestion[] {
   const before = text.slice(0, cursor);
   // Current token: non-whitespace, non-paren run ending at cursor
   const tokenMatch = before.match(/([^\s()]*$)/);
@@ -197,7 +197,7 @@ function getDslSuggestions(text: string, cursor: number): DslSuggestion[] {
   if (/^[a-z_]+(==|!=|>=|<=|=|>|<)/.test(currentToken)) return [];
 
   // Complete known field name → suggest operators for that field
-  const exactField = DSL_FIELDS.find((f) => f.name === currentToken.toLowerCase());
+  const exactField = DSL_FIELDS(ui).find((f) => f.name === currentToken.toLowerCase());
   if (exactField) {
     return exactField.ops.map(({ op, desc }) => ({
       kind: "operator",
@@ -215,19 +215,21 @@ function getDslSuggestions(text: string, cursor: number): DslSuggestion[] {
 
   // Current token is a prefix of AND/OR and follows a complete expression
   if (/^(a|an|and|o|or)$/i.test(currentToken) && afterExpression) {
-    return LOGIC_OPS.filter((l) => l.label.startsWith(currentToken.toUpperCase())).map(({ label, desc }) => ({
-      kind: "logic",
-      label,
-      desc,
-      replaceStart: tokenStart,
-      replaceEnd: cursor,
-      insertText: `${label} `,
-    }));
+    return LOGIC_OPS(ui)
+      .filter((l) => l.label.startsWith(currentToken.toUpperCase()))
+      .map(({ label, desc }) => ({
+        kind: "logic",
+        label,
+        desc,
+        replaceStart: tokenStart,
+        replaceEnd: cursor,
+        insertText: `${label} `,
+      }));
   }
 
   // No current token, after a complete expression → suggest AND/OR
   if (!currentToken && afterExpression) {
-    return LOGIC_OPS.map(({ label, desc }) => ({
+    return LOGIC_OPS(ui).map(({ label, desc }) => ({
       kind: "logic",
       label,
       desc,
@@ -239,14 +241,16 @@ function getDslSuggestions(text: string, cursor: number): DslSuggestion[] {
 
   // Default: suggest fields filtered by prefix
   const prefix = currentToken.toLowerCase();
-  return DSL_FIELDS.filter((f) => f.name.startsWith(prefix)).map((f) => ({
-    kind: "field",
-    label: f.name,
-    desc: f.desc,
-    replaceStart: tokenStart,
-    replaceEnd: cursor,
-    insertText: f.name,
-  }));
+  return DSL_FIELDS(ui)
+    .filter((f) => f.name.startsWith(prefix))
+    .map((f) => ({
+      kind: "field",
+      label: f.name,
+      desc: f.desc,
+      replaceStart: tokenStart,
+      replaceEnd: cursor,
+      insertText: f.name,
+    }));
 }
 
 function applyDslSuggestion(text: string, s: DslSuggestion): { text: string; cursor: number } {
@@ -276,17 +280,22 @@ export function AssetDslSearch({
   error: string;
   count?: number;
 }) {
+  const { ui, liveUI } = useUITranslation();
+
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [suggestions, setSuggestions] = React.useState<DslSuggestion[]>([]);
   const [selIdx, setSelIdx] = React.useState(0);
   const [open, setOpen] = React.useState(false);
 
-  const refresh = React.useCallback((val: string, pos: number) => {
-    const suggs = getDslSuggestions(val, pos);
-    setSuggestions(suggs);
-    setSelIdx(0);
-    setOpen(suggs.length > 0);
-  }, []);
+  const refresh = React.useCallback(
+    (val: string, pos: number) => {
+      const suggs = getDslSuggestions(val, pos, liveUI);
+      setSuggestions(suggs);
+      setSelIdx(0);
+      setOpen(suggs.length > 0);
+    },
+    [liveUI],
+  );
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -341,7 +350,7 @@ export function AssetDslSearch({
         <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           ref={inputRef}
-          placeholder="DSL 搜索：domain=example AND status_code>=400"
+          placeholder={ui("screen.987bc11337be5a")}
           value={query}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
@@ -375,7 +384,13 @@ export function AssetDslSearch({
       </div>
       {query.trim() && !open && (
         <p className="pl-1 text-[11px] text-muted-foreground">
-          {loading ? "搜索中…" : error ? <span className="text-destructive">{error}</span> : `找到 ${count ?? 0} 条`}
+          {loading ? (
+            ui("screen.cc50237edca27e")
+          ) : error ? (
+            <span className="text-destructive">{error}</span>
+          ) : (
+            ui("screen.1c84e7ce3e9eb5", { v0: count ?? 0 })
+          )}
         </p>
       )}
     </div>

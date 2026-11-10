@@ -2,9 +2,11 @@
 
 import * as React from "react";
 
+import type { TFunction } from "i18next";
 import { Globe2Icon, Loader2Icon, RefreshCwIcon, XIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
 import type { EgressCheck, EgressReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -36,7 +38,7 @@ export function EgressIpProvider({ children }: { children: React.ReactNode }) {
       return nextReport;
     } catch (cause) {
       setReport(null);
-      const message = cause instanceof Error ? cause.message : "未知错误";
+      const message = cause instanceof Error ? cause.message : "settings.unknownError";
       setError(message);
       throw cause;
     } finally {
@@ -64,7 +66,10 @@ export function EgressIpProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     if (!enabled) return;
     const timer = window.setInterval(() => {
-      void api.settings().then((settings) => probeForProxy(settings.global_proxy ?? "")).catch(() => undefined);
+      void api
+        .settings()
+        .then((settings) => probeForProxy(settings.global_proxy ?? ""))
+        .catch(() => undefined);
     }, 10000);
     return () => window.clearInterval(timer);
   }, [enabled, probeForProxy]);
@@ -108,24 +113,26 @@ export function useEgressIp() {
   return context;
 }
 
-function checkMessage(check: EgressCheck | undefined) {
-  if (!check) return "未返回结果";
-  if (check.skipped) return "未配置";
-  if (check.result.ok) return check.result.exit_ip || "已连通";
-  return "探测失败";
+function checkMessage(check: EgressCheck | undefined, t: TFunction) {
+  if (!check) return t("settings.noProbeResult");
+  if (check.skipped) return t("settings.notConfigured");
+  if (check.result.ok) return check.result.exit_ip || t("settings.connected");
+  return t("settings.probeFailed");
 }
 
 function IpValue({ label, check }: { label: string; check: EgressCheck | undefined }) {
+  const { t } = useLiveTranslation();
   const failed = !!check && !check.skipped && !check.result.ok;
   return (
-    <span className="min-w-0 truncate" title={`${label}：${checkMessage(check)}`}>
+    <span className="min-w-0 truncate" title={`${label}:${checkMessage(check, t)}`}>
       <span className="text-muted-foreground">{label}</span> {"· "}
-      <span className={cn("font-mono", failed && "text-destructive")}>{checkMessage(check)}</span>
+      <span className={cn("font-mono", failed && "text-destructive")}>{checkMessage(check, t)}</span>
     </span>
   );
 }
 
 export function EgressIpNavbar() {
+  const { t } = useLiveTranslation();
   const { enabled, report, error, isLoading, probeEgress, dismiss } = useEgressIp();
   if (!enabled) return null;
 
@@ -136,19 +143,20 @@ export function EgressIpNavbar() {
       <Globe2Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       {isLoading ? (
         <span className="flex items-center gap-1 text-muted-foreground">
-          <Loader2Icon className="size-3 animate-spin" aria-hidden="true" /> 正在探测出口 IP…
+          <Loader2Icon className="size-3 animate-spin" aria-hidden="true" /> {t("settings.probingIp")}
         </span>
       ) : error ? (
-        <span className="truncate text-destructive" title={error}>
-          探测失败：{error}
+        <span className="truncate text-destructive" title={t(error, { defaultValue: error })}>
+          {t("settings.probeFailedPrefix")}
+          {t(error, { defaultValue: error })}
         </span>
       ) : report ? (
         <div className="flex min-w-0 items-center gap-3">
-          <IpValue label="直连 IP" check={direct} />
-          <IpValue label="全局代理 IP" check={global} />
+          <IpValue label={t("settings.directIp")} check={direct} />
+          <IpValue label={t("settings.globalProxyIp")} check={global} />
         </div>
       ) : (
-        <span className="text-muted-foreground">出口 IP 暂无结果</span>
+        <span className="text-muted-foreground">{t("settings.noEgressResults")}</span>
       )}
       <Button
         type="button"
@@ -156,11 +164,17 @@ export function EgressIpNavbar() {
         size="icon-sm"
         onClick={() => void probeEgress()}
         disabled={isLoading}
-        aria-label="刷新出口 IP"
+        aria-label={t("settings.refreshEgress")}
       >
         <RefreshCwIcon className={cn("size-3.5", isLoading && "animate-spin")} aria-hidden="true" />
       </Button>
-      <Button type="button" variant="ghost" size="icon-sm" onClick={() => void dismiss()} aria-label="关闭出口 IP显示">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        onClick={() => void dismiss()}
+        aria-label={t("settings.hideEgress")}
+      >
         <XIcon className="size-3.5" aria-hidden="true" />
       </Button>
     </div>

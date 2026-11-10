@@ -29,3 +29,23 @@ test("tokens roundtrip labels and removing one reference preserves its neighbors
   const next = value.slice(0, selected[0].start) + value.slice(selected[0].start + selected[0].token.length);
   assert.equal(selectedMentions(next)[0].token, second);
 });
+
+test("all mention kinds use stable tokens and recognize their legacy Chinese form", () => {
+ const kinds = ["finding", "asset", "company", "endpoint", "ip", "app", "root_domain", "subdomain", "service"];
+ const legacy = ["漏洞", "资产", "企业", "接口", "IP", "应用", "域名", "子域名", "服务"];
+ for (const [i, kind] of kinds.entries()) {
+   const token = mentionToken({kind, id:i + 1, label:"Keep 用户名称"});
+   assert.ok(token.startsWith("@[" + kind + "#"));
+   const english = key => "Translated " + key;
+   assert.equal(selectedMentions(token, english)[0].label, "Translated mention." + kind + " #" + (i+1) + " · Keep 用户名称");
+   assert.equal(selectedMentions("@[" + legacy[i] + "#" + (i+1) + "]", english)[0].label, "Translated mention." + kind + " #" + (i+1));
+ }
+});
+test("English display names and old aliases select the same categories", () => {
+ for(const [query,kind] of [["Endpoint GET /api","endpoint"],["api GET /api","endpoint"],["Application Example","app"],["Root domain example.com","root_domain"],["root_domain example.com","root_domain"]]) {
+   const result=mentionSearch(query); assert.equal(result.kind,kind); assert.notEqual(result.query,query);
+ }
+ assert.equal(mentionSearch("application").kind,"app");
+ assert.equal(mentionSearch("root d").categories[0].kind,"root_domain");
+ assert.equal(selectedMentions("@[unknown#2]").length,0);
+});

@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import Link from "next/link";
@@ -16,6 +15,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
+import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type {
   Finding,
@@ -33,12 +33,19 @@ export function FindingSeverityCounts({
 }: {
   counts: Pick<FindingCase, "critical" | "high" | "medium" | "low">;
 }) {
+  const { ui } = useUITranslation();
+
   return (
     <span
       className="inline-flex items-center gap-0.5 text-sm tabular-nums"
-      title="原始上报记录：严重 / 高 / 中 / 低"
+      title={ui("screen.e8c5ef9382d350")}
       role="img"
-      aria-label={`严重${counts.critical}，高危${counts.high}，中危${counts.medium}，低危${counts.low}`}
+      aria-label={ui("screen.0d8c0ed391578c", {
+        v0: counts.critical,
+        v1: counts.high,
+        v2: counts.medium,
+        v3: counts.low,
+      })}
     >
       <span className={counts.critical ? "text-severity-critical" : "text-muted-foreground"}>{counts.critical}</span>
       <span>/</span>
@@ -66,6 +73,8 @@ export function FindingCaseMemberRow({
   matched?: boolean;
   nested?: boolean;
 }) {
+  const { ui } = useUITranslation();
+
   const id = f.finding_id ?? f.id;
   return (
     <div
@@ -78,7 +87,11 @@ export function FindingCaseMemberRow({
       )}
     >
       {onSelect && !f.inherited ? (
-        <Checkbox checked={selected} onCheckedChange={(v) => onSelect(id, v === true)} aria-label={`选择上报 #${id}`} />
+        <Checkbox
+          checked={selected}
+          onCheckedChange={(v) => onSelect(id, v === true)}
+          aria-label={ui("screen.75118f3a43a586", { v0: id })}
+        />
       ) : null}
       <StatusBadge domain="severity" value={f.severity} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -86,16 +99,16 @@ export function FindingCaseMemberRow({
           className="truncate font-medium hover:underline"
           href={`/function/findings/detail?id=${id}${contextTask ? `&context_task=${contextTask}` : ""}`}
         >
-          #{id} {[f.name, f.vulnclass].find((v) => v?.trim()) ?? "未分类"}
+          #{id} {[f.name, f.vulnclass].find((v) => v?.trim()) ?? ui("screen.54b89f90127458")}
         </Link>
         <span className="truncate text-muted-foreground text-xs">{f.summary}</span>
       </div>
-      {!matched ? <Badge variant="outline">未命中当前筛选</Badge> : null}
-      {f.inherited ? <Badge variant="outline">继承 · 只读</Badge> : null}
+      {!matched ? <Badge variant="outline">{ui("screen.7852ff0b787df8")}</Badge> : null}
+      {f.inherited ? <Badge variant="outline">{ui("screen.44630dd91821d1")}</Badge> : null}
       <StatusBadge domain="finding" value={f.status} />
       <Button asChild variant="ghost" size="sm">
         <Link href={`/function/findings/detail?id=${id}${contextTask ? `&context_task=${contextTask}` : ""}`}>
-          查看报告
+          {ui("screen.a08bfa0c50e289")}
         </Link>
       </Button>
     </div>
@@ -121,6 +134,8 @@ export function FindingCaseMembers({
   nested?: boolean;
   renderRecords?: (items: Finding[]) => React.ReactNode;
 }) {
+  const { ui } = useUITranslation();
+
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(20);
   const [data, setData] = React.useState<{ items: Finding[]; total: number } | null>(null);
@@ -146,9 +161,10 @@ export function FindingCaseMembers({
     return (
       <Alert>
         <AlertDescription>
-          成员加载失败：{error}
+          {ui("screen.695b940ab1af3e")}
+          {error}
           <Button variant="link" onClick={() => setRetry((v) => v + 1)}>
-            重试
+            {ui("screen.b8784c8dd5636f")}
           </Button>
         </AlertDescription>
       </Alert>
@@ -198,6 +214,8 @@ function FindingMergeSuggestionCard({
   suggestion: FindingCaseSuggestion;
   onResolve: (s: FindingCaseSuggestion, accept: boolean, excludeIds?: string[]) => Promise<void>;
 }) {
+  const { ui } = useUITranslation();
+
   const [expanded, setExpanded] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const ids = React.useMemo(
@@ -227,8 +245,14 @@ function FindingMergeSuggestionCard({
     <Card size="sm" className="min-w-0">
       <CardHeader>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">疑似重复分组 · {ids.length} 条 · 待确认</Badge>
-          <CardDescription>任务 #{s.task_id}</CardDescription>
+          <Badge variant="outline">
+            {ui("screen.046b2f635c11ed")}
+            {ids.length} {ui("screen.96a8de35964937")}
+          </Badge>
+          <CardDescription>
+            {ui("screen.e5b1cc0dc459e5")}
+            {s.task_id}
+          </CardDescription>
         </div>
         <CardTitle className="break-words">{s.title}</CardTitle>
         <CardDescription className="flex flex-col gap-1">
@@ -244,10 +268,11 @@ function FindingMergeSuggestionCard({
                       : [...current.filter((item) => item !== id), id],
                   )
                 }
-                aria-label={`归并时包含上报 #${id}`}
+                aria-label={ui("screen.2ea99060e9cc28", { v0: id })}
               />
               <Link className="underline underline-offset-4" href={`/function/findings/detail/?id=${id}`}>
-                查看原报告 #{id}
+                {ui("screen.9b8fd53005c92b")}
+                {id}
               </Link>
             </span>
           ))}
@@ -263,7 +288,7 @@ function FindingMergeSuggestionCard({
           </CollapsibleContent>
           <CollapsibleTrigger asChild>
             <Button variant="link" size="sm">
-              {expanded ? "收起判断依据" : "展开判断依据"}
+              {expanded ? ui("screen.d4585da0edd72c") : ui("screen.71717465a2f0fc")}
             </Button>
           </CollapsibleTrigger>
         </Collapsible>
@@ -271,10 +296,12 @@ function FindingMergeSuggestionCard({
       <CardFooter className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" disabled={busy || included.length < 2} onClick={() => resolve(true)}>
           {busy ? <Spinner /> : null}
-          {included.length === ids.length ? "整组确认归并" : `确认归并所选（${included.length} 条）`}
+          {included.length === ids.length
+            ? ui("screen.09484600542d8e")
+            : ui("screen.eb666ee37bde81", { v0: included.length })}
         </Button>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => resolve(false)}>
-          整组不是同一漏洞
+          {ui("screen.04dd946ef358b7")}
         </Button>
       </CardFooter>
     </Card>
@@ -282,17 +309,28 @@ function FindingMergeSuggestionCard({
 }
 
 function FindingReviewRunRow({ run: r }: { run: FindingCaseReviewRun }) {
+  const { ui } = useUITranslation();
+
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
       {r.state === "running" ? <Spinner /> : null}
       <span>
-        任务 #{r.task_id} · 整理 #{r.conversation_id}
+        {ui("screen.e5b1cc0dc459e5")}
+        {r.task_id} {ui("screen.070ef218298bbb")}
+        {r.conversation_id}
       </span>
       <Badge variant={r.state === "failed" ? "destructive" : "secondary"}>
-        {{ queued: "排队中", running: "运行中", done: "已完成", failed: "失败" }[r.state]}
+        {
+          {
+            queued: ui("screen.d6f766f2adf532"),
+            running: ui("screen.1f0eb99b7ed094"),
+            done: ui("screen.f28461bb49c856"),
+            failed: ui("screen.28384d7afd2e4f"),
+          }[r.state]
+        }
       </Badge>
       <Link className="underline underline-offset-4" href={`/chat?c=${r.conversation_id}`}>
-        查看执行记录
+        {ui("screen.7715a51ffbac9e")}
       </Link>
       {r.error ? <p className="w-full break-words text-destructive">{r.error}</p> : null}
     </div>
@@ -300,6 +338,8 @@ function FindingReviewRunRow({ run: r }: { run: FindingCaseReviewRun }) {
 }
 
 export function FindingCaseReviewPanel({ taskId, onChange }: { taskId?: string; onChange?: () => void }) {
+  const { ui } = useUITranslation();
+
   const [suggestions, setSuggestions] = React.useState<FindingCaseSuggestion[]>([]);
   const [runs, setRuns] = React.useState<FindingCaseReviewRun[]>([]);
   const [error, setError] = React.useState("");
@@ -354,9 +394,9 @@ export function FindingCaseReviewPanel({ taskId, onChange }: { taskId?: string; 
         if (seq === requestSeq.current) {
           setSuggestions((v) => v.filter((x) => x.id !== s.id));
           if (accept && result.case_id !== "0") {
-            toast.success("已归并，请进入文件夹生成统一报告");
+            toast.success(ui("screen.f8341bc19ac543"));
           } else {
-            toast.success("已否决，不会自动再次归并");
+            toast.success(ui("screen.a3c1bdd20d1cf1"));
           }
           onChange?.();
         }
@@ -372,11 +412,18 @@ export function FindingCaseReviewPanel({ taskId, onChange }: { taskId?: string; 
     <div className="flex flex-col gap-2">
       {error ? (
         <Alert>
-          <AlertDescription>整理状态加载失败：{error}</AlertDescription>
+          <AlertDescription>
+            {ui("screen.ec1cb4f366c39a")}
+            {error}
+          </AlertDescription>
         </Alert>
       ) : null}
       {suggestions.length > 0 ? (
-        <p className="text-muted-foreground text-sm">待确认归并建议（{suggestions.length}）· 确认前原始记录分别保留</p>
+        <p className="text-muted-foreground text-sm">
+          {ui("screen.2ab1badc66393b")}
+          {suggestions.length}
+          {ui("screen.abf1d4dab0b7ab")}
+        </p>
       ) : null}
       {suggestions.map((s) => (
         <FindingMergeSuggestionCard key={s.id} suggestion={s} onResolve={resolve} />
@@ -409,6 +456,8 @@ export function FindingCaseList({
   readOnly?: boolean;
   onTotal?: (total: number) => void;
 }) {
+  const { ui } = useUITranslation();
+
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(20);
   const [data, setData] = React.useState<FindingCasePage | null>(null);
@@ -456,9 +505,10 @@ export function FindingCaseList({
       {error ? (
         <Alert>
           <AlertDescription>
-            加载失败：{error}
+            {ui("screen.01de8216e0d025")}
+            {error}
             <Button variant="link" onClick={() => setRefresh((v) => v + 1)}>
-              重试
+              {ui("screen.b8784c8dd5636f")}
             </Button>
           </AlertDescription>
         </Alert>
@@ -470,7 +520,8 @@ export function FindingCaseList({
       ) : null}
       {data ? (
         <p className="text-muted-foreground text-xs">
-          {data.stats.total} 个独立漏洞 · {data.stats.reports} 条上报
+          {data.stats.total} {ui("screen.95d4c67ec52ff4")}
+          {data.stats.reports} {ui("screen.5f6536d648dc23")}
         </p>
       ) : null}
       {data?.items.map((row) => {
@@ -501,7 +552,9 @@ export function FindingCaseList({
           );
         return null;
       })}
-      {data?.total === 0 ? <p className="p-6 text-center text-muted-foreground text-sm">暂无匹配漏洞</p> : null}
+      {data?.total === 0 ? (
+        <p className="p-6 text-center text-muted-foreground text-sm">{ui("screen.8185ab666cd031")}</p>
+      ) : null}
       {data ? (
         <TablePagination
           page={page}
@@ -540,6 +593,8 @@ export function FindingCaseFolder({
   className?: string;
   renderRecords?: (items: Finding[]) => React.ReactNode;
 }) {
+  const { ui } = useUITranslation();
+
   const [open, setOpen] = React.useState(false);
   const group = row.case;
   const taskLabel = row.task_name?.trim() ? row.task_name : row.task_description;
@@ -551,7 +606,7 @@ export function FindingCaseFolder({
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label={`${open ? "收起" : "展开"}${group.title}`}
+            aria-label={`${open ? ui("screen.afd4b783536b82") : ui("screen.00bd3960fea8ea")}${group.title}`}
             aria-expanded={open}
             aria-controls={`finding-case-members-${group.id}`}
             onClick={() => setOpen((v) => !v)}
@@ -573,8 +628,9 @@ export function FindingCaseFolder({
               </Link>
             </CardTitle>
             <CardDescription>
-              漏洞文件夹 · {group.count} 条原始上报 ·{" "}
-              {group.report_version !== group.version ? "统一报告待更新" : "统一报告已生成"}
+              {ui("screen.460116a18bbda7")}
+              {group.count} {ui("screen.a9147d5e8b4196")}{" "}
+              {group.report_version !== group.version ? ui("screen.99c01379e8e143") : ui("screen.632e3cdf7f317c")}
             </CardDescription>
             {presentation !== "compact" ? (
               <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs">
@@ -584,13 +640,14 @@ export function FindingCaseFolder({
                     href={`/function/tasks/detail?id=${group.task_id}`}
                     title={row.task_description}
                   >
-                    所属任务 #{group.task_id}
+                    {ui("screen.4ad24bbfb4ae24")}
+                    {group.task_id}
                     {taskLabel ? ` · ${taskLabel}` : ""}
                   </Link>
                 ) : null}
                 {(row.assets ?? []).length ? (
                   <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
-                    资产：
+                    {ui("screen.abd5f70799f7f4")}
                     {row.assets?.map((a) => (
                       <code
                         key={a.id}
@@ -603,12 +660,12 @@ export function FindingCaseFolder({
                     {(row.asset_count ?? 0) > 4 ? <span>+{(row.asset_count ?? 0) - 4}</span> : null}
                   </span>
                 ) : (
-                  <span>未关联资产</span>
+                  <span>{ui("screen.1c0ecd9c779c59")}</span>
                 )}
                 {row.last_found_at ? (
                   <time dateTime={row.last_found_at}>
-                    最近上报{" "}
-                    {new Date(row.last_found_at).toLocaleString("zh-CN", {
+                    {ui("screen.b42cf3366e92f2")}{" "}
+                    {new Date(row.last_found_at).toLocaleString(ui("screen.91610255157661"), {
                       month: "2-digit",
                       day: "2-digit",
                       hour: "2-digit",
@@ -620,7 +677,7 @@ export function FindingCaseFolder({
             ) : null}
           </div>
           <div className="flex shrink-0 flex-col gap-1">
-            <span className="text-muted-foreground text-xs">严 / 高 / 中 / 低</span>
+            <span className="text-muted-foreground text-xs">{ui("screen.b0c29e51bd5d30")}</span>
             <FindingSeverityCounts counts={group} />
           </div>
         </div>
@@ -629,7 +686,7 @@ export function FindingCaseFolder({
         <CardContent
           id={`finding-case-members-${group.id}`}
           role="region"
-          aria-label={`${group.title}的原始子报告`}
+          aria-label={ui("screen.b206af0eb021a4", { v0: group.title })}
           className="border-t bg-muted/20 px-4 py-4 sm:px-6"
         >
           <FindingCaseMembers

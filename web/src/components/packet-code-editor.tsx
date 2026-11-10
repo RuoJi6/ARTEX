@@ -1,11 +1,13 @@
 "use client";
-
 import * as React from "react";
-import { EditorState } from "@codemirror/state";
-import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
+
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { defaultHighlightStyle, HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
+import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+
+import { useUITranslation } from "@/i18n/use-ui-translation";
 
 const packetHighlight = HighlightStyle.define([
   { tag: tags.keyword, color: "#d95656", fontWeight: "700" },
@@ -62,7 +64,7 @@ export function PacketCodeEditor({
   onChange,
   readOnly = false,
   wrapLines = true,
-  ariaLabel = "HTTP 报文代码",
+  ariaLabel,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -70,6 +72,10 @@ export function PacketCodeEditor({
   wrapLines?: boolean;
   ariaLabel?: string;
 }) {
+  const { ui } = useUITranslation();
+
+  ariaLabel ??= ui("screen.2aa7aa85337fc7");
+
   const host = React.useRef<HTMLDivElement>(null);
   const viewRef = React.useRef<EditorView | null>(null);
   const valueRef = React.useRef(value);

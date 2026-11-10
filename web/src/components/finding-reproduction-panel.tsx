@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { useRouter } from "next/navigation";
@@ -14,6 +13,7 @@ import { seedFromEvidence } from "@/components/repeater/repeater-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { Finding, FindingTrafficBinding, FindingTrafficDetail } from "@/lib/types";
 
@@ -36,21 +36,21 @@ function withoutPacket(text: string) {
   return text.replace(/```(?:http|bash|shell|sh|json|text)?\s*\n[\s\S]*?```/gi, "").trim();
 }
 
-function parseSteps(report: string, fallback: string): ReproductionStep[] {
+function parseSteps(report: string, fallback: string, ui: UITranslate): ReproductionStep[] {
   const section = extractSection(report);
   if (!section) {
     return [
       {
         number: 1,
-        title: "执行验证并确认结果",
-        body: fallback.trim() || "暂无结构化复现步骤，查看下方原始报告。",
+        title: ui("screen.e481346b5979a5"),
+        body: fallback.trim() || ui("screen.30041138cebbff"),
       },
     ];
   }
 
   const markers = [...section.matchAll(/^\s*(?:###\s*)?(?:步骤\s*)?(\d+)[.、:：)）]\s*(.+)$/gim)];
   if (markers.length === 0) {
-    return [{ number: 1, title: "复现过程", body: withoutPacket(section) }];
+    return [{ number: 1, title: ui("screen.95454d7e6d0dea"), body: withoutPacket(section) }];
   }
 
   return markers.map((marker, index) => {
@@ -82,14 +82,14 @@ function packetText(detail: FindingTrafficDetail, side: "request" | "response") 
   return [head, body].filter(Boolean).join("\n\n").trim();
 }
 
-function formatCapturedAt(value: number | string | null | undefined) {
+function formatCapturedAt(value: number | string | null | undefined, ui: UITranslate) {
   if (value === null || value === undefined || value === "") return "";
   const numeric = typeof value === "number" ? value : Number(value);
   const date = Number.isFinite(numeric)
     ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
     : new Date(String(value));
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(ui("screen.91610255157661"), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -109,6 +109,8 @@ function PacketDisclosure({
   bindingId?: string;
   contextTask?: string;
 }) {
+  const { ui } = useUITranslation();
+
   const [open, setOpen] = React.useState(false);
   const [detail, setDetail] = React.useState<FindingTrafficDetail | null>(null);
   const [error, setError] = React.useState("");
@@ -133,15 +135,15 @@ function PacketDisclosure({
   }, [bindingId, contextTask, detail, findingId, open]);
 
   if (!bindingId) {
-    return <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">此步骤暂无已绑定的真实流量证据。</p>;
+    return <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">{ui("screen.8aa9c9a7dc4c02")}</p>;
   }
 
   async function sendToRepeater() {
     if (!detail) return;
     setRepeaterBusy(true);
     try {
-      if (detail.request.binary) toast.info("请求体为二进制，已留空；完整正文请先下载");
-      else if (detail.request.truncated) toast.info("请求体为预览片段，完整正文请先下载");
+      if (detail.request.binary) toast.info(ui("screen.eb861990fec8a3"));
+      else if (detail.request.truncated) toast.info(ui("screen.428e2bfcf2ec39"));
       seedFromEvidence(
         requestFromEvidence(
           {
@@ -156,7 +158,7 @@ function PacketDisclosure({
       );
       router.push("/function/repeater");
     } catch (e) {
-      toast.error(`送入请求重发失败：${(e as Error).message}`);
+      toast.error(ui("screen.3d521b08d3127e", { v0: (e as Error).message }));
     } finally {
       setRepeaterBusy(false);
     }
@@ -174,7 +176,7 @@ function PacketDisclosure({
           onClick={() => setOpen((current) => !current)}
         >
           {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
-          {open ? "收起数据包" : "查看数据包"}
+          {open ? ui("screen.fe18eeee986d6a") : ui("screen.99a9b4decc0e7c")}
         </Button>
         {open && detail ? (
           <Button
@@ -185,16 +187,21 @@ function PacketDisclosure({
             disabled={repeaterBusy}
             onClick={() => void sendToRepeater()}
           >
-            {repeaterBusy ? "准备中…" : "送入请求重发"}
+            {repeaterBusy ? ui("screen.871be265486972") : ui("screen.f69052b85f5594")}
           </Button>
         ) : null}
       </div>
       {open ? (
         <div className="mt-3 rounded-lg border bg-muted/20 p-3">
-          {error ? <p className="text-destructive text-xs">数据包加载失败：{error}</p> : null}
+          {error ? (
+            <p className="text-destructive text-xs">
+              {ui("screen.c1a4738ffaf24c")}
+              {error}
+            </p>
+          ) : null}
           {!error && bindingId && !detail ? (
             <div className="flex items-center gap-2 text-muted-foreground text-xs">
-              <LoaderCircleIcon className="size-3.5 animate-spin" /> 正在读取已保存的真实流量…
+              <LoaderCircleIcon className="size-3.5 animate-spin" /> {ui("screen.a993c010d63607")}
             </div>
           ) : null}
           {detail ? (
@@ -204,15 +211,15 @@ function PacketDisclosure({
                 <Badge variant="outline">{detail.binding.snapshot.status}</Badge>
                 <span className="min-w-0 flex-1 break-all text-muted-foreground">{detail.binding.snapshot.url}</span>
                 <span className="shrink-0 whitespace-nowrap text-muted-foreground">
-                  {formatCapturedAt(detail.binding.snapshot.captured_at) || "时间未知"}
+                  {formatCapturedAt(detail.binding.snapshot.captured_at, ui) || ui("screen.664939a1fa2ef7")}
                 </span>
               </div>
               <div>
-                <p className="mb-1 text-[11px] text-muted-foreground">请求 Request</p>
+                <p className="mb-1 text-[11px] text-muted-foreground">{ui("screen.719dd828ca88c8")}</p>
                 <HttpCodeBlock raw={packetText(detail, "request")} />
               </div>
               <div>
-                <p className="mb-1 text-[11px] text-muted-foreground">响应 Response</p>
+                <p className="mb-1 text-[11px] text-muted-foreground">{ui("screen.946902266aa212")}</p>
                 <HttpCodeBlock raw={packetText(detail, "response")} />
               </div>
             </div>
@@ -224,9 +231,11 @@ function PacketDisclosure({
 }
 
 export function FindingReproductionPanel({ finding, contextTask }: { finding: Finding; contextTask?: string }) {
+  const { ui } = useUITranslation();
+
   const steps = React.useMemo(
-    () => parseSteps(finding.report ?? "", finding.evidence || finding.summary),
-    [finding.evidence, finding.report, finding.summary],
+    () => parseSteps(finding.report ?? "", finding.evidence || finding.summary, ui),
+    [finding.evidence, finding.report, finding.summary, ui],
   );
   const [traffic, setTraffic] = React.useState<FindingTrafficBinding[] | undefined>(undefined);
   const overviewSections = ["概述", "影响与危害", "受影响范围"]
@@ -256,11 +265,12 @@ export function FindingReproductionPanel({ finding, contextTask }: { finding: Fi
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <CardTitle>复现步骤</CardTitle>
-            <CardDescription>步骤同时展示，数据包默认隐藏；需要核对原始请求时再按步骤展开。</CardDescription>
+            <CardTitle>{ui("screen.ce3597f37f1263")}</CardTitle>
+            <CardDescription>{ui("screen.cc01d0c4b560bb")}</CardDescription>
           </div>
           <Badge variant={steps.length > 0 ? "secondary" : "outline"}>
-            {steps.length} 个步骤 · {traffic?.length ?? finding.traffic_count ?? 0} 个数据包
+            {steps.length} {ui("screen.d446e6c5c34aad")}
+            {traffic?.length ?? finding.traffic_count ?? 0} {ui("screen.b1829a69fb6eb7")}
           </Badge>
         </div>
       </CardHeader>
@@ -278,7 +288,8 @@ export function FindingReproductionPanel({ finding, contextTask }: { finding: Fi
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <Badge variant="outline" className="shrink-0 font-medium">
-                      步骤 {step.number}
+                      {ui("screen.4ec7d4554df93e")}
+                      {step.number}
                     </Badge>
                     <h3 className="min-w-0 break-words font-semibold text-sm leading-5">{step.title}</h3>
                   </div>

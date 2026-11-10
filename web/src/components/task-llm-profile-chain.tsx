@@ -18,6 +18,7 @@ import {
   ComboboxValue,
 } from "@/components/ui/combobox";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useLiveTranslation } from "@/i18n/use-live-translation";
 import type { LLMProfile } from "@/lib/types";
 
 interface TaskLLMProfileChainProps {
@@ -32,15 +33,16 @@ interface TaskLLMProfileChainProps {
 }
 
 function ProfileRoleBadge({ index, currentIndex }: { index: number; currentIndex: number }) {
-  if (index === currentIndex) return <Badge variant="default">当前</Badge>;
+  const { t: translate } = useLiveTranslation();
+  if (index === currentIndex) return <Badge variant="default">{translate("taskUI.profileCurrent")}</Badge>;
   if (index < currentIndex) {
     return (
-      <Badge variant="outline" title="当前游标之前的配置不会被自动故障转移选中">
-        已跳过
+      <Badge variant="outline" title={translate("taskUI.profileSkippedHelp")}>
+        {translate("taskUI.profileSkipped")}
       </Badge>
     );
   }
-  return <Badge variant="secondary">备用 {index - currentIndex}</Badge>;
+  return <Badge variant="secondary">{translate("taskUI.profileBackup", { index: index - currentIndex })}</Badge>;
 }
 
 export function TaskLLMProfileChain({
@@ -53,8 +55,12 @@ export function TaskLLMProfileChain({
   inputId,
   portalContainer,
 }: TaskLLMProfileChainProps) {
+  const { t: translate } = useLiveTranslation();
   const chatProfiles = React.useMemo(() => profiles.filter((profile) => profile.format !== "jev"), [profiles]);
-  const profilesByID = React.useMemo(() => new Map(chatProfiles.map((profile) => [profile.id, profile])), [chatProfiles]);
+  const profilesByID = React.useMemo(
+    () => new Map(chatProfiles.map((profile) => [profile.id, profile])),
+    [chatProfiles],
+  );
   const itemIDs = React.useMemo(() => chatProfiles.map((profile) => profile.id), [chatProfiles]);
   const profilesUnavailable = chatProfiles.length === 0;
   const currentProfileID = activeProfileId && value.includes(activeProfileId) ? activeProfileId : value[0];
@@ -65,9 +71,9 @@ export function TaskLLMProfileChain({
   const profileLabel = React.useCallback(
     (id: string) => {
       const profile = profilesByID.get(id);
-      return profile ? `${profile.name} ${profile.model}` : `配置 #${id}`;
+      return profile ? `${profile.name} ${profile.model}` : translate("taskUI.profileId", { id });
     },
-    [profilesByID],
+    [profilesByID, translate],
   );
 
   const move = (index: number, offset: -1 | 1) => {
@@ -109,12 +115,12 @@ export function TaskLLMProfileChain({
           </ComboboxValue>
           <ComboboxChipsInput
             id={inputId}
-            placeholder={profiles.length > 0 ? "搜索并添加 LLM 配置" : "暂无可用 LLM 配置"}
+            placeholder={profiles.length > 0 ? translate("taskUI.profileSearch") : translate("taskUI.profileNone")}
             disabled={disabled ? true : profilesUnavailable}
           />
         </ComboboxChips>
         <ComboboxContent portalContainer={portalContainer}>
-          <ComboboxEmpty>没有匹配的 LLM 配置</ComboboxEmpty>
+          <ComboboxEmpty>{translate("taskUI.profileNoMatches")}</ComboboxEmpty>
           <ComboboxList>
             {(id) => {
               const profile = profilesByID.get(id);
@@ -123,8 +129,8 @@ export function TaskLLMProfileChain({
                   <div className="flex min-w-0 flex-1 flex-col">
                     <span className="flex min-w-0 items-center gap-2">
                       <span className="truncate">
-                        {profile?.name ?? `配置 #${id}`}
-                        {profile?.is_default ? "（激活）" : ""}
+                        {profile?.name ?? translate("taskUI.profileId", { id })}
+                        {profile?.is_default ? translate("taskUI.profileActive") : ""}
                       </span>
                     </span>
                     {profile && <span className="truncate text-muted-foreground text-xs">{profile.model}</span>}
@@ -137,7 +143,7 @@ export function TaskLLMProfileChain({
       </Combobox>
 
       {value.length === 0 ? (
-        <p className="text-muted-foreground text-xs">未指定配置时，任务跟随 Agent 或全局激活配置。</p>
+        <p className="text-muted-foreground text-xs">{translate("taskUI.profileDefaultHelp")}</p>
       ) : (
         <div className="flex flex-col divide-y rounded-lg border">
           {value.map((id, index) => {
@@ -149,9 +155,13 @@ export function TaskLLMProfileChain({
               >
                 <span className="w-5 shrink-0 text-center text-muted-foreground text-xs tabular-nums">{index + 1}</span>
                 <div className="min-w-0 sm:flex-1">
-                  <p className="truncate font-medium text-sm">{profile?.name ?? `配置 #${id}`}</p>
+                  <p className="truncate font-medium text-sm">
+                    {profile?.name ?? translate("taskUI.profileId", { id })}
+                  </p>
                   <div className="flex min-w-0 items-center gap-2">
-                    <p className="truncate text-muted-foreground text-xs">{profile?.model ?? "配置已不可用"}</p>
+                    <p className="truncate text-muted-foreground text-xs">
+                      {profile?.model ?? translate("taskUI.profileUnavailable")}
+                    </p>
                   </div>
                 </div>
                 <ProfileRoleBadge index={index} currentIndex={currentIndex} />
@@ -160,7 +170,7 @@ export function TaskLLMProfileChain({
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    aria-label="上移配置"
+                    aria-label={translate("taskUI.profileUp")}
                     onClick={() => move(index, -1)}
                     disabled={disabled ? true : index === 0}
                   >
@@ -170,7 +180,7 @@ export function TaskLLMProfileChain({
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    aria-label="下移配置"
+                    aria-label={translate("taskUI.profileDown")}
                     onClick={() => move(index, 1)}
                     disabled={disabled ? true : index === value.length - 1}
                   >
@@ -180,7 +190,7 @@ export function TaskLLMProfileChain({
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    aria-label="移除配置"
+                    aria-label={translate("taskUI.profileRemove")}
                     onClick={() => remove(id)}
                     disabled={disabled}
                   >
@@ -195,7 +205,7 @@ export function TaskLLMProfileChain({
 
       {onActiveProfileChange && value.length > 0 && (
         <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-          <span className="font-medium text-sm">当前配置</span>
+          <span className="font-medium text-sm">{translate("taskUI.currentProfile")}</span>
           <Select
             value={activeProfileId && value.includes(activeProfileId) ? activeProfileId : value[0]}
             onValueChange={onActiveProfileChange}
@@ -210,7 +220,7 @@ export function TaskLLMProfileChain({
                   const profile = profilesByID.get(id);
                   return (
                     <SelectItem key={id} value={id} disabled={!profile}>
-                      {profile?.name ?? `配置 #${id}`}
+                      {profile?.name ?? translate("taskUI.profileId", { id })}
                     </SelectItem>
                   );
                 })}

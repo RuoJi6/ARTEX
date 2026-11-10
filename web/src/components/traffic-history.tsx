@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { useRouter } from "next/navigation";
@@ -45,13 +44,14 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { SortableHead } from "@/components/ui/sortable-head";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import type { TrafficDetail, TrafficExchange, TrafficHost, TrafficResp } from "@/lib/types";
 import { cn, copyText } from "@/lib/utils";
 
-function fmtTime(ts: string) {
-  return new Date(ts).toLocaleString("zh-CN", {
+function fmtTime(ts: string, ui: UITranslate) {
+  return new Date(ts).toLocaleString(ui("screen.91610255157661"), {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -83,19 +83,21 @@ function MethodBadge({ method }: { method: string }) {
 }
 
 function TrafficID({ id }: { id: string }) {
+  const { ui } = useUITranslation();
+
   return (
     <Button
       variant="ghost"
       size="sm"
       className="h-7 gap-1 px-1 font-mono text-xs"
-      title="复制流量 ID，可用于搜索或交给报告 Agent"
-      aria-label={`复制流量 ID ${id}`}
+      title={ui("screen.8a134471206fdb")}
+      aria-label={ui("screen.54649a31e8d4c8", { v0: id })}
       onClick={async (event) => {
         event.stopPropagation();
         if (await copyText(id)) {
-          toast.success("已复制流量 ID");
+          toast.success(ui("screen.9b466f01119f3f"));
         } else {
-          toast.error("复制失败，请手动选择流量 ID");
+          toast.error(ui("screen.5c3930aa096ff4"));
         }
       }}
     >
@@ -139,6 +141,8 @@ const SORT_STORAGE_KEY = "traffic-sort";
 const STATUS_BUCKETS = ["2xx", "3xx", "4xx", "5xx"];
 
 export function TrafficHistory({ taskId }: { taskId?: string }) {
+  const { ui, liveUI } = useUITranslation();
+
   const taskScoped = Boolean(taskId);
   const [selectedFlows, setSelectedFlows] = React.useState<Map<string, TrafficExchange>>(() => new Map());
   const router = useRouter();
@@ -302,12 +306,12 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
 
   // "清空" for the unfiltered purge, "删除" for the host-scoped ones — the dialog's
   // title and its confirm button both follow from which is in play.
-  const deleteVerb = deleteMode === "all" ? "清空" : "删除";
+  const deleteVerb = deleteMode === "all" ? ui("screen.1ef3de06b32e52") : ui("screen.2f9daa828907b9");
   const deleteTitle = deleteMode
     ? {
-        all: "清空全部流量记录？",
-        selected: `删除选中的 ${selectedHosts.length} 个目标的全部流量？`,
-        filter: "删除该目标的全部流量？",
+        all: ui("screen.20a10fd336ecc6"),
+        selected: ui("screen.331ce0fdfdcad6", { v0: selectedHosts.length }),
+        filter: ui("screen.b47e0e2255192b"),
       }[deleteMode]
     : "";
 
@@ -335,15 +339,15 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
         if (mode === "all") {
           // Reclaimed space is the whole point of compacting an emptied index, so say so.
           const reclaimed = r.reclaimed ?? 0;
-          const freed = reclaimed > 0 ? `，释放 ${fmtBytes(reclaimed)} 存储` : "";
-          toast.success(`已清空 ${r.deleted} 条流量${freed}`);
+          const freed = reclaimed > 0 ? ui("screen.6960a3f6384445", { v0: fmtBytes(reclaimed) }) : "";
+          toast.success(ui("screen.38496069e0a73b", { v0: r.deleted, v1: freed }));
         }
         setPage(0);
         setReloadTick((t) => t + 1);
       })
       .catch((e) => {
         // Keep the confirmation open so the user can retry a failed deletion.
-        if (mode === "all") toast.error(`清空失败：${(e as Error).message}`);
+        if (mode === "all") toast.error(ui("screen.3a6ecda56c2904", { v0: (e as Error).message }));
       })
       .finally(() => setDeleting(false));
   };
@@ -363,7 +367,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
         if (alive) setDetail(d);
       })
       .catch(() => {
-        if (alive) setDetail({ req: "（无法加载报文）", resp: "" });
+        if (alive) setDetail({ req: liveUI("screen.68bf9e536ea4fb"), resp: "" });
       })
       .finally(() => {
         if (alive) setDetailLoading(false);
@@ -371,7 +375,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
     return () => {
       alive = false;
     };
-  }, [selected]);
+  }, [selected, liveUI]);
 
   async function openRepeater(flows: TrafficExchange[]) {
     if (!flows.length || importLock.current) return;
@@ -386,7 +390,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
           const raw = await api.trafficExchange(flow.id);
           seedFromEvidence(
             requestFromTraffic(raw.req, flow),
-            { label: `流量 ${flow.id}` },
+            { label: ui("screen.0590a3959d138f", { v0: flow.id }) },
             { title: `${flow.method} ${flow.host}` },
           );
           imported += 1;
@@ -395,7 +399,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
         }
       }
       if (imported) {
-        toast.success(`已送入 ${imported} 条请求，可编辑后发送`);
+        toast.success(ui("screen.088cfdca89e540", { v0: imported }));
         setSelected(null);
         router.push("/function/repeater");
       }
@@ -424,12 +428,12 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">流量</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{ui("screen.81a9d0b5a2a24f")}</h1>
           <p className="text-muted-foreground text-sm">
-            {taskScoped ? "当前任务资产范围内的 HTTP 往来" : "全局录制代理 · 所有 HTTP 往来"}
+            {taskScoped ? ui("screen.b59cef826dcb71") : ui("screen.023b708247de16")}
           </p>
           {taskScoped && traffic && !traffic.enabled ? (
-            <p className="text-amber-600 text-xs dark:text-amber-400">流量录制已关闭，历史记录仍可查看。</p>
+            <p className="text-amber-600 text-xs dark:text-amber-400">{ui("screen.c7704b52416f68")}</p>
           ) : null}
         </div>
         <div className="flex items-center gap-4 text-sm">
@@ -442,11 +446,12 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
             )}
           >
             <RadioTowerIcon className="size-3.5" />
-            {traffic?.enabled ? "录制中" : "已停用"}
+            {traffic?.enabled ? ui("screen.2224a30ee2cdf9") : ui("screen.a8c3698b5b8c48")}
           </span>
           {traffic?.proxy && <span className="font-mono text-xs text-muted-foreground">{traffic.proxy}</span>}
           <span className="text-xs text-muted-foreground">
-            共 <span className="tabular-nums">{traffic?.count ?? 0}</span> 条
+            {ui("screen.76e547a8fa5463")}
+            <span className="tabular-nums">{traffic?.count ?? 0}</span> {ui("screen.f004f1d84cf962")}
           </span>
         </div>
       </div>
@@ -458,7 +463,9 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm" className="h-8">
                 <ListChecksIcon className="size-3.5" />
-                {selectedHosts.length > 0 ? `选择目标（${selectedHosts.length}）` : "选择目标…"}
+                {selectedHosts.length > 0
+                  ? ui("screen.b1e47beadfd16f", { v0: selectedHosts.length })
+                  : ui("screen.d0dfdbc61da230")}
               </Button>
             </PopoverTrigger>
             <PopoverContent
@@ -467,7 +474,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
               collisionPadding={16}
             >
               <div className="flex items-center justify-between border-b px-3 py-2">
-                <span className="text-xs font-medium text-muted-foreground">按目标批量删除</span>
+                <span className="text-xs font-medium text-muted-foreground">{ui("screen.0e6c18682bee41")}</span>
                 <div className="flex items-center gap-1">
                   {hosts.length > 0 && (
                     <Tooltip>
@@ -478,14 +485,17 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                           onClick={() => setHostCountSortDirection((current) => (current === "desc" ? "asc" : "desc"))}
                           aria-label={
                             hostCountSortDirection === "desc"
-                              ? "数据包数量当前倒序，点击切换为正序"
-                              : "数据包数量当前正序，点击切换为倒序"
+                              ? ui("screen.9c09feb6321670")
+                              : ui("screen.fee4f789fe317c")
                           }
                         >
                           {hostCountSortDirection === "desc" ? <ArrowDownWideNarrowIcon /> : <ArrowUpNarrowWideIcon />}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>按数据包数量{hostCountSortDirection === "desc" ? "倒序" : "正序"}</TooltipContent>
+                      <TooltipContent>
+                        {ui("screen.1d69013fdfc36b")}
+                        {hostCountSortDirection === "desc" ? ui("screen.7fd0cf65b630d3") : ui("screen.6d91624318cd6e")}
+                      </TooltipContent>
                     </Tooltip>
                   )}
                   {hosts.length > 0 && (
@@ -495,14 +505,16 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                       className="h-6 px-2 text-xs"
                       onClick={() => setSelectedHosts(allSelected ? [] : hosts.map((h) => h.host))}
                     >
-                      {allSelected ? "取消全选" : "全选"}
+                      {allSelected ? ui("screen.f4d4bae588c4c0") : ui("screen.3a5040b68abf75")}
                     </Button>
                   )}
                 </div>
               </div>
               <div className="max-h-64 overflow-y-auto">
                 {hosts.length === 0 ? (
-                  <div className="px-3 py-6 text-center text-xs text-muted-foreground">暂无流量记录</div>
+                  <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+                    {ui("screen.d9b44442e02e8c")}
+                  </div>
                 ) : (
                   sortedHosts.map((h, index) => (
                     <label
@@ -536,7 +548,9 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                     setPickerOpen(false);
                   }}
                 >
-                  删除选中（{selectedHosts.length}）
+                  {ui("screen.88b78952c85ed9")}
+                  {selectedHosts.length}
+                  {ui("punctuation.f2e44c6c95")}
                 </Button>
               </div>
             </PopoverContent>
@@ -551,11 +565,11 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
             size="sm"
             className="h-8"
             disabled={!hostQ || deleting}
-            title={hostQ ? undefined : "先在左侧选择目标或输入 host"}
+            title={hostQ ? undefined : ui("screen.28527602429cf4")}
             onClick={() => setDeleteMode("filter")}
           >
             <Trash2Icon className="size-3.5" />
-            删除该目标
+            {ui("screen.967568fd42269f")}
           </Button>
         )}
         {/* Outline rather than a second destructive button: this one ignores every
@@ -566,17 +580,17 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
             size="sm"
             className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
             disabled={!traffic?.count || deleting}
-            title={traffic?.count ? "删除全部流量并压实存储" : "当前没有流量记录"}
+            title={traffic?.count ? ui("screen.6e3ee1bd5ec3c5") : ui("screen.cd7dfff78c06d7")}
             onClick={() => setDeleteMode("all")}
           >
             <EraserIcon className="size-3.5" />
-            清空全部
+            {ui("screen.1b590914091ca1")}
           </Button>
         )}
         <div className="relative max-w-sm flex-1">
           <SearchIcon className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="搜索全部（ID / URL / 方法 / 类型 / 状态码…）"
+            placeholder={ui("screen.4da8755f77bbac")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="h-8 pl-8"
@@ -584,10 +598,10 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
         </div>
         <Select value={method} onValueChange={setMethod}>
           <SelectTrigger size="sm" className="w-32">
-            <SelectValue placeholder="方法" />
+            <SelectValue placeholder={ui("screen.22b9f0b6621280")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部方法</SelectItem>
+            <SelectItem value="all">{ui("screen.470f9e522dbc29")}</SelectItem>
             {METHODS.map((m) => (
               <SelectItem key={m} value={m}>
                 {m}
@@ -602,7 +616,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
           <SelectContent>
             {PAGE_SIZES.map((n) => (
               <SelectItem key={n} value={String(n)}>
-                {n} / 页
+                {n} {ui("screen.785e3cd53901f4")}
               </SelectItem>
             ))}
           </SelectContent>
@@ -638,10 +652,10 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
 
       {/* Advanced filters (issue #177): narrow 660k+ exchanges down to the one packet. */}
       <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5">
-        <span className="pl-1 text-xs font-medium text-muted-foreground">高级筛选</span>
+        <span className="pl-1 text-xs font-medium text-muted-foreground">{ui("screen.97a1d7b98ba6de")}</span>
         <div className="relative w-56">
           <Input
-            placeholder="响应内容（正文关键词，≥3字）"
+            placeholder={ui("screen.5cba4dfcb02d73")}
             value={body}
             onChange={(e) => setBody(e.target.value)}
             className="h-8"
@@ -649,7 +663,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
         </div>
         <div className="relative w-52">
           <Input
-            placeholder="路径（如 /api/user/…）"
+            placeholder={ui("screen.acdead918ec785")}
             value={path}
             onChange={(e) => setPath(e.target.value)}
             className="h-8"
@@ -657,10 +671,10 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger size="sm" className="w-28">
-            <SelectValue placeholder="状态码" />
+            <SelectValue placeholder={ui("screen.06f7d73412128f")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部状态码</SelectItem>
+            <SelectItem value="all">{ui("screen.27554bb50ad8e5")}</SelectItem>
             {STATUS_BUCKETS.map((s) => (
               <SelectItem key={s} value={s}>
                 {s}
@@ -669,11 +683,11 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
           </SelectContent>
         </Select>
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <span>响应长度</span>
+          <span>{ui("screen.71150dc5f9bf29")}</span>
           <Input
             type="number"
             min={0}
-            placeholder="最小(B)"
+            placeholder={ui("screen.81ccd8b89d0289")}
             value={respMin}
             onChange={(e) => setRespMin(e.target.value)}
             className="h-8 w-24"
@@ -682,7 +696,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
           <Input
             type="number"
             min={0}
-            placeholder="最大(B)"
+            placeholder={ui("screen.c0191c7ae4b381")}
             value={respMax}
             onChange={(e) => setRespMax(e.target.value)}
             className="h-8 w-24"
@@ -691,15 +705,18 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
         {hasAdvancedFilter ? (
           <Button variant="ghost" size="sm" className="h-8" onClick={resetAdvancedFilters}>
             <FilterXIcon className="size-3.5" />
-            清除筛选
+            {ui("screen.657d9cbf45ec9e")}
           </Button>
         ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm text-muted-foreground">已选 {selectedFlows.size} 条流量</span>
+        <span className="text-sm text-muted-foreground">
+          {ui("screen.7ecf1cde648680")}
+          {selectedFlows.size} {ui("screen.68b6937344542d")}
+        </span>
         <Button variant="outline" size="sm" disabled={selectedFlows.size === 0} onClick={() => setLinking(true)}>
-          关联到漏洞
+          {ui("screen.ab5bc41d5f9382")}
         </Button>
         <Button
           variant="outline"
@@ -707,11 +724,11 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
           disabled={selectedFlows.size === 0 || importing}
           onClick={() => void openRepeater([...selectedFlows.values()])}
         >
-          {importing ? "转入中…" : "送入请求重发"}
+          {importing ? ui("screen.73a589a315aab8") : ui("screen.f69052b85f5594")}
         </Button>
         {selectedFlows.size > 0 ? (
           <Button variant="ghost" size="sm" onClick={() => setSelectedFlows(new Map())}>
-            清空选择
+            {ui("screen.a3c9748924640c")}
           </Button>
         ) : null}
       </div>
@@ -724,7 +741,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                 <TableRow>
                   <TableHead className="w-10">
                     <Checkbox
-                      aria-label="选择本页流量"
+                      aria-label={ui("screen.7f7a0502cab321")}
                       checked={exchanges.length > 0 && exchanges.every((e) => selectedFlows.has(e.id))}
                       onCheckedChange={(checked) =>
                         setSelectedFlows((previous) => {
@@ -738,21 +755,21 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                       }
                     />
                   </TableHead>
-                  <TableHead className="w-44">流量 ID</TableHead>
+                  <TableHead className="w-44">{ui("screen.1079886b92d48a")}</TableHead>
                   <SortableHead
                     field="ts"
-                    label="时间"
+                    label={ui("screen.8b6ff498515bcc")}
                     activeField={sort.field}
                     direction={sort.direction}
                     onSort={toggleSort}
                     className="w-36"
                   />
                   <TableHead className="w-44">host</TableHead>
-                  <TableHead className="w-20">方法</TableHead>
+                  <TableHead className="w-20">{ui("screen.22b9f0b6621280")}</TableHead>
                   <TableHead>URL</TableHead>
                   <SortableHead
                     field="status"
-                    label="状态码"
+                    label={ui("screen.06f7d73412128f")}
                     activeField={sort.field}
                     direction={sort.direction}
                     onSort={toggleSort}
@@ -761,7 +778,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                   <TableHead className="w-36">content-type</TableHead>
                   <SortableHead
                     field="resp_len"
-                    label="响应长度"
+                    label={ui("screen.71150dc5f9bf29")}
                     activeField={sort.field}
                     direction={sort.direction}
                     onSort={toggleSort}
@@ -779,7 +796,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                   >
                     <TableCell>
                       <Checkbox
-                        aria-label={`选择流量 ${e.id}`}
+                        aria-label={ui("screen.be085904b7f30c", { v0: e.id })}
                         checked={selectedFlows.has(e.id)}
                         onClick={(event) => event.stopPropagation()}
                         onCheckedChange={(checked) =>
@@ -795,7 +812,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                     <TableCell>
                       <TrafficID id={e.id} />
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground tabular-nums">{fmtTime(e.ts)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground tabular-nums">{fmtTime(e.ts, ui)}</TableCell>
                     <TableCell className="font-mono text-xs">{e.host}</TableCell>
                     <TableCell>
                       <MethodBadge method={e.method} />
@@ -815,7 +832,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                 {exchanges.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={9} className="py-12 text-center text-sm text-muted-foreground">
-                      {traffic === null ? "加载中…" : "没有匹配的流量。"}
+                      {traffic === null ? ui("screen.4927a53bcc886a") : ui("screen.2e8f51bea742fa")}
                     </TableCell>
                   </TableRow>
                 )}
@@ -842,12 +859,12 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                   <Badge variant="secondary" className={cn("font-mono tabular-nums", statusTone(selected.status))}>
                     {selected.status}
                   </Badge>
-                  <span className="ml-auto text-xs text-muted-foreground tabular-nums">{fmtTime(selected.ts)}</span>
+                  <span className="ml-auto text-xs text-muted-foreground tabular-nums">{fmtTime(selected.ts, ui)}</span>
                 </div>
                 <SheetTitle className="break-all font-mono">{selected.host}</SheetTitle>
                 <SheetDescription className="break-all font-mono">{selected.url}</SheetDescription>
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  流量 ID：
+                  {ui("screen.426b811ca45fb8")}
                   <TrafficID id={selected.id} />
                 </div>
                 <Button
@@ -857,20 +874,20 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
                   disabled={importing}
                   onClick={() => void openRepeater([selected])}
                 >
-                  {importing ? "转入中…" : "送入请求重发"}
+                  {importing ? ui("screen.73a589a315aab8") : ui("screen.f69052b85f5594")}
                 </Button>
               </SheetHeader>
               <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 sm:grid-cols-2">
                 {[
-                  ["request", "请求 Request", requestWithHost(detail?.req ?? "", selected)],
-                  ["response", "响应 Response", detail?.resp ?? ""],
+                  ["request", ui("screen.719dd828ca88c8"), requestWithHost(detail?.req ?? "", selected)],
+                  ["response", ui("screen.946902266aa212"), detail?.resp ?? ""],
                 ].map(([key, label, raw]) => (
                   <div key={key} className="flex min-h-0 min-w-0 flex-col gap-1 overflow-hidden">
                     <span className="px-1 text-[11px] font-medium text-muted-foreground">{label}</span>
                     {detailLoading ? (
                       <div className="flex min-h-0 flex-1 items-center justify-center gap-2 rounded-md border bg-muted/10 text-xs text-muted-foreground">
                         <Loader2Icon className="size-3.5 animate-spin" />
-                        加载报文…
+                        {ui("screen.8382563d05503e")}
                       </div>
                     ) : (
                       <HttpCodeBlock raw={raw} />
@@ -895,34 +912,35 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
             <AlertDialogDescription>
               {deleteMode === "all" && (
                 <>
-                  将永久删除全部 <span className="font-semibold tabular-nums">{traffic?.count ?? 0}</span>{" "}
-                  条流量记录（含请求/响应原文），忽略当前的筛选条件，此操作不可撤销。已绑定到漏洞的流量证据保存在独立的证据库中，不受影响。
+                  {ui("screen.f756f5dec5b5c3")}
+                  <span className="font-semibold tabular-nums">{traffic?.count ?? 0}</span>{" "}
+                  {ui("screen.0a94e6bbe20981")}
                   <br />
-                  <span className="text-muted-foreground">
-                    清空后会顺带压实存储，把索引占用的磁盘空间还给系统；这期间流量录制会短暂暂停。
-                  </span>
+                  <span className="text-muted-foreground">{ui("screen.057cc97c1f3669")}</span>
                 </>
               )}
               {deleteMode === "selected" && (
                 <>
-                  将永久删除 <span className="font-semibold tabular-nums">{selectedHosts.length}</span> 个目标（
+                  {ui("screen.cf89e2d397024a")}
+                  <span className="font-semibold tabular-nums">{selectedHosts.length}</span>{" "}
+                  {ui("screen.796083e945b112")}
                   <span className="font-mono">
                     {selectedHosts.slice(0, 3).join("、")}
                     {selectedHosts.length > 3 ? "…" : ""}
                   </span>
-                  ）的所有流量记录（含请求/响应原文），此操作不可撤销。
+                  {ui("screen.0a73ec12397eb2")}
                 </>
               )}
               {deleteMode === "filter" && (
                 <>
-                  将永久删除 host 包含 <span className="font-mono font-semibold">{hostQ}</span>{" "}
-                  的所有流量记录（含请求/响应原文），此操作不可撤销。
+                  {ui("screen.9bbb71c95e0271")}
+                  <span className="font-mono font-semibold">{hostQ}</span> {ui("screen.09a4cb59071655")}
                 </>
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleting}>{ui("screen.2cd0f3be8738a8")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
@@ -931,7 +949,9 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
               disabled={deleting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deleting ? `${deleteVerb}中…` : `确认${deleteVerb}`}
+              {deleting
+                ? ui("screen.9afff630f8de55", { v0: deleteVerb })
+                : ui("screen.22d91d9657a582", { v0: deleteVerb })}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

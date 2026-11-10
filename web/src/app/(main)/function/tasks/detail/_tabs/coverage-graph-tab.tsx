@@ -1,6 +1,6 @@
 "use client";
-
 import * as React from "react";
+
 import type { Graph as G6Graph } from "@antv/g6";
 import {
   AppWindow,
@@ -11,8 +11,8 @@ import {
   Link2,
   type LucideIcon,
   Radio,
-  RotateCcw,
   RefreshCw,
+  RotateCcw,
   Server,
   Waypoints,
 } from "lucide-react";
@@ -21,12 +21,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { CoverageAssetRef, CoverageAssetRefs, CoverageGraphEdge, CoverageGraphNode } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -40,23 +36,23 @@ type Kind = CoverageGraphNode["kind"];
 type Zone = "internet" | "boundary" | "internal";
 type CoverageViewMode = "asset" | "network";
 
-const zoneMeta: Record<Zone, { label: string; description: string; className: string }> = {
+const zoneMeta = (ui: UITranslate): Record<Zone, { label: string; description: string; className: string }> => ({
   internet: {
-    label: "互联网区",
-    description: "公网域名 / 外部入口",
+    label: ui("screen.73218fb0396555"),
+    description: ui("screen.5c302a665d4eac"),
     className: "bg-sky-50/70 dark:bg-sky-950/20",
   },
   boundary: {
-    label: "边界区",
-    description: "服务 / 网关 / 暴露面",
+    label: ui("screen.97bfa6d62e7d45"),
+    description: ui("screen.6a1577eec40fce"),
     className: "bg-amber-50/70 dark:bg-amber-950/15",
   },
   internal: {
-    label: "内网区",
-    description: "业务资产 / 应用 / 端点",
+    label: ui("screen.a3cb2d0969355e"),
+    description: ui("screen.fe6d6da5ef7a42"),
     className: "bg-emerald-50/65 dark:bg-emerald-950/15",
   },
-};
+});
 
 // 新数据优先使用后端基于地址/暴露证据计算出的权威区域；旧数据没有
 // zone 时才使用类型回退，避免公网 endpoint 被类型规则误放到内网。
@@ -73,15 +69,15 @@ function zoneOf(node: CoverageGraphNode): Zone {
 
 type KindMeta = { label: string; icon: LucideIcon; iconBg: string; hex: string; size: number };
 
-const kindMeta: Record<Kind, KindMeta> = {
-  company: { label: "公司", icon: Building2, iconBg: "bg-slate-500", hex: "#64748b", size: 46 },
-  root_domain: { label: "根域名", icon: Globe, iconBg: "bg-indigo-500", hex: "#6366f1", size: 38 },
-  subdomain: { label: "子域名", icon: Waypoints, iconBg: "bg-blue-500", hex: "#3b82f6", size: 30 },
+const kindMeta = (ui: UITranslate): Record<Kind, KindMeta> => ({
+  company: { label: ui("screen.e06ff957ed48e8"), icon: Building2, iconBg: "bg-slate-500", hex: "#64748b", size: 46 },
+  root_domain: { label: ui("screen.bc208f697acff9"), icon: Globe, iconBg: "bg-indigo-500", hex: "#6366f1", size: 38 },
+  subdomain: { label: ui("screen.4b4788120c34db"), icon: Waypoints, iconBg: "bg-blue-500", hex: "#3b82f6", size: 30 },
   ip: { label: "IP", icon: Server, iconBg: "bg-cyan-600", hex: "#0891b2", size: 28 },
-  service: { label: "服务", icon: Radio, iconBg: "bg-amber-500", hex: "#f59e0b", size: 26 },
+  service: { label: ui("screen.ec309ab207ef7f"), icon: Radio, iconBg: "bg-amber-500", hex: "#f59e0b", size: 26 },
   app: { label: "App", icon: AppWindow, iconBg: "bg-fuchsia-500", hex: "#d946ef", size: 26 },
-  endpoint: { label: "端点", icon: Link2, iconBg: "bg-rose-500", hex: "#f43f5e", size: 20 },
-};
+  endpoint: { label: ui("screen.52fff1680de153"), icon: Link2, iconBg: "bg-rose-500", hex: "#f43f5e", size: 20 },
+});
 
 // G6 节点图标用平台一致的 lucide 图标：把 lucide 的 SVG 路径（v1.22）渲染成白色描边的
 // data URI，作为节点 iconSrc（白色在实色/灰色底上都清晰）。手写内嵌，避免 react-dom/server
@@ -125,7 +121,9 @@ const DATABASE_ICON: Record<DatabaseEngine, string> = {
   sqlserver: svgUri('<text x="12" y="15" text-anchor="middle" font-size="7" font-weight="700">MS</text>', true),
   postgres: svgUri('<text x="12" y="15" text-anchor="middle" font-size="7" font-weight="700">PG</text>', true),
   redis: svgUri('<text x="12" y="15" text-anchor="middle" font-size="8" font-weight="700">RD</text>', true),
-  database: svgUri('<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v9c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 10c0 1.7 3.1 3 7 3s7-1.3 7-3"/>'),
+  database: svgUri(
+    '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v9c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 10c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
+  ),
 };
 
 function databaseEngine(node: CoverageGraphNode): DatabaseEngine | null {
@@ -263,7 +261,7 @@ function trunc(s: string, n = 26): string {
 
 // 图里的节点文案：服务不显示完整 URL，只显示 端口·标题·状态码；端点只显示 path。
 // 其余类型沿用后端给的 label。
-function graphLabel(n: CoverageGraphNode, viewMode: CoverageViewMode = "asset"): string {
+function graphLabel(n: CoverageGraphNode, viewMode: CoverageViewMode = "asset", ui: UITranslate): string {
   if (viewMode === "network") {
     if (n.kind === "endpoint") {
       if (n.url) {
@@ -273,14 +271,16 @@ function graphLabel(n: CoverageGraphNode, viewMode: CoverageViewMode = "asset"):
           /* 非法 URL：回退到资产标签 */
         }
       }
-      return n.label || n.domain || n.ip || "端点";
+      return n.label || n.domain || n.ip || ui("screen.52fff1680de153");
     }
     if (n.kind === "service") {
       const engine = databaseEngine(n);
       const host = n.domain || n.ip || n.label;
-      return engine ? `${engine.toUpperCase()} · ${host}${n.port ? `:${n.port}` : ""}` : `${host}${n.port ? `:${n.port}` : ""}`;
+      return engine
+        ? `${engine.toUpperCase()} · ${host}${n.port ? `:${n.port}` : ""}`
+        : `${host}${n.port ? `:${n.port}` : ""}`;
     }
-    return n.label || n.domain || n.ip || n.app_name || kindMeta[n.kind].label;
+    return n.label || n.domain || n.ip || n.app_name || kindMeta(ui)[n.kind].label;
   }
   if (n.kind === "service") {
     const parts: string[] = [];
@@ -303,6 +303,7 @@ function toG6Nodes(
   renderNodes: RenderNode[],
   activeKeys: Set<string>,
   viewMode: CoverageViewMode,
+  ui: UITranslate,
 ): G6NodeDatum[] {
   const buckets: Record<Zone, RenderNode[]> = { internet: [], boundary: [], internal: [] };
   for (const rn of renderNodes) {
@@ -312,7 +313,10 @@ function toG6Nodes(
     ...(["internet", "boundary", "internal"] as Zone[]).map((zone) => Math.ceil(buckets[zone].length / 2)),
     1,
   );
-  const virtualHeight = viewMode === "network" ? Math.max(760, maxRows * 78 + 120) : Math.max(760, Math.max(buckets.internet.length, buckets.boundary.length, buckets.internal.length, 1) * 42);
+  const virtualHeight =
+    viewMode === "network"
+      ? Math.max(760, maxRows * 78 + 120)
+      : Math.max(760, Math.max(buckets.internet.length, buckets.boundary.length, buckets.internal.length, 1) * 42);
   const positions = new Map<string, { x: number; y: number }>();
   const xByZone: Record<Zone, number> = { internet: 150, boundary: 600, internal: 1050 };
   const xByAssetKind: Partial<Record<Kind, number>> = {
@@ -356,17 +360,21 @@ function toG6Nodes(
       // Two generous columns keep long host names readable. A single column is
       // used for short groups so the parent/child relationship remains obvious.
       if (items.length <= 8) {
-        items.forEach((rn, index) => positions.set(rn.key, {
-          x: (zoneBounds[zone][0] + zoneBounds[zone][1]) / 2,
-          y: 90 + ((index + 1) * (virtualHeight - 150)) / (items.length + 1),
-        }));
+        items.forEach((rn, index) =>
+          positions.set(rn.key, {
+            x: (zoneBounds[zone][0] + zoneBounds[zone][1]) / 2,
+            y: 90 + ((index + 1) * (virtualHeight - 150)) / (items.length + 1),
+          }),
+        );
       } else {
         const columns = [zoneBounds[zone][0] + 105, zoneBounds[zone][1] - 105];
         const rows = Math.ceil(items.length / 2);
-        items.forEach((rn, index) => positions.set(rn.key, {
-          x: columns[index % 2],
-          y: 90 + ((Math.floor(index / 2) + 1) * (virtualHeight - 150)) / (rows + 1),
-        }));
+        items.forEach((rn, index) =>
+          positions.set(rn.key, {
+            x: columns[index % 2],
+            y: 90 + ((Math.floor(index / 2) + 1) * (virtualHeight - 150)) / (rows + 1),
+          }),
+        );
       }
     }
   } else {
@@ -391,7 +399,7 @@ function toG6Nodes(
         fold: true,
         tested: false,
         inScope: false,
-        lbl: `还有 ${rn.hidden.length} 个${kindMeta[rn.kind].label}`,
+        lbl: ui("screen.d7e8d0b6e2f07c", { v0: rn.hidden.length, v1: kindMeta(ui)[rn.kind].label }),
         size: 24,
         active: activeKeys.has(rn.key),
         iconSrc: FOLD_ICON,
@@ -405,12 +413,13 @@ function toG6Nodes(
       fold: false,
       tested: rn.node.tested,
       inScope: rn.node.in_scope,
-        lbl: `${rn.node.tested ? "✓ " : ""}${trunc(graphLabel(rn.node, viewMode) || kindMeta[rn.kind].label, viewMode === "network" ? (rn.kind === "service" ? 22 : 18) : 26)}`,
-      size: kindMeta[rn.kind].size,
+      lbl: `${rn.node.tested ? "✓ " : ""}${trunc(graphLabel(rn.node, viewMode, ui) || kindMeta(ui)[rn.kind].label, viewMode === "network" ? (rn.kind === "service" ? 22 : 18) : 26)}`,
+      size: kindMeta(ui)[rn.kind].size,
       active: activeKeys.has(rn.key),
-      iconSrc: viewMode === "network" && databaseEngine(rn.node)
-        ? DATABASE_ICON[databaseEngine(rn.node) as DatabaseEngine]
-        : KIND_ICON[rn.kind],
+      iconSrc:
+        viewMode === "network" && databaseEngine(rn.node)
+          ? DATABASE_ICON[databaseEngine(rn.node) as DatabaseEngine]
+          : KIND_ICON[rn.kind],
       style: { x: position.x, y: position.y },
       ...position,
     };
@@ -420,7 +429,11 @@ function toG6Nodes(
 function networkWorldHeight(renderNodes: RenderNode[]): number {
   const counts: Record<Zone, number> = { internet: 0, boundary: 0, internal: 0 };
   for (const node of renderNodes) counts[node.fold ? "boundary" : zoneOf(node.node)] += 1;
-  return Math.max(760, Math.max(Math.ceil(counts.internet / 2), Math.ceil(counts.boundary / 2), Math.ceil(counts.internal / 2), 1) * 78 + 120);
+  return Math.max(
+    760,
+    Math.max(Math.ceil(counts.internet / 2), Math.ceil(counts.boundary / 2), Math.ceil(counts.internal / 2), 1) * 78 +
+      120,
+  );
 }
 
 // G6 的类型把自定义字段归在 data 下，但官方 force 示例（及运行时）按顶层读 d.<field>。
@@ -428,10 +441,10 @@ function networkWorldHeight(renderNodes: RenderNode[]): number {
 const nd = (d: unknown) => d as G6NodeDatum;
 
 // 已测=实色高亮；范围内未测=灰；范围外/折叠=更淡的灰 + 虚线描边。
-function nodeFill(d: G6NodeDatum): string {
+function nodeFill(d: G6NodeDatum, ui: UITranslate): string {
   if (d.fold) return "#f1f5f9";
   if (!d.inScope) return "#e2e8f0";
-  if (d.tested) return kindMeta[d.kind].hex;
+  if (d.tested) return kindMeta(ui)[d.kind].hex;
   return "#94a3b8";
 }
 function nodeStroke(d: G6NodeDatum): string {
@@ -455,11 +468,16 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 }
 
 function RefList({ title, items }: { title: string; items: CoverageAssetRef[] }) {
+  const { ui } = useUITranslation();
+
   if (items.length === 0) return null;
   return (
     <div>
       <h4 className="text-muted-foreground mb-1 text-xs font-medium">
-        {title}（{items.length}）
+        {title}
+        {ui("punctuation.da047c04c9")}
+        {items.length}
+        {ui("punctuation.f2e44c6c95")}
       </h4>
       <div className="flex flex-col gap-1">
         {items.map((r) => (
@@ -472,7 +490,8 @@ function RefList({ title, items }: { title: string; items: CoverageAssetRef[] })
             <span className="min-w-32 flex-1 break-words text-foreground">{r.summary || "—"}</span>
             {r.inherited && r.source_task_id && (
               <Badge variant="outline" className="shrink-0">
-                来源 #{r.source_task_id} · 只读
+                {ui("screen.3afe69a08aa62f")}
+                {r.source_task_id} {ui("screen.8feecd4f35005e")}
               </Badge>
             )}
           </div>
@@ -491,7 +510,9 @@ function AssetSheet({
   taskId: string;
   onOpenChange: (open: boolean) => void;
 }) {
-  const meta = node ? kindMeta[node.kind] : null;
+  const { ui } = useUITranslation();
+
+  const meta = node ? kindMeta(ui)[node.kind] : null;
   const Icon = meta?.icon;
   const raw = node ? JSON.stringify(node, null, 2) : "";
   const [refs, setRefs] = React.useState<CoverageAssetRefs | null>(null);
@@ -519,7 +540,9 @@ function AssetSheet({
           <>
             <SheetHeader className="border-b p-4">
               <div className="flex items-center gap-2.5 pr-8">
-                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg shadow-sm", meta.iconBg)}>
+                <span
+                  className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg shadow-sm", meta.iconBg)}
+                >
                   <Icon className="size-4 text-white" />
                 </span>
                 <div className="min-w-0">
@@ -533,42 +556,44 @@ function AssetSheet({
             <ScrollArea className="min-h-0 flex-1">
               <div className="flex w-full min-w-0 flex-col gap-4 p-4">
                 <section>
-                  <h4 className="text-muted-foreground mb-1 text-xs font-medium">属性</h4>
-                  <DetailRow label="类型">{meta.label}</DetailRow>
-                  <DetailRow label="测试状态">
+                  <h4 className="text-muted-foreground mb-1 text-xs font-medium">{ui("screen.86de52d1782037")}</h4>
+                  <DetailRow label={ui("screen.ba40014ff496f6")}>{meta.label}</DetailRow>
+                  <DetailRow label={ui("screen.b89ba5de74e7b1")}>
                     {node.in_scope ? (
                       node.tested ? (
-                        <span className="text-emerald-600 dark:text-emerald-400">已测试</span>
+                        <span className="text-emerald-600 dark:text-emerald-400">{ui("screen.b16985a510b4d3")}</span>
                       ) : (
-                        <span className="text-neutral-500">未测试</span>
+                        <span className="text-neutral-500">{ui("screen.092b520558eff5")}</span>
                       )
                     ) : (
-                      <span className="text-neutral-400">范围外（连接节点）</span>
+                      <span className="text-neutral-400">{ui("screen.f4636884c807c5")}</span>
                     )}
                   </DetailRow>
-                  <DetailRow label="域名">{node.domain}</DetailRow>
-                  <DetailRow label="根域名">{node.root_domain}</DetailRow>
+                  <DetailRow label={ui("screen.222952431147e5")}>{node.domain}</DetailRow>
+                  <DetailRow label={ui("screen.bc208f697acff9")}>{node.root_domain}</DetailRow>
                   <DetailRow label="IP">{node.ip}</DetailRow>
-                  <DetailRow label="端口">{node.port ? node.port : undefined}</DetailRow>
+                  <DetailRow label={ui("screen.e71ac32b544b0e")}>{node.port ? node.port : undefined}</DetailRow>
                   <DetailRow label="URL">
                     {node.url ? <span className="font-mono text-xs break-all">{node.url}</span> : undefined}
                   </DetailRow>
-                  <DetailRow label="标题">{node.page_title}</DetailRow>
-                  <DetailRow label="状态码">{node.status_code ? node.status_code : undefined}</DetailRow>
+                  <DetailRow label={ui("screen.c3405f8c7d9d39")}>{node.page_title}</DetailRow>
+                  <DetailRow label={ui("screen.06f7d73412128f")}>
+                    {node.status_code ? node.status_code : undefined}
+                  </DetailRow>
                   <DetailRow label="App">{node.app_name}</DetailRow>
-                  <DetailRow label="资产ID">
+                  <DetailRow label={ui("screen.511bb69c1de1d5")}>
                     {node.asset_id ? <span className="font-mono text-xs">{node.asset_id}</span> : undefined}
                   </DetailRow>
                 </section>
                 {refs && (refs.intents.length > 0 || refs.facts.length > 0 || refs.findings.length > 0) && (
                   <section className="flex flex-col gap-3 border-t pt-3">
-                    <RefList title="关联意图" items={refs.intents} />
-                    <RefList title="关联事实" items={refs.facts} />
-                    <RefList title="关联发现" items={refs.findings} />
+                    <RefList title={ui("screen.028aff117ec11d")} items={refs.intents} />
+                    <RefList title={ui("screen.c341de6ca41c8d")} items={refs.facts} />
+                    <RefList title={ui("screen.ae5fdab42543cc")} items={refs.findings} />
                   </section>
                 )}
                 <section className="border-t pt-3">
-                  <h4 className="text-muted-foreground mb-1.5 text-xs font-medium">原始数据</h4>
+                  <h4 className="text-muted-foreground mb-1.5 text-xs font-medium">{ui("screen.17da5eb22d21d6")}</h4>
                   <pre className="bg-muted/50 text-foreground max-w-full overflow-hidden rounded-md border p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap">
                     {raw}
                   </pre>
@@ -593,7 +618,9 @@ function FoldSheet({
   onShowMore: (groupId: string) => void;
   onPick: (n: CoverageGraphNode) => void;
 }) {
-  const meta = fold ? kindMeta[fold.kind] : null;
+  const { ui } = useUITranslation();
+
+  const meta = fold ? kindMeta(ui)[fold.kind] : null;
   const Icon = meta?.icon;
   return (
     <Sheet open={fold !== null} onOpenChange={onOpenChange}>
@@ -602,9 +629,13 @@ function FoldSheet({
           <>
             <SheetHeader className="border-b p-4">
               <SheetTitle className="text-base">
-                未展示的{meta.label}（{fold.hidden.length}）
+                {ui("screen.b16342240c9bf7")}
+                {meta.label}
+                {ui("punctuation.da047c04c9")}
+                {fold.hidden.length}
+                {ui("punctuation.f2e44c6c95")}
               </SheetTitle>
-              <p className="text-muted-foreground text-xs">已测优先展示。点「展示更多」把下一批拉进图里。</p>
+              <p className="text-muted-foreground text-xs">{ui("screen.d4e2c8f0b28219")}</p>
             </SheetHeader>
             <ScrollArea className="min-h-0 flex-1">
               <div className="flex flex-col gap-1 p-3">
@@ -633,7 +664,9 @@ function FoldSheet({
             </ScrollArea>
             <div className="border-t p-3">
               <Button className="w-full" variant="outline" onClick={() => onShowMore(fold.groupId)}>
-                展示更多（+{FOLD_STEP}）
+                {ui("screen.5ca3407cf12bb3")}
+                {FOLD_STEP}
+                {ui("punctuation.f2e44c6c95")}
               </Button>
             </div>
           </>
@@ -645,6 +678,8 @@ function FoldSheet({
 
 // ---------------------------------------------------------------------------
 function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; coverageEnabled?: boolean }) {
+  const { ui, liveUI } = useUITranslation();
+
   const [data, setData] = React.useState<{
     nodes: CoverageGraphNode[];
     edges: CoverageGraphEdge[];
@@ -677,30 +712,46 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
   });
   const graphDataRef = React.useRef<typeof data>(null);
 
-  const syncViewport = React.useCallback(() => {
-    const graph = graphRef.current;
-    if (!graph || graph.destroyed) return;
-    const position = graph.getPosition();
-    setViewport({ zoom: graph.getZoom(), position: [position[0], position[1]] });
+  const isCurrentGraph = React.useCallback((graph: G6Graph | null): graph is G6Graph => {
+    return !!graph && graphRef.current === graph && graph.rendered && !graph.destroyed;
   }, []);
 
-  const resetView = React.useCallback(async (mode: CoverageViewMode = viewModeRef.current) => {
-    setActivePath([]);
-    setSelectedAsset(null);
-    setSelectedFoldId(null);
-    const graph = graphRef.current;
-    if (!graph || graph.destroyed) return;
-    await graph.zoomTo(1);
-    if (mode === "network") {
-      // Network coordinates are already assigned to the three fixed zone
-      // columns. Centering a graph with an empty zone shifts every node into
-      // the next visible column and makes the background regions misleading.
-      await graph.translateTo([0, 0]);
-    } else {
-      await graph.fitCenter();
-    }
-    syncViewport();
-  }, [syncViewport]);
+  const syncViewport = React.useCallback(
+    (graph: G6Graph | null = graphRef.current) => {
+      // G6 emits aftertransform while constructing its viewport, before the
+      // viewport is assigned to the graph. Only read it after the first render.
+      if (!isCurrentGraph(graph)) return;
+      const position = graph.getPosition();
+      setViewport({ zoom: graph.getZoom(), position: [position[0], position[1]] });
+    },
+    [isCurrentGraph],
+  );
+
+  const resetView = React.useCallback(
+    async (mode: CoverageViewMode = viewModeRef.current) => {
+      setActivePath([]);
+      setSelectedAsset(null);
+      setSelectedFoldId(null);
+      const graph = graphRef.current;
+      if (!isCurrentGraph(graph)) return;
+      try {
+        await graph.zoomTo(1);
+        if (!isCurrentGraph(graph)) return;
+        if (mode === "network") {
+          // Network coordinates are already assigned to the three fixed zone
+          // columns. Centering a graph with an empty zone shifts every node into
+          // the next visible column and makes the background regions misleading.
+          await graph.translateTo([0, 0]);
+        } else {
+          await graph.fitCenter();
+        }
+        syncViewport(graph);
+      } catch (err) {
+        if (isCurrentGraph(graph)) console.error("[coverage-graph] reset:", err);
+      }
+    },
+    [isCurrentGraph, syncViewport],
+  );
 
   const fetchGraph = React.useCallback(() => {
     setLoading(true);
@@ -789,10 +840,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
     [data, expanded, viewMode],
   );
 
-  const displayNodes = React.useMemo(
-    () => renderNodes,
-    [renderNodes, viewMode],
-  );
+  const displayNodes = React.useMemo(() => renderNodes, [renderNodes, viewMode]);
   const displayNodeKeys = React.useMemo(() => new Set(displayNodes.map((node) => node.key)), [displayNodes]);
   const displayEdges = React.useMemo(
     () => renderEdges.filter((edge) => displayNodeKeys.has(edge.src) && displayNodeKeys.has(edge.dst)),
@@ -808,13 +856,16 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
   // 结构签名：只在可见节点/边集合变化时重建图 + 重跑布局，避免无谓抖动。
   const sig = React.useMemo(
     () =>
-      `${displayNodes.map((n) => `${n.key}:${n.fold ? "f" : n.node.tested ? "t" : "u"}`).sort().join(",")}|${displayEdges.length}|${activePath.join(",")}|${viewMode}`,
-    [activePath, displayEdges, displayNodes, viewMode],
+      `${displayNodes
+        .map((n) => `${n.key}:${n.fold ? "f" : n.node.tested ? "t" : "u"}`)
+        .sort()
+        .join(",")}|${displayEdges.length}|${activePath.join(",")}|${viewMode}|${ui("screen.91610255157661")}`,
+    [activePath, displayEdges, displayNodes, viewMode, ui],
   );
 
   // 维护 gDataRef + renderMapRef（供事件与图数据应用读取）。
   gDataRef.current = {
-    nodes: toG6Nodes(displayNodes, new Set(activePath), viewMode),
+    nodes: toG6Nodes(displayNodes, new Set(activePath), viewMode, ui),
     edges: displayEdges.map((e) => ({
       // The API stores child → parent containment. Topology reads naturally
       // from internet entry → boundary service → internal asset, so reverse
@@ -837,27 +888,29 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
     void graph
       .render()
       .then(() => {
-        if (graph.destroyed) return;
+        if (!isCurrentGraph(graph)) return;
         const active = gDataRef.current.nodes.filter((node) => node.active).map((node) => node.id);
         // Keep the zone columns at their assigned coordinates. Centering a
         // network graph with an empty zone causes the remaining nodes to slide
         // into the next column, so network mode starts at the fixed origin.
-        const result = active.length > 0
-          ? graph.focusElement(active)
-          : viewModeRef.current === "network"
-            ? graph.translateTo([0, 0])
-            : graph.fitCenter();
-        return result.then(() => syncViewport());
+        const result =
+          active.length > 0
+            ? graph.focusElement(active)
+            : viewModeRef.current === "network"
+              ? graph.translateTo([0, 0])
+              : graph.fitCenter();
+        return result.then(() => syncViewport(graph));
       })
       .catch((err) => {
-        if (!graph.destroyed) console.error("[coverage-graph] render:", err);
+        if (graphRef.current === graph && !graph.destroyed) console.error("[coverage-graph] render:", err);
       });
-  }, [syncViewport]);
+  }, [isCurrentGraph, syncViewport]);
 
   // 建图（一次）。动态 import 避开 SSR/静态导出期的 window 依赖。
   React.useEffect(() => {
     let destroyed = false;
     let graph: G6Graph | null = null;
+    const handleViewport = () => syncViewport(graph);
     void (async () => {
       const { Graph } = await import("@antv/g6");
       if (destroyed || !containerRef.current) return;
@@ -875,7 +928,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
         node: {
           style: {
             size: (d: unknown) => nd(d).size,
-            fill: (d: unknown) => nodeFill(nd(d)),
+            fill: (d: unknown) => nodeFill(nd(d), liveUI),
             stroke: (d: unknown) => nodeStroke(nd(d)),
             lineWidth: (d: unknown) => (nd(d).fold || !nd(d).inScope ? 1 : nd(d).tested ? 3 : 1.5),
             lineDash: (d: unknown) => (nd(d).fold || !nd(d).inScope ? [3, 3] : [0]),
@@ -890,8 +943,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
             labelBackgroundFill: "rgba(255,255,255,0.75)",
             labelBackgroundRadius: 3,
             labelPadding: [1, 3],
-            opacity: (d: unknown) =>
-              gDataRef.current.nodes.some((node) => node.active) && !nd(d).active ? 0.5 : 1,
+            opacity: (d: unknown) => (gDataRef.current.nodes.some((node) => node.active) && !nd(d).active ? 0.5 : 1),
           },
         },
         edge: {
@@ -905,9 +957,11 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
         },
         behaviors: ["drag-element", "drag-canvas", "zoom-canvas"],
       });
-      graph.on("aftertransform", syncViewport);
-      graph.on("afterresize", syncViewport);
+      graph.on("aftertransform", handleViewport);
+      graph.on("afterresize", handleViewport);
       graph.on("node:click", (evt: unknown) => {
+        const currentGraph = graph;
+        if (!isCurrentGraph(currentGraph)) return;
         const id = (evt as { target?: { id?: string } }).target?.id;
         if (!id) return;
         const rn = renderMapRef.current.get(id);
@@ -928,23 +982,34 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
           cursor = parents.get(cursor);
         }
         setActivePath(lineage);
-        void graph?.focusElement(lineage).then(() => syncViewport());
+        void currentGraph
+          .focusElement(lineage)
+          .then(() => syncViewport(currentGraph))
+          .catch((err) => {
+            if (isCurrentGraph(currentGraph)) console.error("[coverage-graph] focus:", err);
+          });
       });
       graphRef.current = graph;
       applyData();
-    })();
+    })().catch((err) => {
+      if (!destroyed) console.error("[coverage-graph] initialize:", err);
+    });
     return () => {
       destroyed = true;
+      // Invalidate the instance before destroy emits events or clears its
+      // runtime. Pending operations must never read a replacement instance.
+      if (graphRef.current === graph) graphRef.current = null;
+      graph?.off("aftertransform", handleViewport);
+      graph?.off("afterresize", handleViewport);
       // 先停布局再销毁:尽量缩短"布局在飞、context 被清空"的竞态窗口。
       try {
         graph?.stopLayout();
       } catch {
         /* 图可能尚未建成或已无布局上下文 */
       }
-      graph?.destroy();
-      graphRef.current = null;
+      if (graph && !graph.destroyed) graph.destroy();
     };
-  }, [applyData, resetView, syncViewport]);
+  }, [applyData, isCurrentGraph, syncViewport, liveUI]);
 
   // 可见集合变化 → 重新灌数据 + 布局。sig 只作为重排触发器（applyData 读 gDataRef）。
   // biome-ignore lint/correctness/useExhaustiveDependencies: sig 是刻意的重排触发依赖
@@ -984,18 +1049,22 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
               transformOrigin: "0 0",
             }}
           >
-            {(Object.keys(zoneMeta) as Zone[]).map((zone, index) => (
+            {(Object.keys(zoneMeta(ui)) as Zone[]).map((zone, index) => (
               <div
                 key={zone}
-                className={cn("relative border-r border-slate-200/80 dark:border-slate-800/80", zoneMeta[zone].className, index === 2 && "border-r-0")}
+                className={cn(
+                  "relative border-r border-slate-200/80 dark:border-slate-800/80",
+                  zoneMeta(ui)[zone].className,
+                  index === 2 && "border-r-0",
+                )}
               >
                 <div className="absolute top-3 left-4">
-                  <div className="text-foreground/80 text-sm font-semibold">{zoneMeta[zone].label}</div>
-                  <div className="text-muted-foreground mt-0.5 text-[11px]">{zoneMeta[zone].description}</div>
+                  <div className="text-foreground/80 text-sm font-semibold">{zoneMeta(ui)[zone].label}</div>
+                  <div className="text-muted-foreground mt-0.5 text-[11px]">{zoneMeta(ui)[zone].description}</div>
                 </div>
                 {zoneCounts[zone] === 0 && (
                   <div className="text-muted-foreground/70 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-dashed border-slate-300/70 px-3 py-2 text-center text-xs dark:border-slate-700/70">
-                    暂无该区域资产证据
+                    {ui("screen.33f3d352b377f1")}
                   </div>
                 )}
               </div>
@@ -1004,19 +1073,21 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
         </div>
       ) : (
         <div className="pointer-events-none absolute top-3 left-4 z-0">
-          <div className="text-foreground/80 text-sm font-semibold">资产关系图</div>
-          <div className="text-muted-foreground mt-0.5 text-[11px]">按资产层级展示关联关系</div>
+          <div className="text-foreground/80 text-sm font-semibold">{ui("screen.1b1878ef15e2dd")}</div>
+          <div className="text-muted-foreground mt-0.5 text-[11px]">{ui("screen.e55034530fb968")}</div>
         </div>
       )}
       <div ref={containerRef} className="relative z-10 h-full w-full pt-12" />
 
       {/* 图例 + 统计 + 刷新（叠加层） */}
-      <div className={cn(
-        "bg-card/95 pointer-events-auto absolute bottom-3 left-3 z-20 rounded-lg border shadow-sm backdrop-blur",
-        panelCollapsed
-          ? "flex items-center gap-2 px-2.5 py-2 text-xs"
-          : "flex w-[min(480px,calc(100%-1.5rem))] max-h-[calc(100%-1.5rem)] flex-col gap-2.5 overflow-auto p-3 text-xs",
-      )}>
+      <div
+        className={cn(
+          "bg-card/95 pointer-events-auto absolute bottom-3 left-3 z-20 rounded-lg border shadow-sm backdrop-blur",
+          panelCollapsed
+            ? "flex items-center gap-2 px-2.5 py-2 text-xs"
+            : "flex w-[min(480px,calc(100%-1.5rem))] max-h-[calc(100%-1.5rem)] flex-col gap-2.5 overflow-auto p-3 text-xs",
+        )}
+      >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300">
@@ -1024,136 +1095,191 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
             </span>
             <div className="min-w-0 flex-1">
               <div className="text-foreground truncate font-medium">
-                {viewMode === "network" ? "网络拓扑梳理 Agent" : "资产关系图"}
+                {viewMode === "network" ? ui("screen.9e3eb877a14c61") : ui("screen.1b1878ef15e2dd")}
               </div>
               <div className="text-muted-foreground truncate text-[11px]">
                 {viewMode === "network"
                   ? mapping
-                    ? "正在梳理网络拓扑，并生成两份结果…"
+                    ? ui("screen.7d68c8ed51849a")
                     : networkReportAt
-                      ? `最近梳理 ${networkReportAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`
-                      : "网络拓扑等待梳理"
+                      ? ui("screen.547357026293fb", {
+                          v0: networkReportAt.toLocaleTimeString(ui("screen.91610255157661"), {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          }),
+                        })
+                      : ui("screen.83d3a366b39275")
                   : loading
-                    ? "正在读取资产库关系…"
+                    ? ui("screen.acb517b5bd9e43")
                     : lastSyncedAt
-                      ? `资产库实时数据 · ${lastSyncedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`
-                      : "等待读取资产库"}
+                      ? ui("screen.3207729eeb3065", {
+                          v0: lastSyncedAt.toLocaleTimeString(ui("screen.91610255157661"), {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          }),
+                        })
+                      : ui("screen.86a58a759bc19b")}
               </div>
             </div>
           </div>
           {total > 0 ? (
             <span className="text-muted-foreground whitespace-nowrap">
-              范围内 <span className="text-foreground font-semibold tabular-nums">{inScope}</span>
+              {ui("screen.166f5a8e8ab338")}
+              <span className="text-foreground font-semibold tabular-nums">{inScope}</span>
               {coverageEnabled && (
                 <>
                   {" "}
-                  · 已测{" "}
+                  {ui("screen.1d9f3033dc8842")}{" "}
                   <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{tested}</span>
                 </>
               )}
             </span>
           ) : (
-            <span className="text-muted-foreground">{loading ? "加载中…" : "暂无范围内资产（先锚定任务范围）"}</span>
+            <span className="text-muted-foreground">
+              {loading ? ui("screen.4927a53bcc886a") : ui("screen.14bacb60e1be7c")}
+            </span>
           )}
-          {!panelCollapsed && <div className="flex shrink-0 items-center gap-1">
-            <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => setPanelCollapsed(true)} title="收起面板">
-              <ChevronDown className="size-3.5" />
-              <span className="hidden sm:inline">收起</span>
-            </Button>
-            <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => void resetView()} title="重置视图">
-              <RotateCcw className="size-3.5" />
-              <span className="hidden sm:inline">重置视图</span>
-            </Button>
-            {viewMode === "network" && (
-              <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2" onClick={() => void remapNetwork()} disabled={mapping} title="重新梳理网络拓扑">
-                <RefreshCw className={cn("size-3.5", (loading || mapping) && "animate-spin")} />
-                <span className="hidden sm:inline">{mapping ? "正在梳理网络…" : "梳理网络拓扑"}</span>
+          {!panelCollapsed && (
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 px-2"
+                onClick={() => setPanelCollapsed(true)}
+                title={ui("screen.90bb34c2f1de36")}
+              >
+                <ChevronDown className="size-3.5" />
+                <span className="hidden sm:inline">{ui("screen.afd4b783536b82")}</span>
               </Button>
-            )}
-          </div>}
-          {panelCollapsed && <Button variant="ghost" size="sm" className="h-7 gap-1 px-2" onClick={() => setPanelCollapsed(false)} title="展开面板">
-            <ChevronUp className="size-3.5" />
-            <span className="hidden sm:inline">展开</span>
-          </Button>}
-        </div>
-        {!panelCollapsed && <>
-        <div className="bg-muted/60 flex items-center gap-1 rounded-md p-1">
-          <Button
-            variant={viewMode === "asset" ? "secondary" : "ghost"}
-            size="sm"
-            className="h-7 flex-1 px-2 text-xs"
-            onClick={() => {
-              setViewMode("asset");
-              void resetView("asset");
-            }}
-          >
-            资产关系图
-          </Button>
-          <Button
-            variant={viewMode === "network" ? "secondary" : "ghost"}
-            size="sm"
-            className="h-7 flex-1 px-2 text-xs"
-            onClick={() => {
-              setViewMode("network");
-              void resetView("network");
-            }}
-          >
-            网络拓扑
-          </Button>
-        </div>
-        <div className="flex flex-wrap gap-x-3 gap-y-1.5">
-          {(Object.keys(kindMeta) as Kind[]).map((k) => {
-            const m = kindMeta[k];
-            const Icon = m.icon;
-            return (
-              <span key={k} className="text-foreground inline-flex items-center gap-1.5">
-                <span className={cn("flex size-4 items-center justify-center rounded", m.iconBg)}>
-                  <Icon className="size-2.5 text-white" />
-                </span>
-                {m.label}
-              </span>
-            );
-          })}
-        </div>
-        <div className="border-border/60 text-muted-foreground flex flex-wrap gap-x-3 gap-y-1.5 border-t pt-2">
-          {coverageEnabled && (
-            <>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="flex size-3 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-bold text-white">✓</span> 已测（绿色描边）
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-3 rounded-full bg-neutral-400" /> 未测
-              </span>
-            </>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 px-2"
+                onClick={() => void resetView()}
+                title={ui("screen.764aba1c4a9d94")}
+              >
+                <RotateCcw className="size-3.5" />
+                <span className="hidden sm:inline">{ui("screen.764aba1c4a9d94")}</span>
+              </Button>
+              {viewMode === "network" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 px-2"
+                  onClick={() => void remapNetwork()}
+                  disabled={mapping}
+                  title={ui("screen.90e2a5949e1b31")}
+                >
+                  <RefreshCw className={cn("size-3.5", (loading || mapping) && "animate-spin")} />
+                  <span className="hidden sm:inline">
+                    {mapping ? ui("screen.532fe15e85e681") : ui("screen.158c2f04a57048")}
+                  </span>
+                </Button>
+              )}
+            </div>
           )}
-          <span className="inline-flex items-center gap-1.5">
-            <span className="size-3 rounded-full border border-dashed border-neutral-400 bg-neutral-200" /> 范围外
-          </span>
+          {panelCollapsed && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2"
+              onClick={() => setPanelCollapsed(false)}
+              title={ui("screen.41457ebc161b87")}
+            >
+              <ChevronUp className="size-3.5" />
+              <span className="hidden sm:inline">{ui("screen.00bd3960fea8ea")}</span>
+            </Button>
+          )}
         </div>
-        {viewMode === "network" && (
-          <div className="border-border/60 flex flex-wrap gap-x-3 gap-y-1.5 border-t pt-2">
-            {(Object.keys(zoneMeta) as Zone[]).map((zone) => (
-              <span key={zone} className="text-muted-foreground inline-flex items-center gap-1.5">
-                <span className={cn("size-2.5 rounded-full", zone === "internet" && "bg-sky-400", zone === "boundary" && "bg-amber-400", zone === "internal" && "bg-emerald-400")} />
-                {zoneMeta[zone].label}
+        {!panelCollapsed && (
+          <>
+            <div className="bg-muted/60 flex items-center gap-1 rounded-md p-1">
+              <Button
+                variant={viewMode === "asset" ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 flex-1 px-2 text-xs"
+                onClick={() => {
+                  setViewMode("asset");
+                  void resetView("asset");
+                }}
+              >
+                {ui("screen.1b1878ef15e2dd")}
+              </Button>
+              <Button
+                variant={viewMode === "network" ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 flex-1 px-2 text-xs"
+                onClick={() => {
+                  setViewMode("network");
+                  void resetView("network");
+                }}
+              >
+                {ui("screen.fb2ecd65358f8d")}
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+              {(Object.keys(kindMeta(ui)) as Kind[]).map((k) => {
+                const m = kindMeta(ui)[k];
+                const Icon = m.icon;
+                return (
+                  <span key={k} className="text-foreground inline-flex items-center gap-1.5">
+                    <span className={cn("flex size-4 items-center justify-center rounded", m.iconBg)}>
+                      <Icon className="size-2.5 text-white" />
+                    </span>
+                    {m.label}
+                  </span>
+                );
+              })}
+            </div>
+            <div className="border-border/60 text-muted-foreground flex flex-wrap gap-x-3 gap-y-1.5 border-t pt-2">
+              {coverageEnabled && (
+                <>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="flex size-3 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-bold text-white">
+                      ✓
+                    </span>{" "}
+                    {ui("screen.f3a3e321ac9b0e")}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="size-3 rounded-full bg-neutral-400" /> {ui("screen.c3eb5da0453e40")}
+                  </span>
+                </>
+              )}
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-3 rounded-full border border-dashed border-neutral-400 bg-neutral-200" />{" "}
+                {ui("screen.36abf5f859f151")}
               </span>
-            ))}
-          </div>
+            </div>
+            {viewMode === "network" && (
+              <div className="border-border/60 flex flex-wrap gap-x-3 gap-y-1.5 border-t pt-2">
+                {(Object.keys(zoneMeta(ui)) as Zone[]).map((zone) => (
+                  <span key={zone} className="text-muted-foreground inline-flex items-center gap-1.5">
+                    <span
+                      className={cn(
+                        "size-2.5 rounded-full",
+                        zone === "internet" && "bg-sky-400",
+                        zone === "boundary" && "bg-amber-400",
+                        zone === "internal" && "bg-emerald-400",
+                      )}
+                    />
+                    {zoneMeta(ui)[zone].label}
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="text-muted-foreground/80 border-border/60 border-t pt-2 leading-relaxed">
+              {viewMode === "network" ? ui("screen.4a19d6737a8f57") : ui("screen.a6f0e728f0e6e7")}
+            </p>
+          </>
         )}
-        <p className="text-muted-foreground/80 border-border/60 border-t pt-2 leading-relaxed">
-          {viewMode === "network"
-            ? "图中只展示有真实资产证据的节点；连线表示资产归属/关联，不代表已验证的网络通信路径。"
-            : "资产关系图直接读取资产库，不需要额外梳理；点击节点查看详情并高亮关系链。灰色「⋯」可展开更多资产。"}
-        </p>
-        </>}
       </div>
 
       {selectedAsset && activePath.length > 0 && data && (
         <div className="bg-card/95 pointer-events-auto absolute top-3 right-3 z-20 w-[min(310px,calc(100%-2rem))] rounded-lg border p-3 shadow-sm backdrop-blur">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-foreground text-sm font-semibold">关系路径</div>
-              <div className="text-muted-foreground mt-0.5 text-[11px]">从当前资产向上追溯关联关系</div>
+              <div className="text-foreground text-sm font-semibold">{ui("screen.fc76a37a8a6265")}</div>
+              <div className="text-muted-foreground mt-0.5 text-[11px]">{ui("screen.53bd9290102ee6")}</div>
             </div>
             <Button
               variant="ghost"
@@ -1164,7 +1290,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
                 void resetView();
               }}
             >
-              清除高亮
+              {ui("screen.69b351c5d2dd33")}
             </Button>
           </div>
           <div className="mt-3 flex flex-col gap-1.5">
@@ -1174,9 +1300,18 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
               return (
                 <React.Fragment key={key}>
                   <div className="flex min-w-0 items-center gap-2 rounded-md bg-muted/60 px-2 py-1.5 text-xs">
-                    <span className={cn("size-2 shrink-0 rounded-full", zoneOf(node) === "internet" && "bg-sky-500", zoneOf(node) === "boundary" && "bg-amber-500", zoneOf(node) === "internal" && "bg-emerald-500")} />
-                    <span className="text-muted-foreground shrink-0">{zoneMeta[zoneOf(node)].label}</span>
-                    <span className="min-w-0 flex-1 truncate font-mono" title={node.label}>{node.label}</span>
+                    <span
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        zoneOf(node) === "internet" && "bg-sky-500",
+                        zoneOf(node) === "boundary" && "bg-amber-500",
+                        zoneOf(node) === "internal" && "bg-emerald-500",
+                      )}
+                    />
+                    <span className="text-muted-foreground shrink-0">{zoneMeta(ui)[zoneOf(node)].label}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono" title={node.label}>
+                      {node.label}
+                    </span>
                   </div>
                   {index < path.length - 1 && <div className="text-muted-foreground pl-3 text-[10px]">↓</div>}
                 </React.Fragment>

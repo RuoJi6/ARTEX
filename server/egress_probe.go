@@ -167,17 +167,19 @@ type egressCheck struct {
 	Path       string            `json:"path"`  // 实际使用的代理地址（空 = 直连）
 	Skipped    bool              `json:"skipped,omitempty"`
 	SkipReason string            `json:"skip_reason,omitempty"`
+	SkipCode   string            `json:"skip_code,omitempty"`
 	Result     egressProbeResult `json:"result"`
 }
 
 // egressReport 是 POST /api/settings/proxy/test 的返回体。
 type egressReport struct {
-	OK         bool          `json:"ok"`          // 以"② 经全局代理"为准；未配代理时看"① 直连"
-	Capture    bool          `json:"capture"`     // 当前是否开启流量捕获
-	Configured string        `json:"configured"`  // 表单传上来的 global_proxy
-	AgentProxy string        `json:"agent_proxy"` // ProxyAddr() 的实际返回值
-	Checks     []egressCheck `json:"checks"`
-	Warnings   []string      `json:"warnings,omitempty"`
+	OK             bool             `json:"ok"`          // 以"② 经全局代理"为准；未配代理时看"① 直连"
+	Capture        bool             `json:"capture"`     // 当前是否开启流量捕获
+	Configured     string           `json:"configured"`  // 表单传上来的 global_proxy
+	AgentProxy     string           `json:"agent_proxy"` // ProxyAddr() 的实际返回值
+	Checks         []egressCheck    `json:"checks"`
+	Warnings       []string         `json:"warnings,omitempty"`
+	WarningDetails []productMessage `json:"warning_details,omitempty"`
 }
 
 // probeEgress 不碰数据库、不碰 Server，所以测试里可以直接调、完全离线。
@@ -430,21 +432,25 @@ func (s *Server) testEgressProxy(w http.ResponseWriter, r *http.Request) {
 		})
 	} else {
 		skipReason := "输入框为空，未配置代理"
+		skipCode := "no_proxy"
 		if savedProxy != "" {
 			// 说"未配置代理"会和 W1（"Agent 仍使用 xxx"）互相否定。
 			skipReason = "输入框为空；已保存的代理仍在生效"
+			skipCode = "saved_proxy_active"
 		}
 		rep.Checks = append(rep.Checks, egressCheck{
 			Key:        "global",
 			Label:      "② 经全局代理的出口 IP",
 			Skipped:    true,
 			SkipReason: skipReason,
+			SkipCode:   skipCode,
 			Result:     egressProbeResult{Probes: []egressAttempt{}},
 		})
 	}
 
 	rep.OK = judgeEgress(rep)
 	rep.Warnings = egressWarnings(rep, pending, savedProxy)
+	rep.WarningDetails = egressWarningDetails(rep, pending, savedProxy)
 	if req.Resume && rep.OK && !pending {
 		// The navbar uses the same probe endpoint for display-only polling but
 		// omits resume. Only an explicit settings-page test can release the
@@ -477,18 +483,29 @@ func judgeEgress(rep egressReport) bool {
 // egressWarnings 生成"看数字容易忽略"的提醒。
 func egressWarnings(rep egressReport, pending bool, savedProxy string) []string {
 	var out []string
+	for _, notice := range egressWarningDetails(rep, pending, savedProxy) {
+		out = append(out, notice.Message)
+	}
+	return out
+}
+
+func egressWarningDetails(rep egressReport, pending bool, savedProxy string) []productMessage {
+	var out []productMessage
+	add := func(code string, params map[string]any, message string) {
+		out = append(out, productMessage{Code: code, Params: params, Message: message})
+	}
 	safeSavedProxy := maskSecrets(savedProxy)
 
 	// W1 agent 走的是已保存配置，不说清会被当成"测通了=配好了"。
 	if pending {
 		switch {
 		case rep.Configured == "":
-			out = append(out, "此地址尚未保存，Agent 当前仍使用 "+safeSavedProxy+"。保存后即改为直连。")
+			add("pending_direct", map[string]any{"proxy": safeSavedProxy}, "此地址尚未保存，Agent 当前仍使用 "+safeSavedProxy+"。保存后即改为直连。")
 		case savedProxy == "":
-			out = append(out, "此地址尚未保存，Agent 当前仍为直连。"+
+			add("pending_proxy", nil, "此地址尚未保存，Agent 当前仍为直连。"+
 				"上方结果对应输入框中的值，保存后生效。")
 		default:
-			out = append(out, "此地址尚未保存，Agent 当前仍使用 "+safeSavedProxy+
+			add("pending_change", map[string]any{"proxy": safeSavedProxy}, "此地址尚未保存，Agent 当前仍使用 "+safeSavedProxy+
 				"。上方结果对应输入框中的值，保存后生效。")
 		}
 	}
@@ -509,26 +526,26 @@ func egressWarnings(rep egressReport, pending bool, savedProxy string) []string 
 
 	// W2 看已保存值；只在 ② 通过时提示——没通的话"这里通不代表"本身就不成立。
 	if !rep.Capture && proxyOK && strings.HasPrefix(strings.ToLower(savedProxy), "socks5") {
-		out = append(out, "当前是「关闭捕获 + socks5」：本测试用的是 Go 客户端（一定遵守代理），"+
+		add("socks_without_capture", nil, "当前是「关闭捕获 + socks5」：本测试用的是 Go 客户端（一定遵守代理），"+
 			"但 agent 的工具不一定——curl 能走，python urllib 会直接报错。"+
 			"所以这里通不代表工具都能走；要稳定生效请开启流量捕获（由 MITM 亲自拨号）。")
 	}
 
 	// W3 两行相同 → 代理可能没生效，或对端只是透明转发。
 	if directIP != "" && proxyIP != "" && directIP == proxyIP {
-		out = append(out, fmt.Sprintf("直连与代理的出口 IP 相同（%s）：可能代理未生效、只是透明转发，"+
+		add("same_ip", map[string]any{"ip": directIP}, fmt.Sprintf("直连与代理的出口 IP 相同（%s）：可能代理未生效、只是透明转发，"+
 			"也可能跳板机与本机在同一 NAT 后面（出口本来就相同）。"+
 			"要区分：在「自定义 IP 探测服务」里填一台内网回显服务，看它看到的源 IP 是否变成了跳板机。", directIP))
 	}
 
 	// W4 同样看已保存值，否则会和 W1 自相矛盾。
 	if rep.Capture && savedProxy == "" {
-		out = append(out, "已开启流量捕获，但全局代理为空：捕获只负责记录，出口仍是直连。")
+		add("capture_direct", nil, "已开启流量捕获，但全局代理为空：捕获只负责记录，出口仍是直连。")
 	}
 
 	// W5 容器里的 127.0.0.1 指容器自己，连不到宿主机上的代理。
 	if isLoopbackProxy(rep.Configured) {
-		out = append(out, "代理地址是回环地址（127.0.0.1 / localhost）。"+
+		add("loopback_proxy", nil, "代理地址是回环地址（127.0.0.1 / localhost）。"+
 			"如果 ARTEX 跑在容器里，这里的 127.0.0.1 指容器自身，连不到宿主机上的代理；"+
 			"请改用宿主机的可达 IP（如 http://192.168.x.x:端口）。")
 	}

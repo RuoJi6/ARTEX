@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -26,6 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { LLMPoolMember, LLMPoolStatus, LLMProfile, LLMRetryOverride } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -39,25 +39,24 @@ import { ProfileRetryFields, RetryPolicyPanel, ZERO_OVERRIDE } from "./_componen
 const NONE = "none";
 const fromStore = (v?: string) => (v ? v : NONE);
 const toStore = (v: string) => (v === NONE ? "" : v);
-const THINKING_TYPES: { value: string; label: string }[] = [
-  { value: NONE, label: "不发送（默认）" },
-  { value: "disabled", label: "关闭" },
-  { value: "enabled", label: "开启" },
+const THINKING_TYPES = (ui: UITranslate): { value: string; label: string }[] => [
+  { value: NONE, label: ui("screen.d703a9bcd8b626") },
+  { value: "disabled", label: ui("screen.3fd47edce45b36") },
+  { value: "enabled", label: ui("screen.8da97ddda990e7") },
 ];
 // 输出上限用哪个请求字段名（仅 openai 格式有意义）。NONE ↔ "" 走同一套哨兵转换。
-const MAX_TOKENS_FIELDS: { value: string; label: string }[] = [
-  { value: NONE, label: "max_tokens（默认）" },
+const MAX_TOKENS_FIELDS = (ui: UITranslate): { value: string; label: string }[] => [
+  { value: NONE, label: ui("screen.af7202f4ddd9ce") },
   { value: "max_completion_tokens", label: "max_completion_tokens" },
 ];
 // 另外两种格式各自定死了字段名，选项对它们无意义，说明文案里直接讲清楚。
-const MAX_TOKENS_FIELD_HINTS: Record<string, string> = {
-  openai:
-    "上限发哪个键。max_tokens 是默认，绝大多数兼容网关只认它；OpenAI 官方推理模型（o 系列 / GPT-5）反过来只认 max_completion_tokens，收到 max_tokens 会直接报 unsupported_parameter。",
-  anthropic: "仅 openai 格式可选。Anthropic 的字段名固定为 max_tokens。",
-  "openai-responses": "仅 openai 格式可选。Responses API 的字段名固定为 max_output_tokens。",
-};
-const EFFORT_LEVELS: { value: string; label: string }[] = [
-  { value: NONE, label: "不发送（默认）" },
+const MAX_TOKENS_FIELD_HINTS = (ui: UITranslate): Record<string, string> => ({
+  openai: ui("screen.8565b2d7398535"),
+  anthropic: ui("screen.55138cdb37fe16"),
+  "openai-responses": ui("screen.82b05dbd905574"),
+});
+const EFFORT_LEVELS = (ui: UITranslate): { value: string; label: string }[] => [
+  { value: NONE, label: ui("screen.d703a9bcd8b626") },
   { value: "low", label: "low" },
   { value: "medium", label: "medium" },
   { value: "high", label: "high" },
@@ -74,29 +73,32 @@ function cooldownText(secs: number) {
 // 一个配置在卡片上显示的「是否正常」。没填 Key 的配置根本发不出请求，比熔断更该先说；
 // 其余状态来自轮询的熔断记录（轮询关着时不会产生新记录，此时「正常」= 没有已知故障）。
 type Health = { label: string; cls: string; hint?: string };
-function healthOf(p: LLMProfile, m?: LLMPoolMember): Health {
+function healthOf(p: LLMProfile, m: LLMPoolMember | undefined, ui: UITranslate): Health {
   if (!p.api_key_hint) {
     return {
-      label: "未配置 Key",
+      label: ui("screen.3c87680f913852"),
       cls: "border-muted-foreground/40 text-muted-foreground",
-      hint: "未填 API Key，无法调用",
+      hint: ui("screen.2ca6df78a192e6"),
     };
   }
   if (m?.state === "tripped") {
     return {
-      label: m.cooldown_secs > 0 ? `已熔断 · ${cooldownText(m.cooldown_secs)}` : "已熔断",
+      label:
+        m.cooldown_secs > 0
+          ? ui("screen.68c534490c4ad4", { v0: cooldownText(m.cooldown_secs) })
+          : ui("screen.230ae98a62aa44"),
       cls: "border-destructive/50 text-destructive",
       hint: m.last_error,
     };
   }
   if (m?.state === "degraded") {
     return {
-      label: `异常 · 失败 ${m.fails} 次`,
+      label: ui("screen.c00b3a9fb3e0b1", { v0: m.fails }),
       cls: "border-amber-500/50 text-amber-600 dark:text-amber-400",
       hint: m.last_error,
     };
   }
-  return { label: "正常", cls: "border-emerald-500/50 text-emerald-600 dark:text-emerald-400" };
+  return { label: ui("screen.296de0e31f8c22"), cls: "border-emerald-500/50 text-emerald-600 dark:text-emerald-400" };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -114,6 +116,8 @@ function PoolSheet({
   pool: LLMPoolStatus | null;
   onReload: () => Promise<void>;
 }) {
+  const { ui } = useUITranslation();
+
   const [busy, setBusy] = React.useState(false);
 
   // 冷却倒计时是后端算出的剩余秒数——抽屉开着且有配置不正常时才定时拉，让它走起来。
@@ -130,12 +134,12 @@ function PoolSheet({
       await api.setSettings(patch);
       await onReload();
       if (patch.llm_pool_enabled !== undefined) {
-        toast.success(patch.llm_pool_enabled ? "已开启 LLM 轮询" : "已关闭 LLM 轮询");
+        toast.success(patch.llm_pool_enabled ? ui("screen.6ad92e056b6315") : ui("screen.d610844e23520e"));
       } else {
-        toast.success("已更新兜底设置");
+        toast.success(ui("screen.1bca47356a9bb2"));
       }
     } catch (e) {
-      toast.error(`设置失败：${(e as Error).message}`);
+      toast.error(ui("screen.f2270e97e1dbe8", { v0: (e as Error).message }));
     } finally {
       setBusy(false);
     }
@@ -145,9 +149,9 @@ function PoolSheet({
     try {
       await api.resetLLMPool(id);
       await onReload();
-      toast.success(id ? "已恢复该配置" : "已恢复全部配置");
+      toast.success(id ? ui("screen.e8f2d98a9307ed") : ui("screen.462e8191ab7472"));
     } catch (e) {
-      toast.error(`恢复失败：${(e as Error).message}`);
+      toast.error(ui("screen.b50e3ec91f5284", { v0: (e as Error).message }));
     }
   }
 
@@ -162,25 +166,26 @@ function PoolSheet({
       <SheetContent side="right" className="flex flex-col gap-0 p-0 data-[side=right]:sm:max-w-lg">
         <SheetHeader className="px-4">
           <SheetTitle className="flex items-center gap-2">
-            <ZapIcon className="size-4" /> LLM 轮询 · 故障转移
+            <ZapIcon className="size-4" /> {ui("screen.ee0d6c3483126c")}
           </SheetTitle>
           <SheetDescription>
-            开启后，<b>未指定模型</b>的 Agent 在当前配置不可用（余额不足 / Key 失效 / 限流 /
-            服务异常）时自动切到下一个配置。
+            {ui("screen.74040e7db47c5f")}
+            <b>{ui("screen.2a26d0dfb00d18")}</b>
+            {ui("screen.5d7d896c053816")}
           </SheetDescription>
         </SheetHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6">
           <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
             <div className="grid gap-0.5">
-              <Label className="text-sm">启用轮询</Label>
-              <p className="text-muted-foreground text-xs">默认关闭。关闭时始终只用激活配置，失败即失败。</p>
+              <Label className="text-sm">{ui("screen.dc35671c955127")}</Label>
+              <p className="text-muted-foreground text-xs">{ui("screen.4e7d9533dde487")}</p>
             </div>
             <Switch
               checked={enabled}
               disabled={busy}
               onCheckedChange={(v) => void toggle({ llm_pool_enabled: v })}
-              aria-label="LLM 轮询开关"
+              aria-label={ui("screen.ff0ba9711f9c43")}
             />
           </div>
 
@@ -188,17 +193,14 @@ function PoolSheet({
             <>
               <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
                 <div className="grid gap-0.5">
-                  <Label className="text-sm">指定模型失败时也兜底</Label>
-                  <p className="text-muted-foreground text-xs">
-                    默认关闭：Agent 或任务指定了某个配置就只用它，失败即失败（不会悄悄换成别的模型）。
-                    开启后，指定的配置失败时也会回落到下面的轮询链。
-                  </p>
+                  <Label className="text-sm">{ui("screen.55f46803c3cc2e")}</Label>
+                  <p className="text-muted-foreground text-xs">{ui("screen.649a58eb0d3e5e")}</p>
                 </div>
                 <Switch
                   checked={pool?.bind_fallback ?? false}
                   disabled={busy}
                   onCheckedChange={(v) => void toggle({ llm_pool_bind_fallback: v })}
-                  aria-label="绑定配置失败兜底开关"
+                  aria-label={ui("screen.297f6440e9bfc7")}
                 />
               </div>
 
@@ -206,16 +208,17 @@ function PoolSheet({
 
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-sm">轮询顺序</Label>
+                  <Label className="text-sm">{ui("screen.10377d21cbd87a")}</Label>
                   {tripped.length > 0 && (
                     <Button size="sm" variant="ghost" onClick={() => void recover()}>
-                      <RotateCcwIcon /> 全部恢复
+                      <RotateCcwIcon /> {ui("screen.45dc341db3efb2")}
                     </Button>
                   )}
                 </div>
                 {inChain.length < 2 && (
                   <p className="text-muted-foreground text-xs">
-                    当前只有 {inChain.length} 个可用配置，轮询不会生效——至少需要 2 个已填 API Key 且参与轮询的配置。
+                    {ui("screen.f009a13b8b7ab0")}
+                    {inChain.length} {ui("screen.0796c6e039a0cb")}
                   </p>
                 )}
                 {chain.map((m) => {
@@ -237,24 +240,30 @@ function PoolSheet({
                         <span className="font-medium">{m.name}</span>
                         {m.active && (
                           <Badge variant="outline" className="border-amber-400/50 text-amber-500">
-                            激活
+                            {ui("screen.dd1286c29e9b15")}
                           </Badge>
                         )}
-                        {excluded && <Badge variant="outline">不参与轮询</Badge>}
+                        {excluded && <Badge variant="outline">{ui("screen.91dc49e5d5ca23")}</Badge>}
                         <div className="ml-auto flex items-center gap-2">
                           {m.state === "tripped" && m.cooldown_secs > 0 && (
-                            <span className="text-muted-foreground text-xs">冷却 {cooldownText(m.cooldown_secs)}</span>
+                            <span className="text-muted-foreground text-xs">
+                              {ui("screen.6cac16b3978937")}
+                              {cooldownText(m.cooldown_secs)}
+                            </span>
                           )}
                           {m.state === "degraded" && (
-                            <span className="text-muted-foreground text-xs">连续失败 {m.fails} 次</span>
+                            <span className="text-muted-foreground text-xs">
+                              {ui("screen.22f09c41b5a958")}
+                              {m.fails} {ui("screen.172fb7e67b9b09")}
+                            </span>
                           )}
                           {m.state !== "ok" && (
                             <Button
                               size="icon"
                               variant="ghost"
                               className="size-7"
-                              aria-label="立即恢复"
-                              title="立即恢复：清除熔断，下次调用重试该配置"
+                              aria-label={ui("screen.904310a2a27a38")}
+                              title={ui("screen.73fe1d255e3c1b")}
                               onClick={() => void recover(m.profile_id)}
                             >
                               <RotateCcwIcon className="size-3.5" />
@@ -264,7 +273,12 @@ function PoolSheet({
                       </div>
                       <div className="flex flex-wrap items-center gap-x-3 pl-7 text-muted-foreground text-xs">
                         <code className="truncate font-mono">{m.model}</code>
-                        {!m.active && <span>优先级 {m.priority}</span>}
+                        {!m.active && (
+                          <span>
+                            {ui("screen.565d64601d4d17")}
+                            {m.priority}
+                          </span>
+                        )}
                       </div>
                       {m.last_error && (
                         <p className="truncate pl-7 font-mono text-muted-foreground text-xs" title={m.last_error}>
@@ -276,15 +290,13 @@ function PoolSheet({
                 })}
                 {chain.length === 0 && (
                   <div className="rounded-lg border border-dashed p-4 text-center text-muted-foreground text-sm">
-                    暂无配置
+                    {ui("screen.038591ac8878c5")}
                   </div>
                 )}
               </div>
 
               <div className="rounded-lg border border-dashed p-3 text-muted-foreground text-xs leading-relaxed">
-                激活配置恒为第 1 顺位，其余按优先级从高到低（在各配置里设置）。某个配置失败后进入冷却 （60s → 5min →
-                30min），冷却期内被跳过，恢复后自动切回。上下文窗口装不下当前请求的配置会被跳过。 指定了模型的 Agent
-                与任务默认不参与轮询。
+                {ui("screen.10dc4f02ad4731")}
               </div>
             </>
           )}
@@ -309,6 +321,8 @@ function ProfileSheet({
   onOpenChange: (o: boolean) => void;
   onSaved: (id: string) => void;
 }) {
+  const { ui } = useUITranslation();
+
   const isNew = !profile;
   const [name, setName] = React.useState("");
   const [format, setFormat] = React.useState<"anthropic" | "openai" | "openai-responses" | "jev">("anthropic");
@@ -340,7 +354,11 @@ function ProfileSheet({
   React.useEffect(() => {
     if (!open) return;
     setName(profile?.name ?? "");
-    setFormat(profile?.format === "openai" || profile?.format === "openai-responses" || profile?.format === "jev" ? profile.format : "anthropic");
+    setFormat(
+      profile?.format === "openai" || profile?.format === "openai-responses" || profile?.format === "jev"
+        ? profile.format
+        : "anthropic",
+    );
     setModel(profile?.model ?? (profile?.format === "jev" ? "jev-latest" : ""));
     setBaseUrl(profile?.base_url ?? "");
     setProxy(profile?.proxy ?? "");
@@ -373,12 +391,12 @@ function ProfileSheet({
       if (r.ok && r.models && r.models.length > 0) {
         setModels(r.models);
         setModelsOpen(true);
-        toast.success(`已加载 ${r.models.length} 个模型`);
+        toast.success(ui("screen.cba1025637836d", { v0: r.models.length }));
       } else {
-        toast.error(`加载模型失败：${r.error ?? "未获取到模型"}`);
+        toast.error(ui("screen.72346c6155f559", { v0: r.error ?? ui("screen.093bf588b825d2") }));
       }
     } catch (e) {
-      toast.error(`加载模型出错：${(e as Error).message}`);
+      toast.error(ui("screen.bf7c248d779cd7", { v0: (e as Error).message }));
     } finally {
       setLoadingModels(false);
     }
@@ -404,12 +422,12 @@ function ProfileSheet({
       );
       // 回复内容一并展示：看得见模型确实说了话，才算和会话里跑通是一回事。
       if (r.ok)
-        toast.success(`连接成功 · ${r.latency_ms ?? "?"}ms · ${r.model ?? model}`, {
-          description: r.reply ? `回复：${r.reply}` : undefined,
+        toast.success(ui("screen.93d5dd1011a40a", { v0: r.latency_ms ?? "?", v1: r.model ?? model }), {
+          description: r.reply ? ui("screen.38982edd7ce6f4", { v0: r.reply }) : undefined,
         });
-      else toast.error(`连接失败：${r.error ?? "未知"}`);
+      else toast.error(ui("screen.a94694b2dddf55", { v0: r.error ?? ui("screen.4d8c1c5b428307") }));
     } catch (e) {
-      toast.error(`测试出错：${(e as Error).message}`);
+      toast.error(ui("screen.51787f607cb79a", { v0: (e as Error).message }));
     } finally {
       setTesting(false);
     }
@@ -417,7 +435,7 @@ function ProfileSheet({
 
   async function save() {
     if (!name.trim() || !model.trim()) {
-      toast.error("请填写名称与模型");
+      toast.error(ui("screen.423920e9ada105"));
       return;
     }
     if (saving) return;
@@ -446,12 +464,12 @@ function ProfileSheet({
         session_header_key: sessionHeaderKey.trim(),
         retry,
       });
-      if (isNew) toast.success(`已新建：${name.trim()}（在卡片上「设为激活」以启用）`);
-      else toast.success(profile?.is_default ? "已保存，激活配置即时生效，无需重启" : "已保存");
+      if (isNew) toast.success(ui("screen.f829d810ba52c6", { v0: name.trim() }));
+      else toast.success(profile?.is_default ? ui("screen.99d4670a4b1381") : ui("screen.1bd91a7d0c53c9"));
       onSaved(String(id));
       onOpenChange(false);
     } catch (e) {
-      toast.error(`保存失败：${(e as Error).message}`);
+      toast.error(ui("screen.20e1b0f2590bc7", { v0: (e as Error).message }));
     } finally {
       setSaving(false);
     }
@@ -465,53 +483,52 @@ function ProfileSheet({
       >
         <SheetHeader className="px-4">
           <SheetTitle className="flex items-center gap-2">
-            {isNew ? "新建模型配置" : `编辑：${profile?.name}`}
+            {isNew ? ui("screen.98379af19aac76") : ui("screen.ba67c9a95861d5", { v0: profile?.name })}
             {profile?.is_default && (
               <Badge variant="outline" className="border-amber-400/50 text-amber-500">
-                激活中
+                {ui("screen.4f056f1db6711a")}
               </Badge>
             )}
           </SheetTitle>
-          <SheetDescription>
-            {isNew
-              ? "新建后不会自动激活，请在卡片上「设为激活」以启用。"
-              : "修改后点击保存；激活配置保存后对全部 Agent 立即生效。"}
-          </SheetDescription>
+          <SheetDescription>{isNew ? ui("screen.2b515ad30ad7d6") : ui("screen.ed62b89f2cd7f3")}</SheetDescription>
         </SheetHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
-              <Label htmlFor="p-name">名称</Label>
+              <Label htmlFor="p-name">{ui("screen.d44e9b3d3b31d3")}</Label>
               <Input
                 id="p-name"
-                placeholder="例如：OpenAI 生产"
+                placeholder={ui("screen.a6bf40aad8ffb3")}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
             <div className="grid gap-2">
-              <Label>格式</Label>
-              <Select value={format} onValueChange={(v) => {
-                const next = v as "anthropic" | "openai" | "openai-responses" | "jev";
-                setFormat(next);
-                if (next === "jev" && !model.trim()) setModel("jev-latest");
-              }}>
+              <Label>{ui("screen.0e8b1c78c5f335")}</Label>
+              <Select
+                value={format}
+                onValueChange={(v) => {
+                  const next = v as "anthropic" | "openai" | "openai-responses" | "jev";
+                  setFormat(next);
+                  if (next === "jev" && !model.trim()) setModel("jev-latest");
+                }}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="选择格式" />
+                  <SelectValue placeholder={ui("screen.8a9eac0ac485ca")} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="anthropic">Anthropic</SelectItem>
                   <SelectItem value="openai">OpenAI (Chat Completions)</SelectItem>
                   <SelectItem value="openai-responses">OpenAI (Responses API)</SelectItem>
-                  <SelectItem value="jev">Jev / System One（仅拦截判定）</SelectItem>
+                  <SelectItem value="jev">{ui("screen.1959e996efa50a")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="p-model">模型</Label>
+            <Label htmlFor="p-model">{ui("screen.c98e118e0a43f0")}</Label>
             <div className="flex gap-2">
               <Input
                 id="p-model"
@@ -531,7 +548,7 @@ function ProfileSheet({
                     className="shrink-0"
                     disabled={loadingModels}
                     onClick={loadModels}
-                    title="从 API 加载可用模型"
+                    title={ui("screen.8df45c6e6154da")}
                   >
                     {loadingModels ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
                   </Button>
@@ -556,12 +573,15 @@ function ProfileSheet({
               </Popover>
             </div>
             {format === "jev" && (
-              <p className="text-muted-foreground text-xs">Jev / System One 支持加载账号可用模型，默认模型为 <code className="font-mono">jev-latest</code>。</p>
+              <p className="text-muted-foreground text-xs">
+                {ui("screen.2b226df50885ba")}
+                <code className="font-mono">jev-latest</code>。
+              </p>
             )}
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="p-base-url">Base URL（可选）</Label>
+            <Label htmlFor="p-base-url">{ui("screen.d1200d4f462127")}</Label>
             <Input
               id="p-base-url"
               className="font-mono"
@@ -572,7 +592,7 @@ function ProfileSheet({
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="p-proxy">代理（可选）</Label>
+            <Label htmlFor="p-proxy">{ui("screen.a9b70f38a45cde")}</Label>
             <Input
               id="p-proxy"
               className="font-mono"
@@ -580,25 +600,22 @@ function ProfileSheet({
               value={proxy}
               onChange={(e) => setProxy(e.target.value)}
             />
-            <p className="text-muted-foreground text-xs">
-              仅 LLM 出站请求走此代理，支持 http/https/socks5，可带账号密码（如
-              socks5://user:pass@host:port，密码含特殊字符需 URL 编码）；留空表示不使用代理（直连）。
-            </p>
+            <p className="text-muted-foreground text-xs">{ui("screen.e65751b638de61")}</p>
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="p-session-header">自定义会话头（可选）</Label>
+            <Label htmlFor="p-session-header">{ui("screen.8d524f0d5c5951")}</Label>
             <Input
               id="p-session-header"
               className="font-mono"
-              placeholder="如 x-session-id（留空=不发送）"
+              placeholder={ui("screen.61e2ed5f4d43e5")}
               value={sessionHeaderKey}
               onChange={(e) => setSessionHeaderKey(e.target.value)}
             />
             <p className="text-muted-foreground text-xs">
-              填写头名后，每次请求都会带上这个 HTTP 头，头值自动填为 <b>当前会话的 session id</b>（chat 会话如
-              conv-12、worker 如 exp3-worker-i87）。用于按 session-id 头做提示缓存 /
-              粘性路由的网关；同一会话多轮稳定、不同会话互不相同。留空则不发送。
+              {ui("screen.b71d704f632bf3")}
+              <b>{ui("screen.b6b1d20850b049")}</b>
+              {ui("screen.ce053ce3d5ec1a")}
             </p>
           </div>
 
@@ -607,7 +624,7 @@ function ProfileSheet({
             <Input
               id="p-api-key"
               type="password"
-              placeholder={keyHint ? `已设置（${keyHint}），留空保持不变` : "sk-…"}
+              placeholder={keyHint ? ui("screen.d717c6180a8bd7", { v0: keyHint }) : "sk-…"}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />
@@ -615,15 +632,15 @@ function ProfileSheet({
 
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="grid gap-2">
-              <Label htmlFor="p-rps">每秒限速</Label>
+              <Label htmlFor="p-rps">{ui("screen.5056d3f98eb0a0")}</Label>
               <Input id="p-rps" type="number" min={0} value={rps} onChange={(e) => setRps(e.target.value)} />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="p-rpm">每分钟限速</Label>
+              <Label htmlFor="p-rpm">{ui("screen.88748996a5c2b6")}</Label>
               <Input id="p-rpm" type="number" min={0} value={rpm} onChange={(e) => setRpm(e.target.value)} />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="p-cw">上下文窗口(K)</Label>
+              <Label htmlFor="p-cw">{ui("screen.cecf4a065e4c78")}</Label>
               <Input
                 id="p-cw"
                 type="number"
@@ -635,20 +652,15 @@ function ProfileSheet({
               />
             </div>
           </div>
-          <p className="-mt-2 text-muted-foreground text-xs">
-            限速 0 = 不限，全 Agent 共享。上下文窗口单位 K（千 token），0 = 默认 200K，上限 1000（即
-            1M）；设太高会导致压缩不触发。
-          </p>
+          <p className="-mt-2 text-muted-foreground text-xs">{ui("screen.1307d9b7f2242d")}</p>
 
           <div className="grid gap-3 rounded-lg border p-3">
             <div className="flex items-center justify-between gap-4">
               <div className="grid gap-0.5">
                 <Label htmlFor="p-priority" className="text-sm">
-                  轮询优先级
+                  {ui("screen.06291dedde05ce")}
                 </Label>
-                <p className="text-muted-foreground text-xs">
-                  数字越大越先被选中；激活配置恒为第 1 顺位，与本值无关。相同优先级的配置会轮流打头，天然分摊额度。
-                </p>
+                <p className="text-muted-foreground text-xs">{ui("screen.0f940d8051631f")}</p>
               </div>
               <Input
                 id="p-priority"
@@ -660,24 +672,17 @@ function ProfileSheet({
             </div>
             <div className="flex items-center justify-between gap-4 border-t pt-3">
               <div className="grid gap-0.5">
-                <Label className="text-sm">不参与轮询</Label>
-                <p className="text-muted-foreground text-xs">
-                  开启后不会被当作故障转移目标（仍可被 Agent / 任务显式指定使用）。 适合「只给某个 Agent
-                  专用、不希望别人失败时烧掉」的昂贵配置。
-                </p>
+                <Label className="text-sm">{ui("screen.91dc49e5d5ca23")}</Label>
+                <p className="text-muted-foreground text-xs">{ui("screen.ea107b0bebccd2")}</p>
               </div>
-              <Switch checked={poolExclude} onCheckedChange={setPoolExclude} aria-label="不参与轮询" />
+              <Switch checked={poolExclude} onCheckedChange={setPoolExclude} aria-label={ui("screen.91dc49e5d5ca23")} />
             </div>
             <div className="flex items-center justify-between gap-4 border-t pt-3">
               <div className="grid gap-0.5">
-                <Label className="text-sm">流式输出 · streaming</Label>
-                <p className="text-muted-foreground text-xs">
-                  开启（默认）走流式 SSE，有运行中实时进度与实时 token 计数。 关闭则走真·非流式（stream:false，
-                  一次性返回完整响应）——可绕开部分网关糟糕的 SSE 实现（空帧 / 思考字段丢帧），
-                  代价是失去运行中的实时进度。
-                </p>
+                <Label className="text-sm">{ui("screen.d018137e5c29ca")}</Label>
+                <p className="text-muted-foreground text-xs">{ui("screen.f390431c7b9d51")}</p>
               </div>
-              <Switch checked={streaming} onCheckedChange={setStreaming} aria-label="流式输出" />
+              <Switch checked={streaming} onCheckedChange={setStreaming} aria-label={ui("screen.c65e6c6ea8ca51")} />
             </div>
           </div>
 
@@ -685,13 +690,9 @@ function ProfileSheet({
             <div className="flex items-center justify-between gap-4">
               <div className="grid gap-0.5">
                 <Label htmlFor="p-max-tokens" className="text-sm">
-                  输出上限 · max tokens
+                  {ui("screen.8f5eff776ea80b")}
                 </Label>
-                <p className="text-muted-foreground text-xs">
-                  单次回复最多生成多少 token，随每次请求发出。0（默认）= 不发送该字段，由服务端默认值决定。
-                  这与上面的「上下文窗口」是两回事：那是模型总容量，只在本地用来算压缩阈值。
-                  设太小会让推理模型在思考阶段就被截断，一个字答案都出不来。
-                </p>
+                <p className="text-muted-foreground text-xs">{ui("screen.30681a7feec710")}</p>
               </div>
               <Input
                 id="p-max-tokens"
@@ -705,8 +706,8 @@ function ProfileSheet({
             </div>
             <div className="flex items-center justify-between gap-4 border-t pt-3">
               <div className="grid gap-0.5">
-                <Label className="text-sm">上限字段名</Label>
-                <p className="text-muted-foreground text-xs">{MAX_TOKENS_FIELD_HINTS[format]}</p>
+                <Label className="text-sm">{ui("screen.8928d6ea882585")}</Label>
+                <p className="text-muted-foreground text-xs">{MAX_TOKENS_FIELD_HINTS(ui)[format]}</p>
               </div>
               <Select
                 value={format === "openai" ? maxTokensField : NONE}
@@ -717,7 +718,7 @@ function ProfileSheet({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {MAX_TOKENS_FIELDS.map((o) => (
+                  {MAX_TOKENS_FIELDS(ui).map((o) => (
                     <SelectItem key={o.value} value={o.value}>
                       {o.label}
                     </SelectItem>
@@ -730,18 +731,15 @@ function ProfileSheet({
           <div className="grid gap-3 rounded-lg border p-3">
             <div className="flex items-center justify-between gap-4">
               <div className="grid gap-0.5">
-                <Label className="text-sm">思考开关 · thinking.type</Label>
-                <p className="text-muted-foreground text-xs">
-                  控制是否发送 thinking 字段。不发送=不带该字段（兼容 MiniMax 等不支持 的模型）；关闭=发
-                  disabled；开启=发 enabled。与下面的强度互相独立。
-                </p>
+                <Label className="text-sm">{ui("screen.2b3cb23e2fac87")}</Label>
+                <p className="text-muted-foreground text-xs">{ui("screen.3937928bb46ddd")}</p>
               </div>
               <Select value={thinkingType} onValueChange={setThinkingType}>
                 <SelectTrigger className="w-32 shrink-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {THINKING_TYPES.map((o) => (
+                  {THINKING_TYPES(ui).map((o) => (
                     <SelectItem key={o.value} value={o.value}>
                       {o.label}
                     </SelectItem>
@@ -751,18 +749,15 @@ function ProfileSheet({
             </div>
             <div className="flex items-center justify-between gap-4 border-t pt-3">
               <div className="grid gap-0.5">
-                <Label className="text-sm">思考强度 · reasoning_effort</Label>
-                <p className="text-muted-foreground text-xs">
-                  独立的强度档位（OpenAI reasoning_effort / Anthropic output_config.effort）。 有些接口没有 thinking
-                  字段、只靠强度即可激活思考，故可单独设置、不发送思考开关。
-                </p>
+                <Label className="text-sm">{ui("screen.3357601c368024")}</Label>
+                <p className="text-muted-foreground text-xs">{ui("screen.dcbb23dc9258c8")}</p>
               </div>
               <Select value={effort} onValueChange={setEffort}>
                 <SelectTrigger className="w-32 shrink-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {EFFORT_LEVELS.map((o) => (
+                  {EFFORT_LEVELS(ui).map((o) => (
                     <SelectItem key={o.value} value={o.value}>
                       {o.label}
                     </SelectItem>
@@ -778,12 +773,12 @@ function ProfileSheet({
         <div className="flex gap-2 border-t px-4 py-3">
           <Button variant="outline" onClick={testConnection} disabled={testing}>
             {testing ? <Loader2Icon className="animate-spin" /> : <PlugZapIcon />}
-            {testing ? "测试中…" : "测试连接"}
+            {testing ? ui("screen.105a9082c346f9") : ui("screen.0a98a48eaaac41")}
           </Button>
           <Button onClick={save} disabled={saving} className="flex-1">
             {saving && <Loader2Icon className="animate-spin" />}
             {!saving && (isNew ? <PlusIcon /> : <SaveIcon />)}
-            {isNew ? "新建" : "保存"}
+            {isNew ? ui("screen.50ef2f4cf6a469") : ui("screen.a3030bf8f16dc6")}
           </Button>
         </div>
       </SheetContent>
@@ -794,6 +789,8 @@ function ProfileSheet({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function LLMPage() {
+  const { ui } = useUITranslation();
+
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [pool, setPool] = React.useState<LLMPoolStatus | null>(null);
   const [poolOpen, setPoolOpen] = React.useState(false);
@@ -837,24 +834,24 @@ export default function LLMPage() {
   async function activate(id: string, name: string) {
     try {
       await api.activateLLMProfile(id);
-      toast.success(`已激活：${name}`);
+      toast.success(ui("screen.9656bea09ffebb", { v0: name }));
       await load();
     } catch (e) {
-      toast.error(`激活失败：${(e as Error).message}`);
+      toast.error(ui("screen.183c05557317c6", { v0: (e as Error).message }));
     }
   }
 
   async function remove(p: LLMProfile) {
     if (p.is_default) {
-      toast.error("无法删除当前激活的配置");
+      toast.error(ui("screen.0ff5af7ae5d53c"));
       return;
     }
     try {
       await api.deleteLLMProfile(p.id);
-      toast.success(`已删除：${p.name}`);
+      toast.success(ui("screen.e196bc4beeeaad", { v0: p.name }));
       await load();
     } catch (e) {
-      toast.error(`删除失败：${(e as Error).message}`);
+      toast.error(ui("screen.77dcc9d08e857c", { v0: (e as Error).message }));
     }
   }
 
@@ -865,35 +862,33 @@ export default function LLMPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-semibold text-xl tracking-tight">LLM</h1>
-          <p className="text-muted-foreground text-sm">
-            全 Agent 共享的格式 / 模型 / 限速配置。点击卡片编辑，星标为当前激活配置。
-          </p>
+          <p className="text-muted-foreground text-sm">{ui("screen.2599dbd3765970")}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setPoolOpen(true)}>
-            <ZapIcon /> 轮询配置
+            <ZapIcon /> {ui("screen.a3ae904222e90f")}
             {poolOn && (
               <Badge variant="outline" className="ml-1 border-emerald-500/50 text-emerald-600 dark:text-emerald-400">
-                已开启
+                {ui("screen.8a4ef3e48e4e8a")}
               </Badge>
             )}
           </Button>
           <Button size="sm" variant="outline" onClick={() => openEditor(null)}>
-            <PlusIcon /> 新建
+            <PlusIcon /> {ui("screen.50ef2f4cf6a469")}
           </Button>
         </div>
       </div>
 
       <Tabs defaultValue="profiles" className="flex-1">
         <TabsList>
-          <TabsTrigger value="profiles">模型配置</TabsTrigger>
-          <TabsTrigger value="retry">重试与退避</TabsTrigger>
+          <TabsTrigger value="profiles">{ui("screen.8cbcf741e727db")}</TabsTrigger>
+          <TabsTrigger value="retry">{ui("screen.939dba970cbff9")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profiles" className="mt-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {profiles.map((p) => {
-              const h = healthOf(p, health.get(p.id));
+              const h = healthOf(p, health.get(p.id), ui);
               return (
                 // biome-ignore lint/a11y/useSemanticElements: 卡片内含自己的操作按钮，用原生 <button> 会造成按钮嵌套（非法 HTML）
                 <Card
@@ -939,14 +934,29 @@ export default function LLMPage() {
                       <span>
                         {p.rate_per_second}/s · {p.rate_per_minute}/min
                       </span>
-                      {p.proxy && <span className="truncate">代理 {p.proxy}</span>}
+                      {p.proxy && (
+                        <span className="truncate">
+                          {ui("screen.5e84ea61e8386a")}
+                          {p.proxy}
+                        </span>
+                      )}
                       {p.reasoning_effort && (
-                        <span>思考 {p.reasoning_effort === "off" ? "关" : p.reasoning_effort}</span>
+                        <span>
+                          {ui("screen.8cf0105d35ee8d")}
+                          {p.reasoning_effort === "off" ? ui("screen.5d0ae622f61f8e") : p.reasoning_effort}
+                        </span>
                       )}
                       {/* 轮询相关的两个字段只在轮询开着时才有意义，关着时不占版面 */}
                       {poolOn &&
                         !p.is_default &&
-                        (p.pool_exclude ? <span>不参与轮询</span> : <span>优先级 {p.priority ?? 0}</span>)}
+                        (p.pool_exclude ? (
+                          <span>{ui("screen.91dc49e5d5ca23")}</span>
+                        ) : (
+                          <span>
+                            {ui("screen.565d64601d4d17")}
+                            {p.priority ?? 0}
+                          </span>
+                        ))}
                     </div>
 
                     <div className="mt-1 flex gap-2">
@@ -960,12 +970,16 @@ export default function LLMPage() {
                           void activate(p.id, p.name);
                         }}
                       >
-                        {p.is_default ? "已激活" : p.format === "jev" ? "判定专用" : "设为激活"}
+                        {p.is_default
+                          ? ui("screen.8f3c822f08add5")
+                          : p.format === "jev"
+                            ? ui("screen.a50267496fb58e")
+                            : ui("screen.4b670950419567")}
                       </Button>
                       <Button
                         size="icon"
                         variant="outline"
-                        aria-label="删除配置"
+                        aria-label={ui("screen.49b82b04bd1a7d")}
                         onClick={(e) => {
                           e.stopPropagation();
                           void remove(p);
@@ -980,7 +994,7 @@ export default function LLMPage() {
             })}
             {profiles.length === 0 && (
               <div className="col-span-full rounded-lg border border-dashed p-10 text-center text-muted-foreground text-sm">
-                还没有模型配置，点击右上角「新建」创建第一个。
+                {ui("screen.39aa348a5b607d")}
               </div>
             )}
           </div>

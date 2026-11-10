@@ -36,6 +36,8 @@ import type {
 } from "../types";
 import { MAX_TASK_REMARK_RUNES, MAX_TASK_WORKER_COUNT } from "../types";
 import * as D from "./data";
+import { createMockNotifications } from "./notifications";
+import { createMockSchedules } from "./schedules";
 
 const delay = (ms = 120) => new Promise((r) => setTimeout(r, ms));
 
@@ -50,6 +52,8 @@ const mockLLMRecords = structuredClone(D.llmRecords);
 const mockTaskTemplates = structuredClone(D.taskTemplates);
 const mockTaskCategories = structuredClone(D.taskCategories);
 const mockConversations = structuredClone(D.conversations);
+const mockNotifications = createMockNotifications();
+const mockSchedules = createMockSchedules();
 const mockRetests: FindingRetest[] = [];
 const mockRetestMessages: Record<number, Activity[]> = {};
 
@@ -253,6 +257,7 @@ function mockTaskArchiveBlocker(taskID: string): string | undefined {
 
 function publicMockTask(task: Task): Task {
   const item = structuredClone(task);
+  item.numeric_id = mockTaskAssetIDs.get(task.id);
   item.share_global_assets = task.share_global_assets ?? false;
   const blocker = mockTaskArchiveBlocker(task.id);
   if (blocker) item.archive_blocked_by_task_id = blocker;
@@ -953,7 +958,8 @@ function controlMockTask(id: string, action: "pause" | "resume"): BatchControlIt
     task.status = "paused";
     task.engine_mode = "paused";
     if (task.run_segment_started_unix && task.run_segment_started_unix > 0) {
-      task.active_run_seconds = (task.active_run_seconds ?? 0) + Math.max(0, Math.floor(Date.now() / 1000) - task.run_segment_started_unix);
+      task.active_run_seconds =
+        (task.active_run_seconds ?? 0) + Math.max(0, Math.floor(Date.now() / 1000) - task.run_segment_started_unix);
       task.run_seconds = task.active_run_seconds;
     }
     task.run_segment_started_unix = 0;
@@ -1054,6 +1060,31 @@ export async function mockHandle<T>(method: string, rawPath: string, body?: Body
 
 function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Record<string, unknown>): unknown {
   const task = q.get("task") ?? undefined;
+
+  if (seg[0] === "schedules") return mockSchedules(m, path, b, new Set(mockTaskAssetIDs.values()));
+
+  if (seg[0] === "notify") return mockNotifications(m, path, q, b, D.settings);
+
+  // No intelligence is generated in the preview. Return the real list contract
+  // for both entry points instead of falling through to the generic {} reply.
+  if ((seg[0] === "tasks" || seg[0] === "assets") && seg[2] === "intelligence") {
+    const exists =
+      seg[0] === "tasks"
+        ? mockTasks.some((item) => item.id === seg[1] || mockTaskAssetID(item.id) === Number(seg[1]))
+        : mockAssets.some((item) => item.id === Number(seg[1]));
+    if (!exists) throw new Error("任务或资产不存在");
+    if (m === "GET" && seg.length === 3) {
+      return {
+        items: [],
+        total: 0,
+        counts: { credential: 0, lead: 0, sensitive_data: 0 },
+        enabled: D.settings.task_intelligence_enabled,
+        credential_agent_enabled: D.settings.credential_agent_enabled,
+        credential_traffic_binding: D.settings.credential_agent_enabled && D.settings.credential_traffic_binding,
+      };
+    }
+    throw new Error("情报不存在或不属于当前范围");
+  }
 
   // The demo client still expects the complete repeater response shape. No
   // network request is made in mock mode, but returning the shape keeps the
@@ -1275,7 +1306,17 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       company_ids: companyIDs,
       share_global_assets: b.share_global_assets === true,
     };
-    const numericTaskID = nextMockTaskAssetID++;
+    // Validate the attached preview schedule before mutating task state.
+    const numericTaskID = nextMockTaskAssetID;
+    if (b.schedule && typeof b.schedule === "object") {
+      mockSchedules(
+        "POST",
+        "/schedules",
+        { ...b.schedule, task_ids: [numericTaskID] },
+        new Set([...mockTaskAssetIDs.values(), numericTaskID]),
+      );
+    }
+    nextMockTaskAssetID++;
     mockTaskAssetIDs.set(id, numericTaskID);
     const selectedCompanies = new Set(companyIDs);
     for (const asset of mockAssets) {
@@ -1402,7 +1443,7 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (seg[0] === "task-templates" && seg.length === 2 && m === "PATCH") {
     const template = mockTaskTemplates.find((item) => item.id === Number(seg[1]));
     if (!template) return {};
-    const has = (key: string) => Object.prototype.hasOwnProperty.call(b, key);
+    const has = (key: string) => Object.hasOwn(b, key);
     const nameValue = has("name") ? mockStringField(b.name, "模板名称") : undefined;
     const descriptionValue = has("description") ? mockStringField(b.description, "模板描述") : undefined;
     const goalValue = has("goal") ? mockStringField(b.goal, "模板目标") : undefined;
@@ -1411,7 +1452,8 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       throw new Error("intercept_rules 必须是数组");
     }
     const name = nameValue === undefined || b.name === null ? template.name : normalizedTemplateName(nameValue);
-    const description = descriptionValue === undefined || b.description === null ? template.description : descriptionValue.trim();
+    const description =
+      descriptionValue === undefined || b.description === null ? template.description : descriptionValue.trim();
     const goal = goalValue === undefined || b.goal === null ? template.goal : goalValue.trim();
     if (!name || !description || !goal) throw new Error("请填写模板名称、描述和目标");
     if (
@@ -1458,16 +1500,18 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (seg[0] === "tasks" && seg.length === 2 && m === "PATCH") {
     const task = mockTasks.find((item) => item.id === seg[1]);
     if (!task) throw new Error("任务不存在");
-    const has = (key: string) => Object.prototype.hasOwnProperty.call(b, key);
+    const has = (key: string) => Object.hasOwn(b, key);
     if (has("name") && b.name !== null && typeof b.name !== "string") throw new Error("任务名称必须是字符串");
     if (has("remark") && b.remark !== null && typeof b.remark !== "string") throw new Error("备注必须是字符串");
     if (has("pinned") && b.pinned !== null && typeof b.pinned !== "boolean") throw new Error("pinned 必须是布尔值");
-    if (has("share_global_assets") && b.share_global_assets !== null && typeof b.share_global_assets !== "boolean") throw new Error("share_global_assets 必须是布尔值");
+    if (has("share_global_assets") && b.share_global_assets !== null && typeof b.share_global_assets !== "boolean")
+      throw new Error("share_global_assets 必须是布尔值");
     const sharingPresent = has("share_global_assets") && b.share_global_assets !== null;
     const namePresent = has("name") && b.name !== null;
     const remarkPresent = has("remark") && b.remark !== null;
     const pinnedPresent = has("pinned") && b.pinned !== null;
-    if (!namePresent && !remarkPresent && !pinnedPresent && !sharingPresent) throw new Error("至少需要提供 name、pinned、remark 或 share_global_assets");
+    if (!namePresent && !remarkPresent && !pinnedPresent && !sharingPresent)
+      throw new Error("至少需要提供 name、pinned、remark 或 share_global_assets");
     let nextName = task.name;
     let nextRemark = task.remark;
     let nextPinned = task.pinned;
@@ -2389,7 +2433,9 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   }
   if (path === "/settings/basic-auth" && m === "GET") return { enabled: false, username: "", password_set: false };
   if (path === "/settings/basic-auth" && m === "PUT")
-    throw new Error("演示模式不支持修改 HTTP Basic Auth，请在实际部署中配置");
+    throw Object.assign(new Error("演示模式不支持修改 HTTP Basic Auth，请在实际部署中配置"), {
+      code: "demo_basic_auth_disabled",
+    });
   if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };
   if (path === "/settings/proxy/test")
     return {
@@ -2408,17 +2454,33 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
           label: "② 经全局代理的出口 IP",
           skipped: true,
           skip_reason: "输入框为空，未配置代理",
+          skip_code: "no_proxy",
           result: { ok: false, latency_ms: 0, probes: [] },
         },
       ],
       warnings: [],
     };
-  if (path === "/settings/proxy-pool" && m === "GET") return { entries: D.settings.proxy_pool ?? [], active_id: D.settings.proxy_pool_active_id ?? "", active_proxy: D.settings.global_proxy ?? "", switch_log: [] };
-  if (path === "/settings/proxy-pool/import" && m === "POST") return { entries: D.settings.proxy_pool ?? [], active_id: D.settings.proxy_pool_active_id ?? "", switch_log: [], errors: [] };
-  if (path === "/settings/proxy-pool/test-all" && m === "POST") return { entries: D.settings.proxy_pool ?? [], active_id: D.settings.proxy_pool_active_id ?? "", switch_log: [] };
-  if (path.startsWith("/settings/proxy-pool/") && m === "PUT") return { entry: { ...(D.settings.proxy_pool ?? []).find((x) => x.id === path.split("/").at(-1)), ...b } };
+  if (path === "/settings/proxy-pool" && m === "GET")
+    return {
+      entries: D.settings.proxy_pool ?? [],
+      active_id: D.settings.proxy_pool_active_id ?? "",
+      active_proxy: D.settings.global_proxy ?? "",
+      switch_log: [],
+    };
+  if (path === "/settings/proxy-pool/import" && m === "POST")
+    return {
+      entries: D.settings.proxy_pool ?? [],
+      active_id: D.settings.proxy_pool_active_id ?? "",
+      switch_log: [],
+      errors: [],
+    };
+  if (path === "/settings/proxy-pool/test-all" && m === "POST")
+    return { entries: D.settings.proxy_pool ?? [], active_id: D.settings.proxy_pool_active_id ?? "", switch_log: [] };
+  if (path.startsWith("/settings/proxy-pool/") && m === "PUT")
+    return { entry: { ...(D.settings.proxy_pool ?? []).find((x) => x.id === path.split("/").at(-1)), ...b } };
   if (path.startsWith("/settings/proxy-pool/") && m === "DELETE") return { ok: true };
-  if (path.startsWith("/settings/proxy-pool/") && m === "POST") return { ok: true, active_id: path.split("/").at(-1), active_proxy: "" };
+  if (path.startsWith("/settings/proxy-pool/") && m === "POST")
+    return { ok: true, active_id: path.split("/").at(-1), active_proxy: "" };
   if (path === "/settings/python/detect") return { python_interpreter: "/usr/bin/python3" };
   if (path === "/chat")
     return { reply: "（demo）我已把该建议注入为一条高优意图，work agent 会尽快执行。", mode: "hint" };

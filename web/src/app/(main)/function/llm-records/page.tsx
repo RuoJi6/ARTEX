@@ -1,18 +1,19 @@
 "use client";
-
 import * as React from "react";
+
 import {
-  RadioIcon,
-  SearchIcon,
+  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  Loader2Icon,
-  XIcon,
-  Trash2Icon,
   CopyIcon,
-  CheckIcon,
+  Loader2Icon,
+  RadioIcon,
+  SearchIcon,
+  Trash2Icon,
+  XIcon,
 } from "lucide-react";
 
+import { HttpPacketSyntax } from "@/components/http-code-block";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,21 +24,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { HttpPacketSyntax } from "@/components/http-code-block";
-import { cn } from "@/lib/utils";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
-import type { LLMRecordItem, LLMRecordDetail, LLMTask } from "@/lib/types";
+import type { LLMRecordDetail, LLMRecordItem, LLMTask } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
-function fmtTime(ts: string) {
-  return new Date(ts).toLocaleString("zh-CN", {
+function fmtTime(ts: string, ui: UITranslate) {
+  return new Date(ts).toLocaleString(ui("screen.91610255157661"), {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -66,6 +66,8 @@ function tryFormatJSON(s: string): string {
 
 // 复制当前框内文本的小按钮。复制成功后短暂显示对勾。text 为空/仅占位符时禁用。
 function CopyButton({ text }: { text: string }) {
+  const { ui } = useUITranslation();
+
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   React.useEffect(
@@ -106,7 +108,7 @@ function CopyButton({ text }: { text: string }) {
       size="icon"
       className="size-5 shrink-0"
       disabled={disabled}
-      title={copied ? "已复制" : "复制内容"}
+      title={copied ? ui("screen.8f6f8d979c981c") : ui("screen.15a22a4015496e")}
       onClick={copy}
     >
       {copied ? <CheckIcon className="size-3 text-emerald-600" /> : <CopyIcon className="size-3" />}
@@ -117,6 +119,8 @@ function CopyButton({ text }: { text: string }) {
 const PAGE_SIZES = [25, 50, 100];
 
 export default function LLMRecordsPage() {
+  const { ui } = useUITranslation();
+
   const [page, setPage] = React.useState(0);
   const [size, setSize] = React.useState(50);
   const [session, setSession] = React.useState("");
@@ -275,7 +279,7 @@ export default function LLMRecordsPage() {
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <RadioIcon className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-xl font-semibold tracking-tight">LLM 录制</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{ui("screen.13d91ca2425df8")}</h1>
           <Badge variant="secondary">{total}</Badge>
         </div>
       </div>
@@ -285,7 +289,7 @@ export default function LLMRecordsPage() {
         <div className="relative max-w-sm flex-1">
           <SearchIcon className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="搜索 Session ID..."
+            placeholder={ui("screen.1d657e2e360859")}
             value={session}
             onChange={(e) => setSession(e.target.value)}
             className="h-8 pl-8"
@@ -294,18 +298,22 @@ export default function LLMRecordsPage() {
         <Input placeholder="Model" className="h-8 w-48" value={model} onChange={(e) => setModel(e.target.value)} />
         <Select value={pickedTask} onValueChange={setPickedTask}>
           <SelectTrigger size="sm" className="w-56">
-            <SelectValue placeholder="选择任务…" />
+            <SelectValue placeholder={ui("screen.09d99720f8d526")} />
           </SelectTrigger>
           <SelectContent>
             {tasks.length === 0 ? (
               <SelectItem value="__none__" disabled>
-                暂无任务记录
+                {ui("screen.e393f849bfa17d")}
               </SelectItem>
             ) : (
               tasks.map((t) => (
                 <SelectItem key={t.task_id} value={t.task_id}>
                   <span className="font-mono">#{t.task_id}</span>
-                  <span className="ml-2 text-muted-foreground">（{t.count}）</span>
+                  <span className="ml-2 text-muted-foreground">
+                    {ui("punctuation.da047c04c9")}
+                    {t.count}
+                    {ui("punctuation.f2e44c6c95")}
+                  </span>
                 </SelectItem>
               ))
             )}
@@ -316,11 +324,11 @@ export default function LLMRecordsPage() {
           size="sm"
           className="h-8"
           disabled={!pickedTask || deleting}
-          title={pickedTask ? undefined : "先在上方选择任务"}
+          title={pickedTask ? undefined : ui("screen.b53228399bde7f")}
           onClick={() => setDeleteOpen(true)}
         >
           <Trash2Icon className="size-3.5" />
-          删除任务对话
+          {ui("screen.4031e9aeef8be4")}
         </Button>
         <Select value={String(size)} onValueChange={(v) => setSize(Number(v))}>
           <SelectTrigger size="sm" className="w-28">
@@ -329,7 +337,7 @@ export default function LLMRecordsPage() {
           <SelectContent>
             {PAGE_SIZES.map((n) => (
               <SelectItem key={n} value={String(n)}>
-                {n} / 页
+                {n} {ui("screen.785e3cd53901f4")}
               </SelectItem>
             ))}
           </SelectContent>
@@ -351,7 +359,7 @@ export default function LLMRecordsPage() {
               recEnabled ? "text-foreground" : "text-muted-foreground",
             )}
           >
-            {recEnabled ? "录制中" : "已关闭"}
+            {recEnabled ? ui("screen.2224a30ee2cdf9") : ui("screen.6744b4c6a9aa00")}
           </label>
         </div>
 
@@ -390,14 +398,14 @@ export default function LLMRecordsPage() {
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
-                  <TableHead className="w-[130px]">时间</TableHead>
-                  <TableHead className="w-[60px]">任务</TableHead>
+                  <TableHead className="w-[130px]">{ui("screen.8b6ff498515bcc")}</TableHead>
+                  <TableHead className="w-[60px]">{ui("screen.5253040db8643c")}</TableHead>
                   <TableHead className="w-[90px]">Worker</TableHead>
                   <TableHead className="w-[100px]">Profile</TableHead>
                   <TableHead className="w-[140px]">Model</TableHead>
-                  <TableHead className="w-[70px]">延迟</TableHead>
+                  <TableHead className="w-[70px]">{ui("screen.18045b8c40f135")}</TableHead>
                   <TableHead className="w-[90px]">Tokens</TableHead>
-                  <TableHead className="w-[60px]">状态</TableHead>
+                  <TableHead className="w-[60px]">{ui("screen.6320b4a8722a85")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -410,7 +418,7 @@ export default function LLMRecordsPage() {
                 ) : records.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="py-12 text-center text-sm text-muted-foreground">
-                      暂无 LLM 调用记录
+                      {ui("screen.d4b9daf8e0b415")}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -420,7 +428,9 @@ export default function LLMRecordsPage() {
                       className={cn("cursor-pointer", selected?.id === rec.id && "bg-accent hover:bg-accent")}
                       onClick={() => setSelected(rec)}
                     >
-                      <TableCell className="text-xs text-muted-foreground tabular-nums">{fmtTime(rec.ts)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground tabular-nums">
+                        {fmtTime(rec.ts, ui)}
+                      </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">
                         {rec.task_id ? `#${rec.task_id}` : "-"}
                       </TableCell>
@@ -480,10 +490,11 @@ export default function LLMRecordsPage() {
               </Badge>
               {selected.task_id && (
                 <Badge variant="outline" className="text-xs font-mono">
-                  任务 #{selected.task_id}
+                  {ui("screen.e5b1cc0dc459e5")}
+                  {selected.task_id}
                 </Badge>
               )}
-              <span className="text-xs text-muted-foreground">{fmtTime(selected.ts)}</span>
+              <span className="text-xs text-muted-foreground">{fmtTime(selected.ts, ui)}</span>
               <span className={cn("text-xs", selected.latency_ms > 30000 && "text-amber-500")}>
                 {fmtLatency(selected.latency_ms)}
               </span>
@@ -503,10 +514,10 @@ export default function LLMRecordsPage() {
                 size="sm"
                 className="ml-auto h-7 shrink-0 text-xs"
                 disabled={!hasRaw}
-                title={hasRaw ? "查看与 provider 实际收发的 HTTP 原文" : "该记录录制于此功能上线前，无原文"}
+                title={hasRaw ? ui("screen.19f79173a59136") : ui("screen.c482170f4a8b54")}
                 onClick={() => setRawView((v) => !v)}
               >
-                原文
+                {ui("screen.354b28c8533345")}
               </Button>
               <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={() => setSelected(null)}>
                 <XIcon />
@@ -516,32 +527,36 @@ export default function LLMRecordsPage() {
             <div className="grid min-h-0 flex-1 grid-cols-2 divide-x">
               <div className="flex min-h-0 min-w-0 flex-col">
                 <div className="flex items-center gap-2 border-b py-0.5 pr-1.5 pl-3 text-[11px] font-medium text-muted-foreground">
-                  <span>Request{showRaw && " · 原文"}</span>
+                  <span>Request{showRaw && ui("screen.9dfd168391d829")}</span>
                   <CopyButton text={reqText || ""} />
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   {detailLoading ? (
                     <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
                       <Loader2Icon className="size-3.5 animate-spin" />
-                      加载…
+                      {ui("screen.44acd119459d6d")}
                     </div>
                   ) : (
                     <pre className="p-3 font-mono text-xs break-all whitespace-pre-wrap">
-                      <HttpPacketSyntax raw={reqText || ""} lineNumbers={false} emptyFallback="（空）" />
+                      <HttpPacketSyntax
+                        raw={reqText || ""}
+                        lineNumbers={false}
+                        emptyFallback={ui("screen.fa8bc5e925f9f7")}
+                      />
                     </pre>
                   )}
                 </div>
               </div>
               <div className="flex min-h-0 min-w-0 flex-col">
                 <div className="flex items-center gap-2 border-b py-0.5 pr-1.5 pl-3 text-[11px] font-medium text-muted-foreground">
-                  <span>Response{showRaw && " · 原文（SSE）"}</span>
+                  <span>Response{showRaw && ui("screen.0513fa2ad8e0e3")}</span>
                   <CopyButton text={respText || ""} />
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   {detailLoading ? (
                     <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
                       <Loader2Icon className="size-3.5 animate-spin" />
-                      加载…
+                      {ui("screen.44acd119459d6d")}
                     </div>
                   ) : (
                     <pre
@@ -550,7 +565,11 @@ export default function LLMRecordsPage() {
                         selected.status !== "ok" && "text-red-600 dark:text-red-400",
                       )}
                     >
-                      <HttpPacketSyntax raw={respText || ""} lineNumbers={false} emptyFallback="（空）" />
+                      <HttpPacketSyntax
+                        raw={respText || ""}
+                        lineNumbers={false}
+                        emptyFallback={ui("screen.fa8bc5e925f9f7")}
+                      />
                     </pre>
                   )}
                 </div>
@@ -563,13 +582,15 @@ export default function LLMRecordsPage() {
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除任务「{pickedTask}」的全部 LLM 对话？</AlertDialogTitle>
-            <AlertDialogDescription>
-              将永久删除该任务的所有 LLM 调用记录（含请求/响应原文），此操作不可撤销。
-            </AlertDialogDescription>
+            <AlertDialogTitle>
+              {ui("screen.07cd328d25850f")}
+              {pickedTask}
+              {ui("screen.a5ccec9d6c5f26")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>{ui("screen.ff46200f4c43e8")}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleting}>{ui("screen.2cd0f3be8738a8")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
@@ -578,7 +599,7 @@ export default function LLMRecordsPage() {
               disabled={deleting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deleting ? "删除中…" : "确认删除"}
+              {deleting ? ui("screen.5e8e7af57abbcb") : ui("screen.a3ea3c17b401bd")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

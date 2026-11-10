@@ -21,6 +21,7 @@ export function parseWorkerCountInput(value: string): number | null {
 }
 
 export interface Task {
+  numeric_id?: number; // Underlying numeric identity when demo route IDs use aliases.
   distinct_findings?: FindingDistinctStats;
   id: string;
   remark?: string;
@@ -1059,7 +1060,12 @@ export interface ProxyPoolEntry {
   health: "healthy" | "unhealthy-cooling" | "disabled" | string;
 }
 
-export interface ProxySwitchLog { at: string; from: string; to: string; reason: string }
+export interface ProxySwitchLog {
+  at: string;
+  from: string;
+  to: string;
+  reason: string;
+}
 
 export interface WorkerPool {
   profile_id: string;
@@ -1956,6 +1962,7 @@ export interface EgressCheck {
   path?: string;
   skipped?: boolean;
   skip_reason?: string;
+  skip_code?: string;
   result: EgressProbeResult;
 }
 
@@ -1967,4 +1974,5 @@ export interface EgressReport {
   agent_proxy: string;
   checks: EgressCheck[];
   warnings?: string[];
+  warning_details?: { code: string; params?: Record<string, unknown>; message: string }[];
 }

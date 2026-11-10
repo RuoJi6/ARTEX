@@ -1,4 +1,5 @@
 "use client";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 
 // LLM 重试配置的共用件：五层重试各自的「次数 + 间隔」。
 //
@@ -50,71 +51,66 @@ type LayerMeta = {
   offHint: string;
 };
 
-export const RETRY_LAYERS = {
-  connect: {
-    title: "建连重试",
-    where: "SDK · 拿到 200 之前",
-    trigger:
-      "连不上或还没拿到 200：连接重置 / 读写超时 / DNS 失败等网络层错误，以及 HTTP 408、429、500、502、503、504。",
-    skips: "其余状态码（400 / 401 / 403 / 404 / 413 / 422 等）都是确定性拒绝，重发也一样失败，直接上抛。",
-    desc: "原样重发同一个请求。流一旦开始（已经拿到 200），中途断开就不归这层管了。",
-    attemptsLabel: "重试次数",
-    defAttempts: 3,
-    defInterval: "0.5s→1s→2s 指数（封顶 8s）",
-    offHint: "-1 = 一次都不重试，失败立刻上抛",
-  },
-  empty: {
-    title: "空响应重试",
-    where: "SDK · 仅 openai 格式",
-    trigger:
-      "HTTP 200、finish_reason 是正常 stop，但整条响应一个内容块都没有——网关空帧、思考字段丢帧、采样打嗝都会长这样。",
-    skips: "因 max_tokens 截断而没有内容的不算（那要靠调高输出上限解决，重发只会再撞一次）。",
-    desc: "重发整个 prompt，所以在长上下文上比较贵，次数不宜给大。",
-    attemptsLabel: "重试次数",
-    defAttempts: 2,
-    defInterval: "0.5s→1s→2s 指数（封顶 8s）",
-    offHint: "-1 = 空响应直接原样交出",
-  },
-  stream: {
-    title: "同 provider 安全窗口重试",
-    where: "本项目 · 未交付输出前",
-    trigger:
-      "流已经建立（拿到 200）之后才出问题：连接中途断开、供应商 overloaded、流内的 429 / 5xx 错误事件——且一个 token 都还没交给调用方。",
-    skips:
-      "额度耗尽（402 / insufficient_quota，交给轮询换配置）、上下文过长（413 / context length，交给压缩）、400 / 401 / 403 / 404 / 422 确定性拒绝，都不重试。",
-    desc: "在同一个配置上重放同一个请求。因为还没交付任何输出，重放不会重复模型输出或工具执行。",
-    attemptsLabel: "重试次数",
-    defAttempts: 2,
-    defInterval: "0.5s→1s 指数（封顶 4s）",
-    offHint: "-1 = 断流直接交给外层的意图重跑",
-  },
-  breaker: {
-    title: "轮询熔断",
-    where: "本项目 · 进程级，全局一份",
-    trigger:
-      "瞬时失败（429、5xx、网络错误）连续累计到阈值时熔断；余额不足（402）、密钥失效（401 / 403）、模型不存在（404）这类确定性失败不看阈值，第一次就熔断。",
-    skips: "成功一次即清零，所以偶尔抽风的配置不会被慢慢攒到熔断。",
-    desc: "熔断后进入冷却，冷却期内轮询直接跳过这个配置。状态落库，重启不丢。",
-    attemptsLabel: "连续失败几次熔断",
-    defAttempts: 3,
-    defInterval: "1min→5min→30min 梯度",
-    offHint: "-1 = 瞬时失败永不熔断（确定性失败仍然熔断）",
-  },
-  intent: {
-    title: "意图重跑",
-    where: "本项目 · 进程级，全局一份",
-    trigger:
-      "前面几层都没兜住：worker 以 model_error 收场——内层重试全部用尽，或者流已经开始交付输出后才断掉（那时重放不安全，只能整条重来）。",
-    skips: "额度耗尽已经由轮询换配置处理，不在这里重跑；任务被暂停 / 终止 / 进入收尾时立即让位，不占用退避时间。",
-    desc: "整条意图从头再跑一遍。它是最外层，一次重跑意味着里面几层的次数会再乘一遍。",
-    attemptsLabel: "重跑次数",
-    defAttempts: 2,
-    defInterval: "固定 3s",
-    offHint: "-1 = 不重跑，该意图直接判为 blocked",
-  },
-} satisfies Record<string, LayerMeta>;
+export const RETRY_LAYERS = (ui: UITranslate) =>
+  ({
+    connect: {
+      title: ui("screen.f10e6e26e3b4db"),
+      where: ui("screen.96f41f47244804"),
+      trigger: ui("screen.34bcbeff509b9d"),
+      skips: ui("screen.b156e722d3f90b"),
+      desc: ui("screen.5ff0611e6216e8"),
+      attemptsLabel: ui("screen.9f28a8874c7855"),
+      defAttempts: 3,
+      defInterval: ui("screen.17b54d221fb211"),
+      offHint: ui("screen.3bffc3cc4bb7ad"),
+    },
+    empty: {
+      title: ui("screen.b9b3e2527d706b"),
+      where: ui("screen.698031464bb2de"),
+      trigger: ui("screen.98af99aa70bbb3"),
+      skips: ui("screen.b775a3506d00e0"),
+      desc: ui("screen.5c4e394f1b3286"),
+      attemptsLabel: ui("screen.9f28a8874c7855"),
+      defAttempts: 2,
+      defInterval: ui("screen.17b54d221fb211"),
+      offHint: ui("screen.940ad28cee9933"),
+    },
+    stream: {
+      title: ui("screen.c45140d655f136"),
+      where: ui("screen.8a2198ed8f7327"),
+      trigger: ui("screen.71f6a47c0d23d3"),
+      skips: ui("screen.4744b18e90048d"),
+      desc: ui("screen.2006e8af042274"),
+      attemptsLabel: ui("screen.9f28a8874c7855"),
+      defAttempts: 2,
+      defInterval: ui("screen.fd7a86f5e612aa"),
+      offHint: ui("screen.8dab06c9fd6148"),
+    },
+    breaker: {
+      title: ui("screen.f5dd5e99ea6525"),
+      where: ui("screen.28c87fa227102e"),
+      trigger: ui("screen.cf6f67d2e78e44"),
+      skips: ui("screen.c87a57293a93da"),
+      desc: ui("screen.9a02de63a3f797"),
+      attemptsLabel: ui("screen.7b44ab286a1f2b"),
+      defAttempts: 3,
+      defInterval: ui("screen.804fbeef471c8a"),
+      offHint: ui("screen.d9f1563e424da7"),
+    },
+    intent: {
+      title: ui("screen.8b2e74ec654500"),
+      where: ui("screen.28c87fa227102e"),
+      trigger: ui("screen.949e15cbc8e7df"),
+      skips: ui("screen.c414a339416e82"),
+      desc: ui("screen.8d36bac3ae4454"),
+      attemptsLabel: ui("screen.ae029c6105f38e"),
+      defAttempts: 2,
+      defInterval: ui("screen.028dd484bd73c5"),
+      offHint: ui("screen.3b04f47779cc8c"),
+    },
+  }) satisfies Record<string, LayerMeta>;
 
-type LayerKey = keyof typeof RETRY_LAYERS;
+type LayerKey = keyof ReturnType<typeof RETRY_LAYERS>;
 
 /** 毫秒的人话，只用于在输入框旁边回显，免得数零。 */
 function humanMs(ms: number) {
@@ -177,7 +173,9 @@ export function RetryRuleFields({
   /** true = 配置抽屉里的紧凑版：省掉展开说明，只留「什么错误会走到这层」这一句 */
   compact?: boolean;
 }) {
-  const meta = RETRY_LAYERS[layer];
+  const { ui } = useUITranslation();
+
+  const meta = RETRY_LAYERS(ui)[layer];
   const human = humanMs(value.interval_ms);
   return (
     <div className={compact ? "grid gap-2" : "grid gap-3 rounded-lg border p-3"}>
@@ -188,11 +186,15 @@ export function RetryRuleFields({
         </div>
         {/* 哪些错误会走到这层，具体到状态码——填了旋钮却看不到效果，多半是错误压根不落在这层。 */}
         <p className="text-muted-foreground text-xs">
-          <span className="font-medium text-foreground">触发</span>：{meta.trigger}
+          <span className="font-medium text-foreground">{ui("screen.250bf9d56316ae")}</span>
+          {ui("punctuation.f114611cd6")}
+          {meta.trigger}
         </p>
         {!compact && meta.skips && (
           <p className="text-muted-foreground text-xs">
-            <span className="font-medium text-foreground">不走这层</span>：{meta.skips}
+            <span className="font-medium text-foreground">{ui("screen.424093defe547b")}</span>
+            {ui("punctuation.f114611cd6")}
+            {meta.skips}
           </p>
         )}
         {!compact && <p className="text-muted-foreground text-xs">{meta.desc}</p>}
@@ -206,25 +208,32 @@ export function RetryRuleFields({
             id={`${idPrefix}-${layer}-n`}
             min={-1}
             value={value.attempts}
-            placeholder={`默认 ${meta.defAttempts}`}
+            placeholder={ui("screen.e9ba66dfa284be", { v0: meta.defAttempts })}
             onChange={(n) => onChange({ ...value, attempts: n })}
           />
         </div>
         <div className="flex items-center gap-2">
           <Label htmlFor={`${idPrefix}-${layer}-ms`} className="text-muted-foreground text-xs">
-            间隔 ms
+            {ui("screen.d09afdca01c185")}
           </Label>
           <NumField
             id={`${idPrefix}-${layer}-ms`}
             min={0}
             value={value.interval_ms}
-            placeholder="默认退避"
+            placeholder={ui("screen.868e4eaa774794")}
             onChange={(n) => onChange({ ...value, interval_ms: n })}
           />
-          <span className="text-muted-foreground text-xs">{human ? `固定 ${human}` : meta.defInterval}</span>
+          <span className="text-muted-foreground text-xs">
+            {human ? ui("screen.fd847c3eb0f351", { v0: human }) : meta.defInterval}
+          </span>
         </div>
       </div>
-      {!compact && <p className="text-muted-foreground text-xs">留空 = 用默认；{meta.offHint}。</p>}
+      {!compact && (
+        <p className="text-muted-foreground text-xs">
+          {ui("screen.9a44a0eae5441a")}
+          {meta.offHint}。
+        </p>
+      )}
     </div>
   );
 }
@@ -237,14 +246,13 @@ export function ProfileRetryFields({
   value: LLMRetryOverride;
   onChange: (o: LLMRetryOverride) => void;
 }) {
+  const { ui } = useUITranslation();
+
   return (
     <div className="grid gap-3 rounded-lg border p-3">
       <div className="grid gap-0.5">
-        <Label className="text-sm">重试覆盖</Label>
-        <p className="text-muted-foreground text-xs">
-          只对这个配置生效，覆盖「重试与退避」里的全局默认。每格留空 = 跟随全局；次数填 -1 = 关掉这层重试；
-          间隔填了就用固定间隔取代指数退避。熔断与意图重跑是进程级的，只能在全局那页调。
-        </p>
+        <Label className="text-sm">{ui("screen.d21ea16ca37479")}</Label>
+        <p className="text-muted-foreground text-xs">{ui("screen.57747cb1872bcc")}</p>
       </div>
       {(["connect", "empty", "stream"] as const).map((k) => (
         <div key={k} className="border-t pt-3 first:border-t-0 first:pt-0">
@@ -263,6 +271,8 @@ export function ProfileRetryFields({
 
 /** 「重试与退避」tab：五层的全局默认值。 */
 export function RetryPolicyPanel() {
+  const { ui, liveUI } = useUITranslation();
+
   const [policy, setPolicy] = React.useState<LLMRetryPolicy>(ZERO_POLICY);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
@@ -273,11 +283,11 @@ export function RetryPolicyPanel() {
       const p = await api.llmRetryPolicy();
       setPolicy({ ...ZERO_POLICY, ...p });
     } catch (e) {
-      toast.error(`读取重试策略失败：${(e as Error).message}`);
+      toast.error(liveUI("screen.da1cf835d4509f", { v0: (e as Error).message }));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [liveUI]);
 
   React.useEffect(() => {
     void load();
@@ -290,9 +300,9 @@ export function RetryPolicyPanel() {
       // 后端会把越界值夹回区间并回传，直接用回传值刷新，所见即所存。
       const saved = await api.saveLLMRetryPolicy(policy);
       setPolicy({ ...ZERO_POLICY, ...saved });
-      toast.success("已保存，即时生效（正在跑的这一轮调用仍用旧参数）");
+      toast.success(ui("screen.2911d45d27017a"));
     } catch (e) {
-      toast.error(`保存失败：${(e as Error).message}`);
+      toast.error(ui("screen.20e1b0f2590bc7", { v0: (e as Error).message }));
     } finally {
       setSaving(false);
     }
@@ -303,7 +313,7 @@ export function RetryPolicyPanel() {
   if (loading) {
     return (
       <div className="flex items-center gap-2 rounded-lg border border-dashed p-10 text-muted-foreground text-sm">
-        <Loader2Icon className="size-4 animate-spin" /> 读取重试策略…
+        <Loader2Icon className="size-4 animate-spin" /> {ui("screen.1571880c887d86")}
       </div>
     );
   }
@@ -311,16 +321,15 @@ export function RetryPolicyPanel() {
   return (
     <div className="grid gap-4">
       <div className="rounded-lg border bg-muted/30 p-3 text-muted-foreground text-xs leading-relaxed">
-        一次模型调用的失败会依次经过五层重试，由内到外：
-        <span className="text-foreground"> 建连 → 空响应 → 同 provider 安全窗口 → 轮询熔断 → 意图重跑</span>
-        。内层用尽才轮到外层，所以次数是
-        <span className="text-foreground">相乘</span>
-        的——把每层都拉满，一次抖动能烧掉几十次请求。
-        全部留空即当前默认值，与没有这页时的行为完全一致。前三层可以在每个模型配置里单独覆盖。
+        {ui("screen.c76253318904fb")}
+        <span className="text-foreground"> {ui("screen.bb077bd715b98d")}</span>
+        {ui("screen.ca351d8692c5f1")}
+        <span className="text-foreground">{ui("screen.4d6e8527d60665")}</span>
+        {ui("screen.15d1a795428466")}
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {(Object.keys(RETRY_LAYERS) as LayerKey[]).map((k) => (
+        {(Object.keys(RETRY_LAYERS(ui)) as LayerKey[]).map((k) => (
           <RetryRuleFields key={k} layer={k} idPrefix="gl" value={policy[k]} onChange={set(k)} />
         ))}
       </div>
@@ -328,10 +337,10 @@ export function RetryPolicyPanel() {
       <div className="flex gap-2">
         <Button onClick={save} disabled={saving}>
           {saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}
-          保存
+          {ui("screen.a3030bf8f16dc6")}
         </Button>
         <Button variant="outline" onClick={() => setPolicy(ZERO_POLICY)} disabled={saving}>
-          全部恢复默认
+          {ui("screen.3b6c48ce496bdf")}
         </Button>
       </div>
     </div>

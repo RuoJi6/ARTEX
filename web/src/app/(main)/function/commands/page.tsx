@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { BarChart3Icon, ChevronLeftIcon, ChevronRightIcon, Loader2Icon, SearchIcon, TerminalIcon } from "lucide-react";
@@ -12,12 +11,13 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { CommandRecord, ToolStat } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-function fmtTime(ts: string) {
-  return new Date(ts).toLocaleString("zh-CN", {
+function fmtTime(ts: string, ui: UITranslate) {
+  return new Date(ts).toLocaleString(ui("screen.91610255157661"), {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -50,6 +50,8 @@ const PAGE_SIZES = [25, 50, 100];
 const CMD_MAX_LEN = 80;
 
 export default function CommandsPage() {
+  const { ui } = useUITranslation();
+
   const [page, setPage] = React.useState(0);
   const [size, setSize] = React.useState(50);
   const [query, setQuery] = React.useState("");
@@ -130,7 +132,7 @@ export default function CommandsPage() {
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <TerminalIcon className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-xl font-semibold tracking-tight">工具执行</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{ui("screen.a548992cfa3335")}</h1>
           <Badge variant="secondary">{total}</Badge>
         </div>
       </div>
@@ -140,14 +142,14 @@ export default function CommandsPage() {
         <div className="relative max-w-sm flex-1">
           <SearchIcon className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="搜索工具 / 参数..."
+            placeholder={ui("screen.fd6d531d08475a")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="h-8 pl-8"
           />
         </div>
         <Input
-          placeholder="任务 ID"
+          placeholder={ui("screen.68c60746f1d0ac")}
           className="h-8 w-28"
           value={taskFilter}
           onChange={(e) => setTaskFilter(e.target.value.replace(/\D/g, ""))}
@@ -159,7 +161,7 @@ export default function CommandsPage() {
           <SelectContent>
             {PAGE_SIZES.map((n) => (
               <SelectItem key={n} value={String(n)}>
-                {n} / 页
+                {n} {ui("screen.785e3cd53901f4")}
               </SelectItem>
             ))}
           </SelectContent>
@@ -167,7 +169,7 @@ export default function CommandsPage() {
 
         <Button variant="outline" size="sm" className="h-8" onClick={() => setStatsOpen(true)}>
           <BarChart3Icon className="size-4" />
-          统计
+          {ui("screen.89abe8c6ac1314")}
         </Button>
 
         <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
@@ -205,12 +207,12 @@ export default function CommandsPage() {
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
-                  <TableHead className="w-[130px]">时间</TableHead>
-                  <TableHead className="w-[60px]">任务</TableHead>
+                  <TableHead className="w-[130px]">{ui("screen.8b6ff498515bcc")}</TableHead>
+                  <TableHead className="w-[60px]">{ui("screen.5253040db8643c")}</TableHead>
                   <TableHead className="w-[90px]">Worker</TableHead>
-                  <TableHead className="w-[110px]">工具</TableHead>
-                  <TableHead>输入</TableHead>
-                  <TableHead className="w-[60px]">状态</TableHead>
+                  <TableHead className="w-[110px]">{ui("screen.5ca6730d441522")}</TableHead>
+                  <TableHead>{ui("screen.2087c777c06fef")}</TableHead>
+                  <TableHead className="w-[60px]">{ui("screen.6320b4a8722a85")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -223,7 +225,7 @@ export default function CommandsPage() {
                 ) : commands.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="py-12 text-center text-sm text-muted-foreground">
-                      暂无工具执行记录
+                      {ui("screen.005250ab54771a")}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -234,7 +236,7 @@ export default function CommandsPage() {
                       onClick={() => setSelected(cmd)}
                     >
                       <TableCell className="text-xs text-muted-foreground tabular-nums">
-                        {fmtTime(cmd.created_at)}
+                        {fmtTime(cmd.created_at, ui)}
                       </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">#{cmd.exploration_id}</TableCell>
                       <TableCell>
@@ -255,11 +257,11 @@ export default function CommandsPage() {
                       <TableCell>
                         {cmd.is_error ? (
                           <Badge variant="destructive" className="text-xs">
-                            失败
+                            {ui("screen.28384d7afd2e4f")}
                           </Badge>
                         ) : (
                           <Badge variant="secondary" className="text-xs text-emerald-600">
-                            成功
+                            {ui("screen.053461ce86d265")}
                           </Badge>
                         )}
                       </TableCell>
@@ -276,17 +278,17 @@ export default function CommandsPage() {
       <Dialog open={statsOpen} onOpenChange={setStatsOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>工具调用统计</DialogTitle>
+            <DialogTitle>{ui("screen.aa254510842ebb")}</DialogTitle>
             <DialogDescription>
-              {taskFilter || queryQ ? "当前筛选条件下的全部记录" : "全部工具执行记录"}
+              {taskFilter || queryQ ? ui("screen.15f06f8780aa69") : ui("screen.4c1795faba173d")}
               {stats.length > 0 && (
                 <>
                   {" · "}
-                  <span className="tabular-nums">{stats.length}</span> 个工具 ·{" "}
-                  <span className="tabular-nums">{statsTotal}</span> 次调用
+                  <span className="tabular-nums">{stats.length}</span> {ui("screen.3863aaa034a4a4")}{" "}
+                  <span className="tabular-nums">{statsTotal}</span> {ui("screen.d8762c5105febe")}
                   {statsErrors > 0 && (
                     <>
-                      {" · 失败 "}
+                      {ui("screen.3f52690b5a30b1")}
                       <span className="tabular-nums text-red-600 dark:text-red-400">{statsErrors}</span>
                     </>
                   )}
@@ -300,7 +302,7 @@ export default function CommandsPage() {
               <Loader2Icon className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : stats.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">暂无统计数据</div>
+            <div className="py-10 text-center text-sm text-muted-foreground">{ui("screen.1b8e57ace988ae")}</div>
           ) : (
             <div className="-mr-2 max-h-[55vh] space-y-1 overflow-auto pr-2">
               {stats.map((s) => (
@@ -309,7 +311,10 @@ export default function CommandsPage() {
                     <div className="flex items-center gap-2">
                       <span className="truncate font-mono text-xs font-medium">{s.tool}</span>
                       {s.errors > 0 && (
-                        <span className="text-[11px] tabular-nums text-red-600 dark:text-red-400">失败 {s.errors}</span>
+                        <span className="text-[11px] tabular-nums text-red-600 dark:text-red-400">
+                          {ui("screen.28384d7afd2e4f")}
+                          {s.errors}
+                        </span>
                       )}
                     </div>
                     <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
@@ -337,8 +342,8 @@ export default function CommandsPage() {
           {selected && (
             <>
               <SheetHeader className="border-b px-5 py-4">
-                <SheetTitle className="pr-8">工具执行详情</SheetTitle>
-                <SheetDescription>{fmtTime(selected.created_at)}</SheetDescription>
+                <SheetTitle className="pr-8">{ui("screen.023a1c95731a3f")}</SheetTitle>
+                <SheetDescription>{fmtTime(selected.created_at, ui)}</SheetDescription>
                 <div className="flex flex-wrap items-center gap-2 pt-2">
                   <Badge variant="outline" className="text-xs font-mono">
                     #{selected.exploration_id}
@@ -351,18 +356,20 @@ export default function CommandsPage() {
                   </Badge>
                   {selected.is_error ? (
                     <Badge variant="destructive" className="text-xs">
-                      失败
+                      {ui("screen.28384d7afd2e4f")}
                     </Badge>
                   ) : (
                     <Badge variant="secondary" className="text-xs text-emerald-600">
-                      成功
+                      {ui("screen.053461ce86d265")}
                     </Badge>
                   )}
                 </div>
               </SheetHeader>
               <div className="grid min-h-0 flex-1 grid-rows-2 divide-y">
                 <div className="flex min-h-0 min-w-0 flex-col">
-                  <div className="border-b px-5 py-2 text-xs font-medium text-muted-foreground">输入 Input</div>
+                  <div className="border-b px-5 py-2 text-xs font-medium text-muted-foreground">
+                    {ui("screen.b719f4314b43d3")}
+                  </div>
                   <div className="min-h-0 flex-1 overflow-auto">
                     <pre className="p-5 font-mono text-xs break-all whitespace-pre-wrap">
                       {toolInput(selected.command)}
@@ -370,7 +377,9 @@ export default function CommandsPage() {
                   </div>
                 </div>
                 <div className="flex min-h-0 min-w-0 flex-col">
-                  <div className="border-b px-5 py-2 text-xs font-medium text-muted-foreground">输出 Output</div>
+                  <div className="border-b px-5 py-2 text-xs font-medium text-muted-foreground">
+                    {ui("screen.586a708e3d70eb")}
+                  </div>
                   <div className="min-h-0 flex-1 overflow-auto">
                     <pre
                       className={cn(
@@ -378,7 +387,7 @@ export default function CommandsPage() {
                         selected.is_error && "text-red-600 dark:text-red-400",
                       )}
                     >
-                      {selected.output || "（空）"}
+                      {selected.output || ui("screen.fa8bc5e925f9f7")}
                     </pre>
                   </div>
                 </div>

@@ -24,10 +24,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { FindingCaseDetail } from "@/lib/types";
 
 function CaseDetail() {
+  const { ui } = useUITranslation();
+
   const params = useSearchParams();
   const id = params.get("id") ?? "";
   const contextTask = params.get("context_task") ?? undefined;
@@ -71,7 +74,7 @@ function CaseDetail() {
     setBusy(true);
     try {
       await api.regenerateFindingCase(id, contextTask);
-      toast.success("已提交重新整理，可查看执行状态");
+      toast.success(ui("screen.1169d18c3ca229"));
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -84,7 +87,7 @@ function CaseDetail() {
       for (const fid of selected) await api.removeFindingCaseMember(id, fid, "人工撤销归并");
       setSelected(new Set());
       setRefresh((v) => v + 1);
-      toast.success("已移出，原始记录保留");
+      toast.success(ui("screen.05de947f40ed2d"));
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -104,7 +107,7 @@ function CaseDetail() {
     <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <Button asChild variant="outline">
-          <Link href="/function/findings">返回漏洞列表</Link>
+          <Link href="/function/findings">{ui("screen.0618d5a1c961fa")}</Link>
         </Button>
         <h1 className="font-semibold text-xl">{c.title}</h1>
         <FindingSeverityCounts counts={c} />
@@ -116,43 +119,48 @@ function CaseDetail() {
       ) : null}
       {!c.active ? (
         <Alert>
-          <AlertDescription>此文件夹已解散或并入其他组，原始记录仍可从漏洞列表查看。</AlertDescription>
+          <AlertDescription>{ui("screen.8da7ac0026e848")}</AlertDescription>
         </Alert>
       ) : null}
       {readOnly ? (
         <Alert>
-          <AlertDescription>继承任务的漏洞组，只读。</AlertDescription>
+          <AlertDescription>{ui("screen.cae190b24fd138")}</AlertDescription>
         </Alert>
       ) : (
         <FindingCaseReviewPanel taskId={c.task_id ?? undefined} />
       )}
       <Tabs defaultValue="report">
         <TabsList>
-          <TabsTrigger value="report">统一报告</TabsTrigger>
-          <TabsTrigger value="members">原始上报（{c.count}）</TabsTrigger>
-          <TabsTrigger value="history">归并历史</TabsTrigger>
+          <TabsTrigger value="report">{ui("screen.37707567ad4c9b")}</TabsTrigger>
+          <TabsTrigger value="members">
+            {ui("screen.6c69677e262868")}
+            {c.count}
+            {ui("punctuation.f2e44c6c95")}
+          </TabsTrigger>
+          <TabsTrigger value="history">{ui("screen.300b7381491fc0")}</TabsTrigger>
         </TabsList>
         <TabsContent value="report">
           <Card>
             <CardHeader>
-              <CardTitle>完整复现与修复报告</CardTitle>
-              <CardDescription>集中查看所有成员的复现步骤、证据与修复建议。</CardDescription>
+              <CardTitle>{ui("screen.e3ef802bb18ea1")}</CardTitle>
+              <CardDescription>{ui("screen.52f0424c627be3")}</CardDescription>
             </CardHeader>
             <CardContent className="flex min-w-0 flex-col gap-4">
               {c.report_version !== c.version ? (
                 <Alert>
-                  <AlertDescription>成员或证据已变化，统一报告待更新。</AlertDescription>
+                  <AlertDescription>{ui("screen.5a4461e8cf1ca1")}</AlertDescription>
                 </Alert>
               ) : null}
               {!readOnly && c.active ? (
                 <Button variant="outline" onClick={regenerate} disabled={busy}>
-                  {busy ? <Spinner /> : null}重新生成统一报告
+                  {busy ? <Spinner /> : null}
+                  {ui("screen.776ce61beef5a0")}
                 </Button>
               ) : null}
               {c.report ? (
                 <Markdown text={c.report} />
               ) : (
-                <p className="text-muted-foreground text-sm">统一报告尚未生成，原始报告可在“原始上报”中查看。</p>
+                <p className="text-muted-foreground text-sm">{ui("screen.6d6ba94a0fca2a")}</p>
               )}
             </CardContent>
           </Card>
@@ -160,27 +168,27 @@ function CaseDetail() {
         <TabsContent value="members">
           <Card>
             <CardHeader>
-              <CardTitle>原始报告和证据完整保留</CardTitle>
-              <CardDescription>各条原始上报保留各自的等级、报告和证据。</CardDescription>
+              <CardTitle>{ui("screen.e30211571e67b5")}</CardTitle>
+              <CardDescription>{ui("screen.08bf5edecaeda0")}</CardDescription>
             </CardHeader>
             <CardContent>
               {!readOnly && selected.size > 0 ? (
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button variant="outline" disabled={busy}>
-                      移出所选（{selected.size}）
+                      {ui("screen.08c235d9020c8a")}
+                      {selected.size}
+                      {ui("punctuation.f2e44c6c95")}
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>移出归并组？</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        原报告和证据保留，Agent 不会自动把这些关系再次归并。
-                      </AlertDialogDescription>
+                      <AlertDialogTitle>{ui("screen.43eee10403f01c")}</AlertDialogTitle>
+                      <AlertDialogDescription>{ui("screen.f133ded17c223f")}</AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                      <AlertDialogCancel>取消</AlertDialogCancel>
-                      <AlertDialogAction onClick={detach}>移出</AlertDialogAction>
+                      <AlertDialogCancel>{ui("screen.2cd0f3be8738a8")}</AlertDialogCancel>
+                      <AlertDialogAction onClick={detach}>{ui("screen.95861c4b5cd644")}</AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
@@ -198,25 +206,30 @@ function CaseDetail() {
         <TabsContent value="history">
           <Card>
             <CardHeader>
-              <CardTitle>判断依据与操作记录</CardTitle>
+              <CardTitle>{ui("screen.a44627c5d22f36")}</CardTitle>
               <CardDescription>{c.reason}</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               {data.events.map((e) => (
                 <div key={e.id} className="border-b pb-3 text-sm">
                   <p>
-                    {({ reporter: "报告 Agent", human: "人工", system: "系统" } as Record<string, string>)[e.actor] ??
-                      e.actor}{" "}
+                    {(
+                      {
+                        reporter: ui("screen.2181e612bd0b2b"),
+                        human: ui("screen.f21f45e7986472"),
+                        system: ui("screen.5b50d7c4b5950d"),
+                      } as Record<string, string>
+                    )[e.actor] ?? e.actor}{" "}
                     ·{" "}
                     {(
                       {
-                        merge: "归并",
-                        detach: "移出成员",
-                        member_deleted: "成员移出或删除",
-                        report_updated: "更新统一报告",
+                        merge: ui("screen.c63a1da7b7ad44"),
+                        detach: ui("screen.71bc4e9f153b8e"),
+                        member_deleted: ui("screen.27c02ea4653866"),
+                        report_updated: ui("screen.43a4e2bb711282"),
                       } as Record<string, string>
                     )[e.action] ?? e.action}{" "}
-                    · {new Date(e.created_at).toLocaleString("zh-CN")}
+                    · {new Date(e.created_at).toLocaleString(ui("screen.91610255157661"))}
                   </p>
                   <p className="text-muted-foreground">
                     {e.reason}

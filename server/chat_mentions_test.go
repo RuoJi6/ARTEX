@@ -349,3 +349,30 @@ func TestChatMentionConversationReceivesServerDetails(t *testing.T) {
 		t.Fatal("invalid reference persisted a turn")
 	}
 }
+
+func TestChatMentionStableAndLegacyTokens(t *testing.T) {
+	kinds := []string{"finding", "asset", "company", "endpoint", "ip", "app", "root_domain", "subdomain", "service"}
+	legacy := []string{"漏洞", "资产", "企业", "接口", "IP", "应用", "域名", "子域名", "服务"}
+	for i, kind := range kinds {
+		message := fmt.Sprintf("@[%s#%d original name] @[%s#%d 旧名称]", kind, i+1, legacy[i], i+1)
+		refs, err := parseChatMentions(message)
+		if err != nil || len(refs) != 1 || refs[0].Kind != kind || refs[0].ID != int64(i+1) {
+			t.Fatalf("%s: refs=%+v err=%v", kind, refs, err)
+		}
+	}
+	for _, input := range []string{"@[finding#0]", "@[endpoint#999999999999999999999999]"} {
+		if _, err := parseChatMentions(input); err == nil {
+			t.Fatalf("accepted invalid token %s", input)
+		}
+	}
+	var many strings.Builder
+	for i := 1; i <= 11; i++ {
+		fmt.Fprintf(&many, "@[asset#%d] ", i)
+	}
+	if _, err := parseChatMentions(many.String()); err == nil {
+		t.Fatal("accepted too many stable references")
+	}
+	if refs, err := parseChatMentions("@[unknown#1]"); err != nil || len(refs) != 0 {
+		t.Fatalf("accepted unknown kind: %+v %v", refs, err)
+	}
+}

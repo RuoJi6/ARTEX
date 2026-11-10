@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { EllipsisVertical, KeyRound, LogOut } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -28,6 +29,7 @@ export function NavUser({
     readonly avatar: string;
   };
 }) {
+  const { t } = useTranslation();
   const { isMobile } = useSidebar();
   const [pwOpen, setPwOpen] = React.useState(false);
 
@@ -79,12 +81,12 @@ export function NavUser({
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => setPwOpen(true)}>
               <KeyRound />
-              修改密码
+              {t("account.changePassword")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
               <LogOut />
-              退出登录
+              {t("account.logout")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
