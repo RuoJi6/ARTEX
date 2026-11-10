@@ -8,6 +8,7 @@ import {
   isCompanyScopeKind,
   normalizeCompanyScopeValue,
 } from "../company-scope";
+import { nodeSummary } from "../exploration-graph-data";
 import { filterAndSortFindings } from "../finding-severity";
 import type {
   Activity,
@@ -2090,6 +2091,38 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
           conversation_id: item.conversation_id,
           status: item.status,
         })),
+    };
+  }
+  // Match the real lineage endpoint: the finding plus all reverse-reachable
+  // ancestors and their internal edges, using the existing demo graph only.
+  if (seg[0] === "exploration" && seg[1] === "findings" && seg[3] === "lineage" && m === "GET") {
+    const finding = mockFindings.find((item) => item.id === seg[2]);
+    if (!finding) throw new Error("漏洞不存在");
+    const empty = { nodes: [], edges: [] };
+    if (finding.task_id !== D.ACTIVE_TASK || !mockTasks.some((item) => item.id === finding.task_id)) return empty;
+    const graph = D.explorationGraph;
+    const candidates = graph.nodes.filter(
+      (node) =>
+        node.type === "finding" &&
+        graph.edges.some((edge) => edge.src === finding.intent_id && edge.dst === node.id && edge.rel === "yields"),
+    );
+    const target =
+      candidates.find((node) => nodeSummary(node) === finding.summary) ??
+      (candidates.length === 1 ? candidates[0] : undefined);
+    if (!target) return empty;
+    const ancestors = new Set([target.id]);
+    const queue = [target.id];
+    for (let index = 0; index < queue.length; index++) {
+      for (const edge of graph.edges) {
+        if (edge.dst === queue[index] && !ancestors.has(edge.src)) {
+          ancestors.add(edge.src);
+          queue.push(edge.src);
+        }
+      }
+    }
+    return {
+      nodes: graph.nodes.filter((node) => ancestors.has(node.id)),
+      edges: graph.edges.filter((edge) => ancestors.has(edge.src) && ancestors.has(edge.dst)),
     };
   }
   if (seg[0] === "exploration" && seg[1] === "findings" && seg[3] === "retests") {
