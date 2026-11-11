@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -26,15 +27,7 @@ func NormalizeNoResultOptions(opts *TaskCreateOptions) error {
 	}
 }
 
-// CountQualifyingFindings counts task-local independent findings, using the case
-// severity for grouped observations. False positives never count; unassessed
-// findings count only when the caller sets no severity threshold.
-func (d *DB) CountQualifyingFindings(taskID int64, minSeverity string) (int, error) {
-	if err := NormalizeNoResultOptions(&TaskCreateOptions{NoResultMinSeverity: minSeverity}); err != nil {
-		return 0, err
-	}
-	var count int
-	err := d.QueryRow(`WITH observations AS (
+const countQualifyingFindingsSQL = `WITH observations AS (
  SELECT CASE WHEN m.case_id IS NULL THEN 'f:'||f.id ELSE 'c:'||m.case_id END entity,
         CASE WHEN m.case_id IS NULL THEN f.severity ELSE c.severity END severity
  FROM findings f
@@ -44,25 +37,61 @@ func (d *DB) CountQualifyingFindings(taskID int64, minSeverity string) (int, err
 )
 SELECT count(DISTINCT entity) FROM observations
 WHERE $2='' OR array_position(ARRAY['low','medium','high','critical'],severity)
- >= array_position(ARRAY['low','medium','high','critical'],$2)`, taskID, minSeverity).Scan(&count)
+ >= array_position(ARRAY['low','medium','high','critical'],$2)`
+
+// CountQualifyingFindings counts task-local independent findings, using the case
+// severity for grouped observations. False positives never count; unassessed
+// findings count only when the caller sets no severity threshold.
+func (d *DB) CountQualifyingFindings(taskID int64, minSeverity string) (int, error) {
+	if err := NormalizeNoResultOptions(&TaskCreateOptions{NoResultMinSeverity: minSeverity}); err != nil {
+		return 0, err
+	}
+	var count int
+	err := d.QueryRow(countQualifyingFindingsSQL, taskID, minSeverity).Scan(&count)
 	return count, err
 }
 
-// MarkNoResultChecked durably claims the single checkpoint. A terminal task or
-// an already checked checkpoint returns nil, so concurrent callers cannot stop
-// a task twice. A failed decision also persists its reason so restart can finish
-// settling without recounting findings that arrived during the drain.
-func (d *DB) MarkNoResultChecked(taskID int64, stop bool) (*time.Time, error) {
-	var checked time.Time
-	err := d.QueryRow(`UPDATE tasks SET no_result_checked_at=now(), stop_reason=CASE WHEN $2 THEN 'no_result' ELSE '' END
- WHERE id=$1 AND deleted_at IS NULL AND no_result_checked_at IS NULL
- AND status NOT IN ('done','failed','timeout')
- RETURNING no_result_checked_at`, taskID, stop).Scan(&checked)
+// CheckNoResultCheckpoint serializes the count and decision with finding writes
+// using their task row lock. A nil checked timestamp means the checkpoint was
+// not claimed. Findings committed before the lock is acquired count; later
+// writes cannot reverse a persisted stop, even during restart/settling.
+func (d *DB) CheckNoResultCheckpoint(ctx context.Context, taskID int64, minFindings int, minSeverity string) (count int, stop bool, checked *time.Time, err error) {
+	if err = NormalizeNoResultOptions(&TaskCreateOptions{NoResultMinSeverity: minSeverity}); err != nil {
+		return
+	}
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, nil, err
+	}
+	defer tx.Rollback()
+	var status string
+	var previous sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT status, no_result_checked_at FROM tasks
+ WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, taskID).Scan(&status, &previous)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return 0, false, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return 0, false, nil, err
 	}
-	return &checked, nil
+	if previous.Valid || status == "done" || status == "failed" || status == "timeout" {
+		return 0, false, nil, nil
+	}
+	// READ COMMITTED takes a fresh snapshot for this separate statement, after
+	// any finding transaction that held the task lock has committed. Combining
+	// this with the locking SELECT would retain the snapshot from before waiting.
+	if err = tx.QueryRowContext(ctx, countQualifyingFindingsSQL, taskID, minSeverity).Scan(&count); err != nil {
+		return 0, false, nil, err
+	}
+	stop = count < max(1, minFindings)
+	var at time.Time
+	if err = tx.QueryRowContext(ctx, `UPDATE tasks SET no_result_checked_at=clock_timestamp(),
+ stop_reason=CASE WHEN $2 THEN 'no_result' ELSE '' END WHERE id=$1
+ RETURNING no_result_checked_at`, taskID, stop).Scan(&at); err != nil {
+		return 0, false, nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, false, nil, err
+	}
+	return count, stop, &at, nil
 }

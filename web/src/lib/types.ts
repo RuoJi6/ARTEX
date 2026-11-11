@@ -561,6 +561,7 @@ export interface FindingGroup {
   task_name?: string; // 可选任务名称;空/缺省=未命名
   task_description: string;
   task_status: string;
+  task_stop_reason?: string;
   count: number;
   critical: number;
   high: number;

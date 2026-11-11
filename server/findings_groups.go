@@ -76,7 +76,9 @@ func (s *Server) findingGroups(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if task, ok := s.m.Task(i64s(*groups[i].TaskID)); ok {
-				groups[i].TaskStatus = s.resolvedTaskStatus(task)
+				state := task.lifecycleSnapshot()
+				groups[i].TaskStatus = s.resolvedTaskStatusFromSnapshot(task, state)
+				groups[i].TaskStopReason = state.StopReason
 			}
 		}
 	}

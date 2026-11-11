@@ -1288,6 +1288,10 @@ func (s *Server) resolvedTaskStatus(t *Task) string {
 		return "created"
 	}
 	lifecycle := t.lifecycleSnapshot()
+	return s.resolvedTaskStatusFromSnapshot(t, lifecycle)
+}
+
+func (s *Server) resolvedTaskStatusFromSnapshot(t *Task, lifecycle taskLifecycleState) string {
 	switch {
 	case isTerminalStatus(lifecycle.Status):
 		return lifecycle.Status

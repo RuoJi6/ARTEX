@@ -1167,7 +1167,14 @@ export default function FindingsPage() {
                         </div>
                       </button>
                       <div className="flex flex-wrap items-center gap-2">
-                        {group.task_status && <StatusBadge domain="task" value={group.task_status} dot />}
+                        {group.task_status && (
+                          <StatusBadge
+                            domain="task"
+                            value={group.task_status}
+                            stopReason={group.task_stop_reason}
+                            dot
+                          />
+                        )}
                         {SEVERITIES.map((level) => {
                           const count = group[level];
                           if (count === 0) return null;

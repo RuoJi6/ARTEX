@@ -1,8 +1,11 @@
 package db
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestNormalizeNoResultOptions(t *testing.T) {
@@ -79,10 +82,10 @@ func TestNoResultPersistenceGuardAndLegacyArchive(t *testing.T) {
 	if stored, err := d.GetTask(task.ID); err != nil || stored.NoResultSeconds != 60 || stored.NoResultMinFindings != 1 || stored.NoResultMinSeverity != "high" {
 		t.Fatalf("creation round trip: %+v, %v", stored, err)
 	}
-	if checked, err := d.MarkNoResultChecked(task.ID, true); err != nil || checked == nil {
+	if _, _, checked, err := d.CheckNoResultCheckpoint(t.Context(), task.ID, 1, "high"); err != nil || checked == nil {
 		t.Fatalf("first check: %v, %v", checked, err)
 	}
-	if checked, err := d.MarkNoResultChecked(task.ID, true); err != nil || checked != nil {
+	if _, _, checked, err := d.CheckNoResultCheckpoint(t.Context(), task.ID, 1, "high"); err != nil || checked != nil {
 		t.Fatalf("second check: %v, %v", checked, err)
 	}
 	if _, _, won, err := d.SetTerminalStatusGuardedReasonRuntime(task.ID, "timeout", StopReasonNoResult); err != nil || !won {
@@ -130,5 +133,213 @@ func TestNoResultPersistenceGuardAndLegacyArchive(t *testing.T) {
 	var severity, reason string
 	if err := tx.QueryRow(`SELECT no_result_seconds,no_result_min_findings,no_result_min_severity,stop_reason FROM tasks WHERE id=$1`, task.ID).Scan(&seconds, &minimum, &severity, &reason); err != nil || seconds != 0 || minimum != 1 || severity != "" || reason != "" {
 		t.Fatalf("legacy defaults: %d %d %q %q, %v", seconds, minimum, severity, reason, err)
+	}
+}
+
+// Register close first so all test data (including non-cascading notification
+// events) is removed before the database connection is closed.
+func noResultTestDB(t *testing.T) (*DB, *Task) {
+	t.Helper()
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	task, err := d.CreateTaskWithOptions("checkpoint concurrency", "goal", TaskCreateOptions{NoResultSeconds: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, query := range []string{
+			`DELETE FROM notification_events WHERE finding_id IN (SELECT id FROM findings WHERE task_id=$1)`,
+			`DELETE FROM findings WHERE task_id=$1`,
+		} {
+			if _, err := d.Exec(query, task.ID); err != nil {
+				t.Error(err)
+			}
+		}
+		if err := d.DeleteTask(task.ID); err != nil {
+			t.Error(err)
+		}
+	})
+	return d, task
+}
+
+// Observe an actual PostgreSQL lock wait before starting the 500ms assertion,
+// rather than assuming the goroutine has been scheduled by then.
+func waitForNoResultLockWait(t *testing.T, d *DB, blockerPID int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var blocked bool
+		if err := d.QueryRowContext(ctx, `SELECT EXISTS (
+ SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))
+ AND query LIKE '%tasks%')`, blockerPID).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("operation never waited for the task row lock")
+		case <-tick.C:
+		}
+	}
+}
+
+func TestNoResultCheckpointWaitsForFindingCommit(t *testing.T) {
+	d, task := noResultTestDB(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ready := make(chan int, 1)
+	release := make(chan struct{})
+	writerDone := make(chan struct{})
+	writerErr := make(chan error, 1)
+	go func() {
+		defer close(writerDone)
+		writerErr <- d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
+			if _, err := RecordFindingTx(ctx, tx, RecordFindingInput{
+				TaskID: task.ID, ExplorationID: task.ExplorationID, Severity: "high", Worker: "test",
+			}, nil); err != nil {
+				return err
+			}
+			var pid int
+			if err := tx.QueryRow(`SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+				return err
+			}
+			ready <- pid
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+	defer func() { cancel(); <-writerDone }()
+	var pid int
+	select {
+	case pid = <-ready:
+	case err := <-writerErr:
+		t.Fatalf("record finding: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	type decision struct {
+		count   int
+		stop    bool
+		checked *time.Time
+		err     error
+	}
+	result := make(chan decision, 1)
+	checkerDone := make(chan struct{})
+	go func() {
+		defer close(checkerDone)
+		count, stop, checked, err := d.CheckNoResultCheckpoint(ctx, task.ID, 1, "high")
+		result <- decision{count, stop, checked, err}
+	}()
+	defer func() { cancel(); <-checkerDone }()
+	waitForNoResultLockWait(t, d, pid)
+	select {
+	case got := <-result:
+		t.Fatalf("checkpoint returned before finding commit: %+v", got)
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(release)
+	if err := <-writerErr; err != nil {
+		t.Fatal(err)
+	}
+	got := <-result
+	if got.err != nil || got.count != 1 || got.stop || got.checked == nil {
+		t.Fatalf("checkpoint after finding commit: %+v", got)
+	}
+	stored, err := d.GetTask(task.ID)
+	if err != nil || stored.StopReason != "" || stored.NoResultCheckedAt == nil || !stored.NoResultCheckedAt.Equal(*got.checked) {
+		t.Fatalf("persisted checkpoint: %+v, %v", stored, err)
+	}
+}
+
+func TestNoResultCheckpointBlocksLaterFinding(t *testing.T) {
+	d, task := noResultTestDB(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	count, stop, checked, err := d.CheckNoResultCheckpoint(ctx, task.ID, 1, "high")
+	if err != nil || count != 0 || !stop || checked == nil {
+		t.Fatalf("initial checkpoint: %d %v %v %v", count, stop, checked, err)
+	}
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := LockTaskEvidenceTx(tx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	if err := tx.QueryRow(`SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	writerErr := make(chan error, 1)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		writerErr <- d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
+			_, err := RecordFindingTx(ctx, tx, RecordFindingInput{
+				TaskID: task.ID, ExplorationID: task.ExplorationID, Severity: "high", Worker: "test",
+			}, nil)
+			return err
+		})
+	}()
+	defer func() { cancel(); <-writerDone }()
+	waitForNoResultLockWait(t, d, pid)
+	select {
+	case err := <-writerErr:
+		t.Fatalf("finding bypassed task lock: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writerErr; err != nil {
+		t.Fatal(err)
+	}
+	stored, err := d.GetTask(task.ID)
+	if err != nil || stored.StopReason != StopReasonNoResult || stored.NoResultCheckedAt == nil || !stored.NoResultCheckedAt.Equal(*checked) {
+		t.Fatalf("later finding changed checkpoint: %+v, %v", stored, err)
+	}
+	if count, err := d.CountQualifyingFindings(task.ID, "high"); err != nil || count != 1 {
+		t.Fatalf("later finding not committed: %d, %v", count, err)
+	}
+	if _, _, again, err := d.CheckNoResultCheckpoint(ctx, task.ID, 1, "high"); err != nil || again != nil {
+		t.Fatalf("checkpoint claimed again: %v, %v", again, err)
+	}
+}
+
+func TestNoResultCheckpointSkipsUnavailableTasks(t *testing.T) {
+	for _, status := range []string{"done", "failed", "timeout", "deleted", "missing"} {
+		t.Run(status, func(t *testing.T) {
+			d, task := noResultTestDB(t)
+			id := task.ID
+			switch status {
+			case "deleted":
+				_, err := d.Exec(`UPDATE tasks SET deleted_at=clock_timestamp() WHERE id=$1`, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "missing":
+				id = -1
+			default:
+				if err := d.SetStatus(id, status); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if count, stop, checked, err := d.CheckNoResultCheckpoint(t.Context(), id, 1, ""); err != nil || count != 0 || stop || checked != nil {
+				t.Fatalf("unavailable task claimed: %d %v %v %v", count, stop, checked, err)
+			}
+		})
 	}
 }

@@ -222,13 +222,8 @@ func (e *Engine) checkNoResultCheckpoint(t *Task) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	count, err := e.m.pg.CountQualifyingFindings(id, t.NoResultMinSeverity)
-	if err != nil {
-		return false, err
-	}
 	minimum := max(1, t.NoResultMinFindings)
-	stop := count < minimum
-	checked, err := e.m.pg.MarkNoResultChecked(id, stop)
+	count, stop, checked, err := e.m.pg.CheckNoResultCheckpoint(context.Background(), id, minimum, t.NoResultMinSeverity)
 	if err != nil || checked == nil {
 		return false, err
 	}

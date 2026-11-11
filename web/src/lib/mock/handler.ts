@@ -2102,6 +2102,7 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
         task_name: owner?.name ?? "",
         task_description: owner?.description ?? items[0]?.task_description ?? "",
         task_status: owner?.status ?? "",
+        task_stop_reason: owner?.stop_reason ?? "",
         count: items.length,
         critical: items.filter((finding) => finding.severity === "critical").length,
         high: items.filter((finding) => finding.severity === "high").length,
