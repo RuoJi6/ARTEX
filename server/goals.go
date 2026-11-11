@@ -249,6 +249,10 @@ func (s *Server) admitTaskWhenScheduledWithGenerationChecked(t *Task, mode strin
 		// matching Engine gates before either parking it in FIFO or starting work;
 		// otherwise the old settling flag would make every worker skip forever.
 		s.engine.resetTimeoutRevival(t.ID)
+	} else if wasTerminal {
+		// A final settle round may finish as done. Revival must release its
+		// worker/planner barrier too, while preserving its deadline/checkpoint.
+		s.engine.settling.Delete(t.ID)
 	}
 	if shouldQueue {
 		if !wasQueued {
