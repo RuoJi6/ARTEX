@@ -16,16 +16,31 @@ Static SPA bundle harvester. Framework-agnostic; tuned for webpack + Vite.
 
 Stdlib only. TLS verification is disabled (recon against self-signed/internal hosts).
 """
-import sys, os, re, ssl, json, argparse, urllib.request, urllib.parse
+import sys, os, re, ssl, secrets, json, argparse, urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
 CTX = ssl.create_default_context(); CTX.check_hostname = False; CTX.verify_mode = ssl.CERT_NONE
+USER_AGENTS = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+    'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15',
+)
+
+
 def user_agent(value=None):
-    """Explicit value > shared environment; empty omits User-Agent."""
+    """Explicit value > environment > random sample; explicit empty omits UA."""
+    explicit = value is not None
     if value is None:
         value = os.environ.get("ARTEX_HTTP_USER_AGENT", "")
     value = value.strip(" ")
-    return value if all(32 <= ord(c) <= 126 for c in value) else ""
+    if not all(32 <= ord(c) <= 126 for c in value):
+        return secrets.choice(USER_AGENTS)
+    if value or explicit:
+        return value
+    return secrets.choice(USER_AGENTS)
 
 
 def fetch(url, binary=False, user_agent_value=None):
@@ -123,7 +138,7 @@ def extract_routes(js_text):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base"); ap.add_argument("outdir")
-    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: ARTEX_HTTP_USER_AGENT or omitted")
+    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: ARTEX_HTTP_USER_AGENT or random browser sample")
     args = ap.parse_args()
     base, outdir = args.base, args.outdir
     ua = user_agent(args.user_agent)

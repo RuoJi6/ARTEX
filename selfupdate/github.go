@@ -127,7 +127,7 @@ func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	httpidentity.ApplyRequired(req)
+	httpidentity.Apply(req)
 
 	resp, err := c.Do(req)
 	if err != nil {

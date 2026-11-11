@@ -17,6 +17,13 @@ SCRIPTS = Path(__file__).resolve().parent
 DIRECT_ENV = {"no_proxy": "*", "NO_PROXY": "*"}
 
 
+def load_script(name):
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 @contextlib.contextmanager
 def capture_server():
     seen = []
@@ -48,13 +55,32 @@ def capture_server():
 
 
 class UserAgentTests(unittest.TestCase):
+    def assert_identity(self, seen, expected, samples):
+        self.assertTrue(seen)
+        if expected == "random":
+            self.assertIn(seen[0][1], samples)
+            expected = seen[0][1]
+        self.assertTrue(all(ua == expected for _, ua, _ in seen), seen)
+
+    def test_random_selection_and_explicit_override(self):
+        for name in ("harvest_static", "spider_mpa"):
+            module = load_script(name)
+            for sample in module.USER_AGENTS:
+                with self.subTest(script=name, sample=sample):
+                    with patch.dict(os.environ, {"ARTEX_HTTP_USER_AGENT": ""}), patch.object(module.secrets, "choice", return_value=sample) as choose:
+                        self.assertEqual(module.user_agent(), sample)
+                        choose.assert_called_once_with(module.USER_AGENTS)
+                    with patch.dict(os.environ, {"ARTEX_HTTP_USER_AGENT": "Configured-UA"}), patch.object(module.secrets, "choice") as choose:
+                        self.assertEqual(module.user_agent(), "Configured-UA")
+                        self.assertEqual(module.user_agent("Override-UA"), "Override-UA")
+                        self.assertEqual(module.user_agent(""), "")
+                        choose.assert_not_called()
+
     def test_fetch_and_redirect(self):
         for name in ("harvest_static", "spider_mpa"):
-            spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            for value, expected in (("", None), (" Captured-UA/1.0 ", "Captured-UA/1.0"),
-                                    ("ok\r\nX-Injected: yes", None), ("客户端", None)):
+            module = load_script(name)
+            for value, expected in (("", "random"), (" Captured-UA/1.0 ", "Captured-UA/1.0"),
+                                    ("ok\r\nX-Injected: yes", "random"), ("客户端", "random")):
                 with self.subTest(script=name, value=value), capture_server() as (base, seen):
                     with patch.dict(os.environ, {**DIRECT_ENV, "ARTEX_HTTP_USER_AGENT": value}):
                         if name == "harvest_static":
@@ -65,23 +91,25 @@ class UserAgentTests(unittest.TestCase):
                             self.assertTrue(all(cookie == "session=sample" for _, _, cookie in seen))
                     self.assertIn("Page", body)
                     self.assertEqual([path for path, _, _ in seen], ["/start", "/page"])
-                    self.assertTrue(all(ua == expected for _, ua, _ in seen), seen)
+                    self.assert_identity(seen, expected, module.USER_AGENTS)
 
     def test_cli_precedence_and_outputs(self):
         for name in ("harvest_static", "spider_mpa"):
-            for flags, expected in (([], "Environment-UA/1.0"),
-                                    (["--user-agent", "Override-UA/1.0"], "Override-UA/1.0"),
-                                    (["--user-agent", ""], None)):
+            module = load_script(name)
+            for env_ua, flags, expected in (("", [], "random"),
+                                           ("Environment-UA/1.0", [], "Environment-UA/1.0"),
+                                           ("Environment-UA/1.0", ["--user-agent", "Override-UA/1.0"], "Override-UA/1.0"),
+                                           ("Environment-UA/1.0", ["--user-agent", ""], None)):
                 with self.subTest(script=name, flags=flags), capture_server() as (base, seen):
                     with tempfile.TemporaryDirectory() as outdir:
-                        env = dict(os.environ, **DIRECT_ENV, ARTEX_HTTP_USER_AGENT="Environment-UA/1.0")
+                        env = dict(os.environ, **DIRECT_ENV, ARTEX_HTTP_USER_AGENT=env_ua)
                         command = [sys.executable, str(SCRIPTS / f"{name}.py"), base + "/start", outdir] + flags
                         if name == "spider_mpa":
                             command += ["--max", "1", "--delay", "0"]
                         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
                         self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertGreaterEqual(len(seen), 2)
-                        self.assertTrue(all(ua == expected for _, ua, _ in seen), seen)
+                        self.assert_identity(seen, expected, module.USER_AGENTS)
                         artifact = "api_static.txt" if name == "harvest_static" else "forms.txt"
                         self.assertTrue((Path(outdir) / artifact).exists())
 

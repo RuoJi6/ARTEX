@@ -14,17 +14,32 @@ the same origin and extracts:
 
 Stdlib only. Same-origin, bounded, polite. Provide --cookie for an authed crawl.
 """
-import sys, os, re, ssl, argparse, urllib.request, urllib.parse, time
+import sys, os, re, ssl, secrets, argparse, urllib.request, urllib.parse, time
 from html.parser import HTMLParser
 from collections import deque
 
 CTX = ssl.create_default_context(); CTX.check_hostname = False; CTX.verify_mode = ssl.CERT_NONE
+USER_AGENTS = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+    'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15',
+)
+
+
 def user_agent(value=None):
-    """Explicit value > shared environment; empty omits User-Agent."""
+    """Explicit value > environment > random sample; explicit empty omits UA."""
+    explicit = value is not None
     if value is None:
         value = os.environ.get("ARTEX_HTTP_USER_AGENT", "")
     value = value.strip(" ")
-    return value if all(32 <= ord(c) <= 126 for c in value) else ""
+    if not all(32 <= ord(c) <= 126 for c in value):
+        return secrets.choice(USER_AGENTS)
+    if value or explicit:
+        return value
+    return secrets.choice(USER_AGENTS)
 
 SKIP_EXT = re.compile(r'\.(css|png|jpe?g|gif|svg|ico|woff2?|ttf|pdf|zip|mp4|webp|js)(\?|$)', re.I)
 API_HINT = re.compile(r'/(?:api|rest|service|ajax|action|do|rpc|graphql|v\d|admin|backend)\b', re.I)
@@ -79,7 +94,7 @@ def main():
     ap.add_argument("--cookie", default=""); ap.add_argument("--max", type=int, default=200)
     ap.add_argument("--depth", type=int, default=4); ap.add_argument("--delay", type=float, default=0.1)
     ap.add_argument("--include", default=""); ap.add_argument("--exclude", default="logout|signout|delete|remove|destroy")
-    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: ARTEX_HTTP_USER_AGENT or omitted")
+    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: ARTEX_HTTP_USER_AGENT or random browser sample")
     args = ap.parse_args()
     ua = user_agent(args.user_agent)
     base = args.base if args.base.startswith("http") else "https://" + args.base

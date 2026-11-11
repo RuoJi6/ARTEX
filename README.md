@@ -314,7 +314,7 @@ CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
 **LLM**：`export ANTHROPIC_API_KEY=sk-...`（或 `OPENAI_API_KEY`），也可在 UI 的「LLM 配置」页填写。
 可选：`ARTEX_LLM_PROVIDER` / `ARTEX_LLM_MODEL` / `ARTEX_LLM_BASE_URL` / `ARTEX_LLM_PROXY`。
 
-**HTTP User-Agent**：内置 WebFetch（worker / planner / main / chat，包括代理失败后的直连重试）、资产 HTTP 自动补全、出口连通性探测、HTTP 自定义工具、请求重放器及可选的 `harvest_static.py` / `spider_mpa.py` 默认不发送 User-Agent，不再携带工具名称。通过 `ARTEX_HTTP_USER_AGENT` 设置固定值（例如复用授权目标已有流量中的值）；直接运行时导出环境变量并重启服务，Docker 部署在 `.env` 配置后重建容器。两个 Python 模板还支持 `--user-agent '已有流量中的值'`，优先于环境变量；`--user-agent ''` 强制留空。值会去除首尾空格，只接受可打印 ASCII，含控制字符或非 ASCII 的配置忽略并按空值处理。不随机轮换或自动伪装浏览器；省略此请求头不能保证无法识别客户端。自定义工具和重放器中显式提供的请求头优先于全局值。GitHub 自更新查询、校验和及包下载同样移除了工具名，未配置时使用通用 `Go-http-client/1.1` 以满足 GitHub 非空请求头要求。记录代理保留请求头省略语义。此设置不影响浏览器、SDK 联网搜索、LLM / MCP / Webhook 服务通信或外部独立工具；本仓库未包含 phpfinger，其 `--user-agent` 需在该工具中单独配置。
+**HTTP User-Agent**：内置 WebFetch（worker / planner / main / chat）、资产 HTTP 自动补全、出口连通性探测、HTTP 自定义工具、请求重放器、GitHub 自更新和可选的 `harvest_static.py` / `spider_mpa.py` 默认从 6 个浏览器 UA 样本中随机抽选，不携带工具名称。Go 每次逻辑请求选择一次，重定向及 WebFetch 的代理失败直连重试复用同一个值；Python 脚本每次运行选择一次，入口、下载与重试保持一致。随机抽选允许重复，不依赖 AI 服务。通过 `ARTEX_HTTP_USER_AGENT` 可指定固定值；留空或非法值使用随机策略。直接运行时导出环境变量并重启服务，Docker 在 `.env` 配置后重建容器。Python 的 `--user-agent VALUE`、自定义工具和重放器中的显式 UA 优先，显式空值仍可省略此头。值去除首尾空格，仅接受可打印 ASCII。记录代理保留已有 UA 及显式省略语义。UA 随机化不代表 TLS、Cookie 或其他浏览器特征同步改变，也不保证无法识别客户端。此设置不影响浏览器、SDK 联网搜索、LLM / MCP / Webhook 服务通信或外部独立工具；本仓库未包含 phpfinger，其 `--user-agent` 需在该工具中单独配置。
 
 完整排查范围、额外发现及未接管的服务通信见 [HTTP 请求标识排查](HTTP_USER_AGENT.md)。
 

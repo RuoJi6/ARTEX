@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Autumn-27/norma/agentcore"
@@ -42,7 +43,9 @@ func TestAgentSessionUsesConfiguredWebFetch(t *testing.T) {
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				if r.UserAgent() != ua {
+				if ua == "" && !strings.HasPrefix(r.UserAgent(), "Mozilla/5.0 ") {
+					t.Errorf("random UA missing: %q", r.UserAgent())
+				} else if ua != "" && r.UserAgent() != ua {
 					t.Errorf("session sent User-Agent %q, want %q", r.UserAgent(), ua)
 				}
 				w.Write([]byte("fixture"))

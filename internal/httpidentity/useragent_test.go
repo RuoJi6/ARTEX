@@ -1,8 +1,10 @@
 package httpidentity
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -17,11 +19,11 @@ func TestApplyOnWire(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ARTEX_HTTP_USER_AGENT", tc.value)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if got := r.Header.Get("User-Agent"); got != tc.want {
+				got := r.UserAgent()
+				if tc.want == "" && !slices.Contains(userAgents[:], got) {
+					t.Errorf("default User-Agent is not a browser sample: %q", got)
+				} else if tc.want != "" && got != tc.want {
 					t.Errorf("User-Agent = %q, want %q", got, tc.want)
-				}
-				if _, present := r.Header["User-Agent"]; tc.want == "" && present {
-					t.Error("empty User-Agent must be absent on the wire")
 				}
 				if r.Header.Get("X-Injected") != "" {
 					t.Error("header injection")
@@ -39,5 +41,17 @@ func TestApplyOnWire(t *testing.T) {
 			}
 			resp.Body.Close()
 		})
+	}
+}
+
+func TestRandomUserAgentSelection(t *testing.T) {
+	// Exercise every choice deterministically without a statistical/flaky test.
+	for index, want := range userAgents {
+		if got := randomUserAgent(bytes.NewReader([]byte{byte(index)})); got != want {
+			t.Errorf("choice %d = %q, want %q", index, got, want)
+		}
+	}
+	if got := randomUserAgent(bytes.NewReader(nil)); got != userAgents[0] {
+		t.Errorf("entropy failure fallback = %q", got)
 	}
 }

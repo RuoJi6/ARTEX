@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -15,11 +16,10 @@ func TestProbeUserAgent(t *testing.T) {
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				if got := r.UserAgent(); got != ua {
+				if got := r.UserAgent(); ua == "" && !strings.HasPrefix(got, "Mozilla/5.0 ") {
+					t.Errorf("random UA missing: %q", got)
+				} else if ua != "" && got != ua {
 					t.Errorf("User-Agent = %q, want %q", got, ua)
-				}
-				if _, present := r.Header["User-Agent"]; ua == "" && present {
-					t.Error("empty User-Agent present on wire")
 				}
 				http.Redirect(w, r, "/stop", http.StatusFound)
 			}))

@@ -32,11 +32,10 @@ func TestProbeOneUserAgent(t *testing.T) {
 		t.Run(ua, func(t *testing.T) {
 			t.Setenv("ARTEX_HTTP_USER_AGENT", ua)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if got := r.UserAgent(); got != ua {
+				if got := r.UserAgent(); ua == "" && !strings.HasPrefix(got, "Mozilla/5.0 ") {
+					t.Errorf("random UA missing: %q", got)
+				} else if ua != "" && got != ua {
 					t.Errorf("User-Agent = %q, want %q", got, ua)
-				}
-				if _, present := r.Header["User-Agent"]; ua == "" && present {
-					t.Error("empty User-Agent present on wire")
 				}
 				fmt.Fprint(w, `{"ip":"203.0.113.7"}`)
 			}))

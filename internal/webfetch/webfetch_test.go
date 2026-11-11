@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -37,13 +38,21 @@ func TestIdentityAcrossRoutes(t *testing.T) {
 			t.Run(route+"/"+ua, func(t *testing.T) {
 				t.Setenv("ARTEX_HTTP_USER_AGENT", ua)
 				var targetCalls, proxyCalls atomic.Int32
+				var mu sync.Mutex
+				var selected string
 				checkUA := func(r *http.Request) {
-					if got := r.Header.Get("User-Agent"); got != ua {
+					mu.Lock()
+					defer mu.Unlock()
+					got := r.UserAgent()
+					if ua == "" && !strings.HasPrefix(got, "Mozilla/5.0 ") {
+						t.Errorf("random UA missing: %q", got)
+					} else if ua != "" && got != ua {
 						t.Errorf("User-Agent = %q, want %q", got, ua)
 					}
-					if _, present := r.Header["User-Agent"]; ua == "" && present {
-						t.Error("empty User-Agent present on wire")
+					if selected != "" && selected != got {
+						t.Errorf("redirect/retry UA changed from %q to %q", selected, got)
 					}
+					selected = got
 				}
 				target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					targetCalls.Add(1)
@@ -134,6 +143,26 @@ func TestTLSAndStaticAssetGuard(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Errorf("static asset triggered network request: calls = %d", calls.Load())
+	}
+}
+
+func TestIdentitySelectedForEachCall(t *testing.T) {
+	t.Setenv("ARTEX_HTTP_USER_AGENT", "Before-Tool-Creation")
+	tool := New(actool.WebFetchConfig{})
+	seen := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.UserAgent()
+		fmt.Fprint(w, "ok")
+	}))
+	defer server.Close()
+	for _, want := range []string{"First-Call", "Second-Call"} {
+		t.Setenv("ARTEX_HTTP_USER_AGENT", want)
+		if result := callFetch(t, tool, server.URL, false); result.IsError {
+			t.Fatal(result.Flatten())
+		}
+		if got := <-seen; got != want {
+			t.Fatalf("identity cached across calls: got %q, want %q", got, want)
+		}
 	}
 }
 

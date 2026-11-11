@@ -59,7 +59,7 @@ func TestFetchLatestMissingRelease(t *testing.T) {
 
 func TestUpdateUserAgent(t *testing.T) {
 	for _, tc := range []struct{ env, want string }{
-		{"", "Go-http-client/1.1"},
+		{"", ""},
 		{"Captured-UA/1.0", "Captured-UA/1.0"},
 	} {
 		t.Run(tc.env, func(t *testing.T) {
@@ -67,7 +67,9 @@ func TestUpdateUserAgent(t *testing.T) {
 			calls := 0
 			client := &http.Client{Transport: releaseTransport(func(req *http.Request) (*http.Response, error) {
 				calls++
-				if got := req.UserAgent(); got != tc.want {
+				if got := req.UserAgent(); tc.want == "" && !strings.HasPrefix(got, "Mozilla/5.0 ") {
+					t.Errorf("random UA missing: %q", got)
+				} else if tc.want != "" && got != tc.want {
 					t.Errorf("User-Agent = %q, want %q", got, tc.want)
 				}
 				body := `{"tag_name":"v0.3.17"}`

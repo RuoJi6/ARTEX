@@ -122,7 +122,6 @@ func staticAssetExt(rawURL string) string {
 }
 
 func webFetchRunner(cfg actool.WebFetchConfig) func(context.Context, json.RawMessage, *actool.ToolContext) (actool.Result, error) {
-	userAgent := httpidentity.UserAgent()
 	client := newFetchClient(cfg)
 	// direct is the no-proxy fallback used when a proxied fetch fails for a
 	// proxy-caused reason (closed tunnel / failed CONNECT / TLS or HTTP2 mismatch):
@@ -152,6 +151,7 @@ func webFetchRunner(cfg actool.WebFetchConfig) func(context.Context, json.RawMes
 		if err != nil {
 			return actool.Errorf("Error: " + err.Error()), nil
 		}
+		userAgent := httpidentity.UserAgent()
 		req.Header.Set("User-Agent", userAgent)
 		resp, err := client.Do(req)
 		// One direct retry when the proxied attempt failed for a proxy-caused reason.

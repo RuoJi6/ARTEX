@@ -231,7 +231,7 @@ func get(ctx context.Context, c *http.Client, rawURL string) (io.ReadCloser, err
 	if err := checkURL(req.URL); err != nil {
 		return nil, err
 	}
-	httpidentity.ApplyRequired(req)
+	httpidentity.Apply(req)
 	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
