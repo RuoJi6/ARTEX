@@ -1,6 +1,8 @@
 "use client";
 import * as React from "react";
 
+import { useSearchParams } from "next/navigation";
+
 import {
   DownloadIcon,
   FileIcon,
@@ -49,7 +51,9 @@ type EditState = {
   saving: boolean;
 };
 
-export default function WorkspacePage() {
+function WorkspaceInner() {
+  const searchParams = useSearchParams();
+  const requestedPath = searchParams.get("path") ?? "";
   const { ui, liveUI } = useUITranslation();
 
   const [path, setPath] = React.useState("");
@@ -76,8 +80,31 @@ export default function WorkspacePage() {
   );
 
   React.useEffect(() => {
-    load("");
-  }, [load]);
+    let alive = true;
+    // A path may identify a file or a directory. Directory listing wins;
+    // otherwise open the file and show its containing directory.
+    void api
+      .workspaceList(requestedPath)
+      .then((result) => {
+        if (!alive) return;
+        setEntries(result.entries);
+        setPath(result.path);
+        setLoading(false);
+      })
+      .catch(async () => {
+        if (!alive) return;
+        load(requestedPath.split("/").slice(0, -1).join("/"));
+        try {
+          const file = await api.workspaceRead(requestedPath);
+          if (alive) setEdit({ file, content: file.content ?? "", dirty: false, saving: false });
+        } catch (error) {
+          if (alive) toast.error((error as Error).message);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [load, requestedPath]);
 
   const crumbs = React.useMemo(() => {
     const parts = path ? path.split("/") : [];
@@ -356,5 +383,13 @@ export default function WorkspacePage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+export default function WorkspacePage() {
+  return (
+    <React.Suspense fallback={null}>
+      <WorkspaceInner />
+    </React.Suspense>
   );
 }

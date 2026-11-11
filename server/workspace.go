@@ -1,18 +1,15 @@
 package server
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // Workspace file manager — browse / view / edit / download / upload / delete the
@@ -119,20 +116,13 @@ func (s *Server) wsRead(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "是目录，不能作为文件读取")
 		return
 	}
-	if fi.Size() > maxWorkspaceRead {
-		writeJSON(w, 200, map[string]any{"path": s.wsRel(abs), "size": fi.Size(), "too_large": true, "binary": true})
-		return
-	}
-	data, err := os.ReadFile(abs)
+	f, err := os.Open(abs)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
-		writeJSON(w, 200, map[string]any{"path": s.wsRel(abs), "size": fi.Size(), "binary": true})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"path": s.wsRel(abs), "size": fi.Size(), "binary": false, "content": string(data)})
+	defer f.Close()
+	writeTextFile(w, s.wsRel(abs), f, fi.Size())
 }
 
 // POST /api/workspace/write  {path, content} — create/overwrite a text file.
@@ -223,7 +213,7 @@ func (s *Server) wsDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	name := filepath.Base(abs)
 	// RFC 5987 filename* keeps non-ASCII names intact; plain filename is the fallback.
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+sanitizeFilename(name)+"\"; filename*=UTF-8''"+url.PathEscape(name))
+	setFileDisposition(w, "attachment", name)
 	http.ServeFile(w, r, abs)
 }
 

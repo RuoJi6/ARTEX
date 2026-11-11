@@ -118,9 +118,10 @@ test("all task detail tabs render their English fixed UI", async () => {
     ["intercept", "InterceptTab"],
     ["report", "ReportTab"],
     ["graph", "GraphTab"],
+    ["files", "FilesTab"],
   ]) {
     const Component = load(base + `/src/app/(main)/function/tasks/detail/_tabs/${file}-tab.tsx`)[name];
-    const html = visible(render(Component, { taskId: "1" }));
+    const html = visible(render(Component, { taskId: "1", task: { id: "1", status: "done" }, active: true }));
     assert.doesNotMatch(html, /[\p{Script=Han}]/u, `${name}: ${html}`);
   }
   const { IntelligencePanel } = load(base + "/src/components/intelligence-panel.tsx");
