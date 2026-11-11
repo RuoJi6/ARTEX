@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-spider_mpa.py <BASE_URL> <OUTDIR> [--cookie "k=v; k2=v2"] [--max 200] [--depth 4]
+spider_mpa.py <BASE_URL> <OUTDIR> [--cookie "k=v; k2=v2"] [--max 200] [--depth 4] [--user-agent VALUE]
 
 参考模板 — 非通用成品。执行前须按目标调整 --exclude、cookie、depth/max 等同域策略。
 
@@ -19,15 +19,24 @@ from html.parser import HTMLParser
 from collections import deque
 
 CTX = ssl.create_default_context(); CTX.check_hostname = False; CTX.verify_mode = ssl.CERT_NONE
-UA = "Mozilla/5.0 (spa-api-recon spider)"
+def user_agent(value=None):
+    """Explicit value > shared environment; empty omits User-Agent."""
+    if value is None:
+        value = os.environ.get("ARTEX_HTTP_USER_AGENT", "")
+    value = value.strip(" ")
+    return value if all(32 <= ord(c) <= 126 for c in value) else ""
+
 SKIP_EXT = re.compile(r'\.(css|png|jpe?g|gif|svg|ico|woff2?|ttf|pdf|zip|mp4|webp|js)(\?|$)', re.I)
 API_HINT = re.compile(r'/(?:api|rest|service|ajax|action|do|rpc|graphql|v\d|admin|backend)\b', re.I)
 
-def fetch(url, cookie):
-    h = {"User-Agent": UA}
+def fetch(url, cookie, user_agent_value=None):
+    ua = user_agent(user_agent_value)
+    h = {"User-Agent": ua} if ua else {}
     if cookie: h["Cookie"] = cookie
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=h), context=CTX, timeout=20) as r:
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=CTX))
+        opener.addheaders = []  # Do not reintroduce Python-urllib's default UA.
+        with opener.open(urllib.request.Request(url, headers=h), timeout=20) as r:
             ct = r.headers.get("Content-Type", "")
             if "html" not in ct and "xml" not in ct: return "", ct
             return r.read().decode("utf-8", "ignore"), ct
@@ -70,7 +79,9 @@ def main():
     ap.add_argument("--cookie", default=""); ap.add_argument("--max", type=int, default=200)
     ap.add_argument("--depth", type=int, default=4); ap.add_argument("--delay", type=float, default=0.1)
     ap.add_argument("--include", default=""); ap.add_argument("--exclude", default="logout|signout|delete|remove|destroy")
+    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: ARTEX_HTTP_USER_AGENT or omitted")
     args = ap.parse_args()
+    ua = user_agent(args.user_agent)
     base = args.base if args.base.startswith("http") else "https://" + args.base
     os.makedirs(args.outdir, exist_ok=True)
     origin = "{0.scheme}://{0.netloc}".format(urllib.parse.urlparse(base))
@@ -82,7 +93,7 @@ def main():
     n = 0
     while q and n < args.max:
         url, d = q.popleft(); n += 1
-        html, ct = fetch(url, args.cookie)
+        html, ct = fetch(url, args.cookie, user_agent_value=ua)
         if args.delay: time.sleep(args.delay)
         if not html: continue
         p = Page()

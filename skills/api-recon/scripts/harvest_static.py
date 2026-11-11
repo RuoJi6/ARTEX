@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-harvest_static.py <BASE_URL> <OUTDIR>
+harvest_static.py <BASE_URL> <OUTDIR> [--user-agent VALUE]
 
 参考模板 — 非通用成品。执行前须按目标站点调整，常见改动：
   - extract_endpoints 正则（endpoint 方言）
@@ -16,16 +16,25 @@ Static SPA bundle harvester. Framework-agnostic; tuned for webpack + Vite.
 
 Stdlib only. TLS verification is disabled (recon against self-signed/internal hosts).
 """
-import sys, os, re, ssl, json, urllib.request, urllib.parse
+import sys, os, re, ssl, json, argparse, urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
 CTX = ssl.create_default_context(); CTX.check_hostname = False; CTX.verify_mode = ssl.CERT_NONE
-UA = "Mozilla/5.0 (spa-api-recon)"
+def user_agent(value=None):
+    """Explicit value > shared environment; empty omits User-Agent."""
+    if value is None:
+        value = os.environ.get("ARTEX_HTTP_USER_AGENT", "")
+    value = value.strip(" ")
+    return value if all(32 <= ord(c) <= 126 for c in value) else ""
 
-def fetch(url, binary=False):
+
+def fetch(url, binary=False, user_agent_value=None):
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, context=CTX, timeout=25) as r:
+        ua = user_agent(user_agent_value)
+        req = urllib.request.Request(url, headers={"User-Agent": ua} if ua else {})
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=CTX))
+        opener.addheaders = []  # Do not reintroduce Python-urllib's default UA.
+        with opener.open(req, timeout=25) as r:
             data = r.read()
             return (data if binary else data.decode("utf-8", "ignore")), r.status
     except Exception as e:
@@ -112,14 +121,17 @@ def extract_routes(js_text):
 
 # ---- main -------------------------------------------------------------------
 def main():
-    if len(sys.argv) < 3:
-        print("usage: harvest_static.py <BASE_URL> <OUTDIR>"); sys.exit(1)
-    base, outdir = sys.argv[1], sys.argv[2]
+    ap = argparse.ArgumentParser()
+    ap.add_argument("base"); ap.add_argument("outdir")
+    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: ARTEX_HTTP_USER_AGENT or omitted")
+    args = ap.parse_args()
+    base, outdir = args.base, args.outdir
+    ua = user_agent(args.user_agent)
     if not base.startswith("http"): base = "https://" + base
     jsdir = os.path.join(outdir, "js"); os.makedirs(jsdir, exist_ok=True)
 
     print(f"[*] entry: {base}")
-    html, status = fetch(base)
+    html, status = fetch(base, user_agent_value=ua)
     open(os.path.join(outdir, "index.html"), "w").write(html)
     origin = origin_of(base)
 
@@ -137,7 +149,7 @@ def main():
         if not fn.endswith(".js"): return None
         lp = os.path.join(jsdir, fn)
         if url in have: return have[url]
-        data, st = fetch(url, binary=True)
+        data, st = fetch(url, binary=True, user_agent_value=ua)
         if st == 200 and data and not data[:15].lstrip().startswith(b"<"):
             open(lp, "wb").write(data); have[url] = lp; return lp
         return None

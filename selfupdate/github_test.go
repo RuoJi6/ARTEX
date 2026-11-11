@@ -56,3 +56,36 @@ func TestFetchLatestMissingRelease(t *testing.T) {
 		t.Fatalf("unexpected missing-release error: %v", err)
 	}
 }
+
+func TestUpdateUserAgent(t *testing.T) {
+	for _, tc := range []struct{ env, want string }{
+		{"", "Go-http-client/1.1"},
+		{"Captured-UA/1.0", "Captured-UA/1.0"},
+	} {
+		t.Run(tc.env, func(t *testing.T) {
+			t.Setenv("ARTEX_HTTP_USER_AGENT", tc.env)
+			calls := 0
+			client := &http.Client{Transport: releaseTransport(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if got := req.UserAgent(); got != tc.want {
+					t.Errorf("User-Agent = %q, want %q", got, tc.want)
+				}
+				body := `{"tag_name":"v0.3.17"}`
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}
+			if _, err := FetchLatest(context.Background(), client); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"SHA256SUMS", "artex.zip"} {
+				body, err := get(context.Background(), client, "https://github.com/RuoJi6/ARTEX/releases/download/v0.3.17/"+name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body.Close()
+			}
+			if calls != 3 {
+				t.Fatalf("calls = %d, want 3", calls)
+			}
+		})
+	}
+}

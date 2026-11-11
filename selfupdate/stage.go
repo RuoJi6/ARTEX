@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/Autumn-27/artex/internal/httpidentity"
 )
 
 // sumsAsset 是 release.yml 生成的校验和清单，覆盖 Release 里全部 zip。
@@ -229,7 +231,7 @@ func get(ctx context.Context, c *http.Client, rawURL string) (io.ReadCloser, err
 	if err := checkURL(req.URL); err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "artex-selfupdate")
+	httpidentity.ApplyRequired(req)
 	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err

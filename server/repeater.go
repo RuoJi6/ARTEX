@@ -16,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Autumn-27/artex/internal/httpidentity"
 )
 
 const (
@@ -141,6 +143,7 @@ func (s *Server) sendRepeater(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "构造请求失败")
 		return
 	}
+	httpidentity.Apply(req)
 	for key, value := range in.Headers {
 		name := strings.TrimSpace(key)
 		if name == "" {
