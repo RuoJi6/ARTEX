@@ -129,6 +129,7 @@ func TestSettleDrainAndGoalMetCausesAreDistinct(t *testing.T) {
 		code  string
 	}{
 		{agent.AbortSettleDrainTimeout, "settle_drain_timeout"},
+		{agent.AbortNoResultStop, "no_result_stop"},
 		{agent.AbortGoalMet, "goal_met"},
 	} {
 		e := NewEngine(nil)

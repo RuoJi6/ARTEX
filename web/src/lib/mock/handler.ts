@@ -1274,6 +1274,11 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     const categoryID = mockIntegerField(b.category_id, "category_id") ?? undefined;
     const category = categoryID === undefined ? undefined : mockTaskCategories.find((item) => item.id === categoryID);
     if (categoryID !== undefined && !category) throw new Error("任务分类不存在");
+    const noResultSeconds = Math.max(0, mockIntegerField(b.no_result_seconds, "no_result_seconds") ?? 0);
+    const noResultSeverity = String(b.no_result_min_severity ?? "");
+    if (!["", "low", "medium", "high", "critical"].includes(noResultSeverity)) {
+      throw new Error("invalid no_result_min_severity");
+    }
     const created: Task = {
       id,
       name,
@@ -1282,6 +1287,10 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       category_name: category?.name,
       description: description || "新任务",
       goal,
+      no_result_seconds: noResultSeconds > 0 ? Math.max(60, noResultSeconds) : 0,
+      no_result_min_findings: Math.max(1, mockIntegerField(b.no_result_min_findings, "no_result_min_findings") ?? 1),
+      no_result_min_severity: noResultSeverity as Task["no_result_min_severity"],
+      stop_reason: "",
       worker_count: mockWorkerCount(b.worker_count),
       status: "created",
       created_at: now.toISOString(),

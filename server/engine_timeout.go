@@ -125,11 +125,16 @@ func (e *Engine) clockCtx(base context.Context, t *Task, final bool) context.Con
 
 // ---------- 协调器 ----------
 
+func needsNoResultCoordinator(t *Task) bool {
+	state := t.lifecycleSnapshot()
+	return t.NoResultSeconds > 0 && (state.NoResultCheckedAt == 0 || state.StopReason == db.StopReasonNoResult)
+}
+
 // startDeadlineCoordinator launches the per-task deadline timer once (idempotent).
 // Called from Run() and from the restart reload path, so non-active timeout tasks
 // still get settled after their deadline even without live planner/worker loops.
 func (e *Engine) startDeadlineCoordinator(ctx context.Context, t *Task) {
-	if t == nil || t.TimeoutSeconds <= 0 {
+	if t == nil || (t.TimeoutSeconds <= 0 && !needsNoResultCoordinator(t)) {
 		return
 	}
 	e.deleteMu.RLock()
@@ -137,55 +142,123 @@ func (e *Engine) startDeadlineCoordinator(ctx context.Context, t *Task) {
 		e.deleteMu.RUnlock()
 		return
 	}
-	if _, loaded := e.coordStarted.LoadOrStore(t.ID, true); loaded {
+	token := new(int)
+	if _, loaded := e.coordStarted.LoadOrStore(t.ID, token); loaded {
 		e.deleteMu.RUnlock()
 		return
 	}
 	rt := e.registerTaskRoutines(ctx, t.ID, 1)
 	e.deleteMu.RUnlock()
-	runTaskRoutine(rt, func(loopCtx context.Context) { e.deadlineCoordinator(loopCtx, t) })
+	runTaskRoutine(rt, func(loopCtx context.Context) {
+		defer func() {
+			// A terminal task may be revived while this routine is returning. Only
+			// remove our own marker, then ensure that revival has a coordinator.
+			if e.coordStarted.CompareAndDelete(t.ID, token) && loopCtx.Err() == nil && !e.isSettling(t.ID) && !isTerminalStatus(e.m.TaskStatus(t.ID)) {
+				e.startDeadlineCoordinator(ctx, t)
+			}
+		}()
+		e.deadlineCoordinator(loopCtx, t)
+	})
 }
 
-// deadlineCoordinator waits until the task's absolute deadline, then runs the settle
-// sequence. Absolute wall-clock: it keeps counting through pauses.
+// deadlineCoordinator watches both the absolute deadline and the one-shot active
+// runtime checkpoint. Only the absolute deadline keeps counting through pauses.
 func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil || isTerminalStatus(e.m.TaskStatus(t.ID)) {
 			return
-		default:
 		}
-		if isTerminalStatus(e.m.TaskStatus(t.ID)) {
-			return // already finished (goals met / failed) — nothing to time out
+		state := t.lifecycleSnapshot()
+		if state.NoResultCheckedAt > 0 && state.StopReason == db.StopReasonNoResult {
+			// Recover a committed failed checkpoint interrupted during settling.
+			e.settleTask(ctx, t, db.StopReasonNoResult)
+			return
 		}
-		dl := e.taskDeadline(t)
-		if dl <= 0 {
-			if sleepCtx(ctx, deadlinePollInterval) { // not yet stamped (task hasn't really run)
+		nap := deadlineMaxSleep
+		if dl := e.taskDeadline(t); dl > 0 {
+			remaining := time.Until(time.Unix(dl, 0))
+			if remaining <= 0 {
+				e.settleTask(ctx, t, "")
 				return
 			}
-			continue
+			nap = min(nap, remaining)
+		} else if t.TimeoutSeconds > 0 {
+			nap = deadlinePollInterval
 		}
-		if remaining := time.Until(time.Unix(dl, 0)); remaining > 0 {
-			nap := remaining
-			if nap > deadlineMaxSleep {
-				nap = deadlineMaxSleep
+		if t.NoResultSeconds > 0 && state.NoResultCheckedAt == 0 {
+			remaining := noResultRemaining(t.NoResultSeconds, state, time.Now().Unix())
+			if remaining <= 0 {
+				stop, err := e.checkNoResultCheckpoint(t)
+				if err != nil {
+					log.Printf("[no-result] task %s 检查失败: %v", t.ID, err)
+					nap = deadlinePollInterval // DB errors never count as zero findings.
+				} else if stop {
+					e.settleTask(ctx, t, db.StopReasonNoResult)
+					return
+				}
+			} else {
+				nap = min(nap, remaining)
 			}
-			if sleepCtx(ctx, nap) {
-				return
-			}
-			continue
 		}
-		e.settleTask(ctx, t)
-		return
+		if t.TimeoutSeconds <= 0 && (t.NoResultSeconds <= 0 || t.lifecycleSnapshot().NoResultCheckedAt > 0) {
+			return
+		}
+		if sleepCtx(ctx, nap) {
+			return
+		}
 	}
+}
+
+// checkNoResultCheckpoint serializes the decision with terminal transitions and
+// revival. Once marked, later findings cannot reverse the decision.
+func (e *Engine) checkNoResultCheckpoint(t *Task) (bool, error) {
+	e.m.taskStateMu.Lock()
+	defer e.m.taskStateMu.Unlock()
+	state := t.lifecycleSnapshot()
+	if state.NoResultCheckedAt > 0 || isTerminalStatus(state.Status) || noResultRemaining(t.NoResultSeconds, state, time.Now().Unix()) > 0 {
+		return false, nil
+	}
+	id, err := strconv.ParseInt(t.ID, 10, 64)
+	if err != nil {
+		return false, err
+	}
+	count, err := e.m.pg.CountQualifyingFindings(id, t.NoResultMinSeverity)
+	if err != nil {
+		return false, err
+	}
+	minimum := max(1, t.NoResultMinFindings)
+	stop := count < minimum
+	checked, err := e.m.pg.MarkNoResultChecked(id, stop)
+	if err != nil || checked == nil {
+		return false, err
+	}
+	t.updateLifecycle(func(s *taskLifecycleState) {
+		s.NoResultCheckedAt = checked.Unix()
+		if stop {
+			s.StopReason = db.StopReasonNoResult
+		}
+	})
+	severity := t.NoResultMinSeverity
+	if severity == "" {
+		severity = "不限"
+	} else {
+		severity += "及以上"
+	}
+	summary := fmt.Sprintf("无成果检查通过：达标漏洞 %d/%d（等级%s），任务继续运行，之后不再检查", count, minimum, severity)
+	if stop {
+		runtime := taskRunSeconds(state.ActiveRunSeconds, state.RunSegmentStartedAt, checked.Unix(), state.Status, state.Paused, state.Queued) - state.NoResultBaseSeconds
+		summary = fmt.Sprintf("无成果止损：已运行 %s，达标漏洞 %d/%d（等级%s），任务自动停止", time.Duration(runtime)*time.Second, count, minimum, severity)
+	}
+	e.emitActivity(t, db.Activity{Worker: "system", Kind: "text", Summary: summary})
+	return stop, nil
 }
 
 // settleTask runs the ordered settle sequence once (§4 steps ①–⑥).
-func (e *Engine) settleTask(ctx context.Context, t *Task) {
+func (e *Engine) settleTask(ctx context.Context, t *Task, reason string) {
 	if !e.markSettling(t.ID) {
 		return
 	}
-	log.Printf("[deadline] task %s 到达超时上限,进入收尾时序", t.ID)
+	log.Printf("[deadline] task %s 进入收尾时序,原因=%s", t.ID, reason)
 
 	// ④ 等在跑 worker/planner drain(在跑 run 因夹逼的 MaxDuration 自行进收尾);
 	// 超过 grace 仍未清空 → 硬 cancel 该任务 exec ctx(settling-aware 分支正确归类)。
@@ -193,7 +266,11 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 	for e.inflightCount(t.ID) > 0 {
 		if time.Now().After(hardStop) {
 			log.Printf("[deadline] task %s drain 超时(%s),硬取消在跑 run", t.ID, settleDrainGrace)
-			e.cancelExec(t.ID, agent.AbortSettleDrainTimeout)
+			cause := agent.AbortSettleDrainTimeout
+			if reason == db.StopReasonNoResult {
+				cause = agent.AbortNoResultStop
+			}
+			e.cancelExec(t.ID, cause)
 			_ = sleepCtx(ctx, 3*time.Second) // 给 worker 分支一点时间落库/归类
 			break
 		}
@@ -203,7 +280,7 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 	}
 
 	// ⑤ 终局一轮 planner(任务超时词,最后目标判定,不产新意图)。
-	met := e.runFinalPlannerRound(ctx, t)
+	met := e.runFinalPlannerRound(ctx, t, reason)
 	if !e.beginTaskOperation(t.ID) {
 		return
 	}
@@ -215,7 +292,7 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 	if met {
 		status = "done"
 	}
-	won, err := e.m.SetTaskStatusGuarded(t.ID, status)
+	won, err := e.m.SetTaskStatusGuardedReason(t.ID, status, reason)
 	switch {
 	case err != nil:
 		log.Printf("[deadline] task %s 落终态失败: %v", t.ID, err)
@@ -229,7 +306,7 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 // runFinalPlannerRound drives exactly ONE terminal planner round with the
 // task-timeout planner words (final goal judgment; no new intents). Waits for the
 // LLM to be ready (bounded by ctx) so a completable task isn't mis-judged timeout.
-func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task) (met bool) {
+func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task, reason string) (met bool) {
 	if e.IsDeleting(t.ID) {
 		return false
 	}
@@ -253,16 +330,20 @@ func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task) (met bool) {
 	}
 	defer e.decInflight(t.ID)
 	emit := func(r db.Activity) { e.emitActivity(t, r) }
+	label := "任务超时收尾"
+	if reason == db.StopReasonNoResult {
+		label = "无成果止损收尾"
+	}
 	e.emitActivity(t, db.Activity{Worker: "planner", Kind: "round",
-		Summary: fmt.Sprintf("任务超时收尾·终局判定(第 %d 轮)", e.nextPlannerRound(t.ID))})
+		Summary: fmt.Sprintf("%s·终局判定(第 %d 轮)", label, e.nextPlannerRound(t.ID))})
 	tTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
 	e.BeginLLMCall(t.ID)
-	met, reason, err := planner.Plan(fctx, tTaskID, e.m.assets, t.Store, t.Goal, t.drainTriggers(), emit)
+	met, decision, err := planner.Plan(fctx, tTaskID, e.m.assets, t.Store, t.Goal, t.drainTriggers(), emit)
 	e.EndLLMCall(t.ID)
 	if err != nil {
 		log.Printf("[deadline] task %s 终局规划出错: %v", t.ID, err)
 	} else if met {
-		log.Printf("[deadline] task %s 终局判定目标达成: %s", t.ID, reason)
+		log.Printf("[deadline] task %s 终局判定目标达成: %s", t.ID, decision)
 	}
 	return met
 }

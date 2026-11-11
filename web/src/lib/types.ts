@@ -34,6 +34,10 @@ export interface Task {
   description: string;
   goal: string;
   status: TaskStatus;
+  no_result_seconds?: number;
+  no_result_min_findings?: number;
+  no_result_min_severity?: "" | "low" | "medium" | "high" | "critical";
+  stop_reason?: string;
   created_at: string;
   created_unix?: number;
   completed_at?: string; // RFC3339 finish time (done/failed); "" if unfinished

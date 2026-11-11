@@ -42,7 +42,14 @@ type Task struct {
 	ParentRef          string     `json:"parent_ref,omitempty"` // 父任务 id(编排 spawn 记录;空=顶层)
 	CreatedAt          time.Time  `json:"created_at"`
 	CompletedAt        *time.Time `json:"completed_at,omitempty"` // 进入终态(done/failed/timeout)的时刻;非终态为 nil
-	// 任务级超时(见 docs/任务级超时与收尾设计.md)。
+	// Optional active-runtime checkpoint; StopReason also persists a pending stop.
+	NoResultSeconds     int        `json:"no_result_seconds"`
+	NoResultMinFindings int        `json:"no_result_min_findings"`
+	NoResultMinSeverity string     `json:"no_result_min_severity"`
+	NoResultBaseSeconds int64      `json:"no_result_base_seconds"`
+	NoResultCheckedAt   *time.Time `json:"no_result_checked_at,omitempty"`
+	StopReason          string     `json:"stop_reason"`
+	// 任务级绝对墙钟超时。
 	TimeoutSeconds      int        `json:"timeout_seconds"`        // 0=不限时
 	FirstRunAt          *time.Time `json:"first_run_at,omitempty"` // 首次真正开始运行的时刻(非 created_at);nil=尚未运行
 	DeadlineAt          *time.Time `json:"deadline_at,omitempty"`  // = first_run_at + timeout_seconds;nil=不限或未运行
@@ -184,6 +191,9 @@ type TaskCreateOptions struct {
 	CompanyIDs           []int64
 	LLMProfileIDs        []int64
 	TimeoutSeconds       int
+	NoResultSeconds      int
+	NoResultMinFindings  int
+	NoResultMinSeverity  string
 	PlanHeartbeatSeconds int
 	// CoverageEnabled 是「资产覆盖度功能」开关;nil=默认开(true)，让不关心该开关的创建
 	// 路径(编排 spawn、老 API)沿用原行为。仅 web 创建任务时可显式传 false 关闭。
@@ -201,6 +211,9 @@ type TaskCreateOptions struct {
 // CreateTaskWithOptions creates an exploration, task, direct source relations,
 // and the ordered task LLM chain in one transaction.
 func (d *DB) CreateTaskWithOptions(description, goal string, opts TaskCreateOptions) (*Task, error) {
+	if err := NormalizeNoResultOptions(&opts); err != nil {
+		return nil, err
+	}
 	if len(opts.SourceTaskIDs) > MaxTaskSourceCount {
 		return nil, fmt.Errorf("too many source tasks: got %d, maximum is %d", len(opts.SourceTaskIDs), MaxTaskSourceCount)
 	}
@@ -267,16 +280,17 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		Name: opts.Name, CategoryID: opts.CategoryID, CategoryName: categoryName,
 		Description: description, Goal: goal, ExplorationID: expID,
 		LLMProfileID: active, ActiveLLMProfileID: active,
-		LLMProfileIDs:  append([]int64(nil), opts.LLMProfileIDs...),
-		SourceTaskIDs:  append([]int64(nil), opts.SourceTaskIDs...),
-		CompanyIDs:     append([]int64(nil), opts.CompanyIDs...),
+		LLMProfileIDs:   append([]int64(nil), opts.LLMProfileIDs...),
+		SourceTaskIDs:   append([]int64(nil), opts.SourceTaskIDs...),
+		CompanyIDs:      append([]int64(nil), opts.CompanyIDs...),
+		NoResultSeconds: opts.NoResultSeconds, NoResultMinFindings: opts.NoResultMinFindings, NoResultMinSeverity: opts.NoResultMinSeverity,
 		TimeoutSeconds: opts.TimeoutSeconds, PlanHeartbeatSeconds: opts.PlanHeartbeatSeconds,
 		CoverageEnabled: coverageEnabled, ShareGlobalAssets: opts.ShareGlobalAssets, WorkerCount: opts.WorkerCount, Remark: opts.Remark,
 	}
 	if err := tx.QueryRow(`
-INSERT INTO tasks(name, remark, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, worker_count, share_global_assets)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12)
-RETURNING id, status, paused, created_at`, opts.Name, opts.Remark, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, opts.WorkerCount, opts.ShareGlobalAssets).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
+INSERT INTO tasks(name, remark, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, worker_count, share_global_assets, no_result_seconds, no_result_min_findings, no_result_min_severity)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+RETURNING id, status, paused, created_at`, opts.Name, opts.Remark, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, opts.WorkerCount, opts.ShareGlobalAssets, opts.NoResultSeconds, opts.NoResultMinFindings, opts.NoResultMinSeverity).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
 		return nil, err
 	}
 	if err := insertTaskRelations(tx, t.ID, opts.SourceTaskIDs); err != nil {
@@ -413,11 +427,11 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 
 const taskCols = `id, COALESCE(name,''), remark, category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
-description, goal, exploration_id, status, paused, COALESCE(pause_reason,''), queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), share_global_assets, COALESCE(worker_count,0), first_run_at, deadline_at, COALESCE(active_run_seconds,0), run_segment_started_at`
+description, goal, exploration_id, status, paused, COALESCE(pause_reason,''), queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), share_global_assets, COALESCE(worker_count,0), first_run_at, deadline_at, COALESCE(active_run_seconds,0), run_segment_started_at, no_result_seconds, no_result_min_findings, no_result_min_severity, no_result_base_seconds, no_result_checked_at, stop_reason`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
-	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.PauseReason, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.ShareGlobalAssets, &t.WorkerCount, &t.FirstRunAt, &t.DeadlineAt, &t.ActiveRunSeconds, &t.RunSegmentStartedAt); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.PauseReason, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.ShareGlobalAssets, &t.WorkerCount, &t.FirstRunAt, &t.DeadlineAt, &t.ActiveRunSeconds, &t.RunSegmentStartedAt, &t.NoResultSeconds, &t.NoResultMinFindings, &t.NoResultMinSeverity, &t.NoResultBaseSeconds, &t.NoResultCheckedAt, &t.StopReason); err != nil {
 		return nil, err
 	}
 	t.Pinned = t.PinnedAt != nil
@@ -622,6 +636,7 @@ func (d *DB) SetStatusRuntime(id int64, status string) (int64, *time.Time, error
 	err := d.QueryRow(`
 UPDATE tasks
    SET status = $1,
+       stop_reason = CASE WHEN $1 IN ('done','failed') OR ($1 NOT IN ('done','failed','timeout') AND status IN ('done','failed','timeout')) THEN '' ELSE stop_reason END,
        pause_reason = CASE WHEN $1 IN ('done','failed','timeout') THEN '' ELSE pause_reason END,
        completed_at = CASE WHEN $1 IN ('done','failed','timeout') THEN COALESCE(completed_at, now()) ELSE NULL END,
        active_run_seconds = active_run_seconds + CASE WHEN $1 IN ('done','failed','timeout') AND run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
@@ -646,15 +661,25 @@ func (d *DB) SetTerminalStatusGuarded(id int64, status string) (won bool, err er
 // SetTerminalStatusGuardedRuntime is the runtime-returning form used by the
 // Manager so it can mirror the terminal clock before any follow-up hydration.
 func (d *DB) SetTerminalStatusGuardedRuntime(id int64, status string) (active int64, started *time.Time, won bool, err error) {
+	return d.SetTerminalStatusGuardedReasonRuntime(id, status, "")
+}
+
+// SetTerminalStatusGuardedReasonRuntime commits the terminal status and its cause together.
+func (d *DB) SetTerminalStatusGuardedReasonRuntime(id int64, status, reason string) (active int64, started *time.Time, won bool, err error) {
+	if status != "timeout" {
+		reason = ""
+	}
+
 	err = d.QueryRow(`
 UPDATE tasks
    SET status = $1,
        pause_reason = '',
+       stop_reason = $3,
        completed_at = COALESCE(completed_at, now()),
        active_run_seconds = active_run_seconds + CASE WHEN run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
        run_segment_started_at = NULL
  WHERE id = $2 AND status NOT IN ('done','failed','timeout')
- RETURNING active_run_seconds, run_segment_started_at`, status, id).Scan(&active, &started)
+ RETURNING active_run_seconds, run_segment_started_at`, status, id, reason).Scan(&active, &started)
 	if err == sql.ErrNoRows {
 		// Preserve the authoritative runtime fields for the losing terminal
 		// writer. The guarded transition itself is still a no-op.

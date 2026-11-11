@@ -9,11 +9,13 @@ export function StatusBadge({
   domain,
   value,
   dot = false,
+  stopReason,
   className,
 }: {
   domain: StatusDomain;
   value: string;
   dot?: boolean;
+  stopReason?: string;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -27,7 +29,9 @@ export function StatusBadge({
       )}
     >
       {dot && <span className={cn("size-1.5 rounded-full", toneDot[meta.tone])} />}
-      {meta.label}
+      {domain === "task" && value === "timeout" && stopReason === "no_result"
+        ? t("taskUI.noResultStopped")
+        : meta.label}
     </span>
   );
 }
