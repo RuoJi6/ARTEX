@@ -12,8 +12,83 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 )
+
+func TestFindingGroupsNoResultStopReason(t *testing.T) {
+	m, err := NewManager(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	marker := fmt.Sprintf("__no_result_groups_%d__", time.Now().UnixNano())
+	task, err := m.CreateTask("stopped finding group", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := mustTaskID(t, task.ID)
+	t.Cleanup(func() {
+		if _, err := m.pg.Exec(`DELETE FROM findings WHERE vulnclass=$1`, marker); err != nil {
+			t.Error(err)
+		}
+		if err := m.pg.DeleteTask(id); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, taskID := range []int64{id, 0} {
+		if _, err := m.pg.AddFinding(taskID, 0, marker, "", db.SeverityHigh, "", "", "test", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := NewEngine(m)
+	engine.SetAgentResolver(func(*Task) (*agent.Planner, *agent.Worker) { return &agent.Planner{}, &agent.Worker{} })
+	engine.started.Store(task.ID, true)
+	for _, tc := range []struct {
+		name, dbStatus, dbReason, liveStatus, liveReason, wantStatus, wantReason string
+		live                                                                     bool
+	}{
+		{name: "persisted no result", dbStatus: "timeout", dbReason: db.StopReasonNoResult, wantStatus: "timeout", wantReason: db.StopReasonNoResult},
+		{name: "persisted timeout", dbStatus: "timeout", wantStatus: "timeout"},
+		{name: "live no result overrides database", dbStatus: "running", live: true, liveStatus: "timeout", liveReason: db.StopReasonNoResult, wantStatus: "timeout", wantReason: db.StopReasonNoResult},
+		{name: "live timeout clears stale reason", dbStatus: "timeout", dbReason: db.StopReasonNoResult, live: true, liveStatus: "timeout", wantStatus: "timeout"},
+		{name: "revival clears stale reason", dbStatus: "timeout", dbReason: db.StopReasonNoResult, live: true, liveStatus: "running", wantStatus: "running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := m.pg.Exec(`UPDATE tasks SET status=$2, stop_reason=$3 WHERE id=$1`, id, tc.dbStatus, tc.dbReason); err != nil {
+				t.Fatal(err)
+			}
+			task.updateLifecycle(func(s *taskLifecycleState) { s.Status = tc.liveStatus; s.StopReason = tc.liveReason })
+			s := &Server{m: m}
+			if tc.live {
+				s.engine = engine
+			}
+			rec := httptest.NewRecorder()
+			s.findingGroups(rec, httptest.NewRequest(http.MethodGet, "/api/exploration/findings/groups?vulnclass="+marker, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var page struct {
+				Items []map[string]any `json:"items"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Items) != 2 {
+				t.Fatalf("groups=%s", rec.Body.String())
+			}
+			for _, group := range page.Items {
+				wantStatus, wantReason := tc.wantStatus, tc.wantReason
+				if group["task_id"] == nil {
+					wantStatus, wantReason = "", ""
+				}
+				if group["task_status"] != wantStatus || group["task_stop_reason"] != wantReason {
+					t.Fatalf("group=%+v want status=%q reason=%q", group, wantStatus, wantReason)
+				}
+			}
+		})
+	}
+}
 
 func TestFindingPaginationParam(t *testing.T) {
 	for _, test := range []struct {

@@ -123,6 +123,7 @@ AND NOT EXISTS (
  name='',remark='',category_id=NULL,description='',goal='',paused=true,queued=false,queued_at=NULL,queue_mode='',
  llm_profile_id=NULL,active_llm_profile_id=NULL,llm_chain_revision=llm_chain_revision+1,
  company_id=NULL,parent_ref=NULL,timeout_seconds=0,coverage_enabled=true,share_global_assets=false,worker_count=0,pinned_at=NULL,
+ no_result_seconds=0,no_result_min_findings=1,no_result_min_severity='',no_result_base_seconds=0,no_result_checked_at=NULL,stop_reason='',
  first_run_at=NULL,deadline_at=NULL,archived_at=now(),deleted_at=now()
 WHERE id=$1`, taskID); err != nil {
 		return err
@@ -322,6 +323,11 @@ func restoreTaskStub(tx *sql.Tx, row map[string]any, taskID, remaining int64) er
  llm_profile_id=archived.llm_profile_id,active_llm_profile_id=archived.active_llm_profile_id,
  llm_chain_revision=archived.llm_chain_revision,company_id=archived.company_id,parent_ref=archived.parent_ref,
  timeout_seconds=archived.timeout_seconds,plan_heartbeat_seconds=archived.plan_heartbeat_seconds,
+ no_result_seconds=COALESCE(archived.no_result_seconds,0),
+ no_result_min_findings=COALESCE(archived.no_result_min_findings,1),
+ no_result_min_severity=COALESCE(archived.no_result_min_severity,''),
+ no_result_base_seconds=COALESCE(archived.no_result_base_seconds,0),
+ no_result_checked_at=archived.no_result_checked_at,stop_reason=COALESCE(archived.stop_reason,''),
  coverage_enabled=archived.coverage_enabled,share_global_assets=COALESCE(archived.share_global_assets,false),worker_count=COALESCE(archived.worker_count,0),pinned_at=archived.pinned_at,first_run_at=archived.first_run_at,
  deadline_at=CASE WHEN archived.paused AND $3>0 THEN now()+make_interval(secs=>$3::double precision)
                   ELSE archived.deadline_at END,

@@ -1489,7 +1489,7 @@ const TaskRow = React.memo(function TaskRow({
         {task.goal}
       </TableCell>
       <TableCell className={cn(!visibleColumns.status && "hidden")}>
-        <StatusBadge domain="task" value={task.status} dot />
+        <StatusBadge domain="task" value={task.status} stopReason={task.stop_reason} dot />
       </TableCell>
       <TableCell
         className={cn("text-muted-foreground text-center text-xs tabular-nums", !visibleColumns.progress && "hidden")}
@@ -2885,7 +2885,7 @@ function SourceTaskPicker({
                     </p>
                     {task?.goal && <p className="text-muted-foreground truncate text-xs">{task.goal}</p>}
                   </div>
-                  {task && <StatusBadge domain="task" value={task.status} />}
+                  {task && <StatusBadge domain="task" value={task.status} stopReason={task.stop_reason} />}
                 </div>
               </ComboboxItem>
             );
@@ -3199,7 +3199,7 @@ function DraggableCategoryTask({ task, disabled, moving }: { task: Task; disable
         </ItemDescription>
       </ItemContent>
       <ItemActions>
-        <StatusBadge domain="task" value={task.status} />
+        <StatusBadge domain="task" value={task.status} stopReason={task.stop_reason} />
       </ItemActions>
     </Item>
   );
@@ -3597,6 +3597,9 @@ function CreateTaskSheet({
   const [llmProfileIDs, setLLMProfileIDs] = React.useState<string[]>([]);
   const [creating, setCreating] = React.useState(false);
   const [timeoutMin, setTimeoutMin] = React.useState(""); // 任务级超时(分钟);空/0 = 不限时
+  const [noResultMin, setNoResultMin] = React.useState("");
+  const [noResultCount, setNoResultCount] = React.useState("1");
+  const [noResultSeverity, setNoResultSeverity] = React.useState<NonNullable<Task["no_result_min_severity"]>>("");
   const [heartbeatMin, setHeartbeatMin] = React.useState("10"); // planner 心跳(分钟);默认10,下限10(与后端一致)
   const [seedFirstIntent, setSeedFirstIntent] = React.useState(false); // 创建时下发种子意图,worker 免等首轮 planner 直接开跑;默认关闭,走标准先规划再执行
   const [shareGlobalAssets, setShareGlobalAssets] = React.useState(false);
@@ -3684,6 +3687,9 @@ function CreateTaskSheet({
         sourceTaskIds: sourceTaskIDs,
         companyIds: companyIDs,
         timeoutSeconds: timeoutSec,
+        noResultSeconds: Math.max(0, Math.floor((Number(noResultMin) || 0) * 60)),
+        noResultMinFindings: Math.max(1, Math.floor(Number(noResultCount) || 1)),
+        noResultMinSeverity: noResultSeverity,
         seedFirstIntent,
         planHeartbeatSeconds: heartbeatSec,
         coverageEnabled,
@@ -3707,6 +3713,9 @@ function CreateTaskSheet({
       setCompanyIDs([]);
       setLLMProfileIDs([]);
       setTimeoutMin("");
+      setNoResultMin("");
+      setNoResultCount("1");
+      setNoResultSeverity("");
       setHeartbeatMin("10");
       setSeedFirstIntent(false);
       setCoverageEnabled(true);
@@ -4055,6 +4064,54 @@ function CreateTaskSheet({
                   />
                   <p className="text-muted-foreground text-xs">{translate("taskUI.timeoutHelp")}</p>
                 </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="no-result-min">{translate("taskUI.noResultOptional")}</Label>
+                  <Input
+                    id="no-result-min"
+                    type="number"
+                    min={0}
+                    className="w-40"
+                    placeholder="120"
+                    value={noResultMin}
+                    onChange={(e) => setNoResultMin(e.target.value)}
+                  />
+                  <p className="text-muted-foreground text-xs">{translate("taskUI.noResultHelp")}</p>
+                </div>
+                {Number(noResultMin) > 0 && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="no-result-count">{translate("taskUI.noResultCount")}</Label>
+                      <Input
+                        id="no-result-count"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={noResultCount}
+                        onChange={(e) => setNoResultCount(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="no-result-severity">{translate("taskUI.noResultSeverity")}</Label>
+                      <Select
+                        value={noResultSeverity || "any"}
+                        onValueChange={(v) =>
+                          setNoResultSeverity((v === "any" ? "" : v) as NonNullable<Task["no_result_min_severity"]>)
+                        }
+                      >
+                        <SelectTrigger id="no-result-severity">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="any">{translate("taskUI.noResultAnySeverity")}</SelectItem>
+                          <SelectItem value="low">{translate("taskUI.noResultLow")}</SelectItem>
+                          <SelectItem value="medium">{translate("taskUI.noResultMedium")}</SelectItem>
+                          <SelectItem value="high">{translate("taskUI.noResultHigh")}</SelectItem>
+                          <SelectItem value="critical">{translate("taskUI.noResultCritical")}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
                 <div className="grid gap-2">
                   <Label htmlFor="heartbeat-min">{translate("taskUI.heartbeat")}</Label>
                   <Input

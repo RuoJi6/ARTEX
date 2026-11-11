@@ -34,6 +34,10 @@ export interface Task {
   description: string;
   goal: string;
   status: TaskStatus;
+  no_result_seconds?: number;
+  no_result_min_findings?: number;
+  no_result_min_severity?: "" | "low" | "medium" | "high" | "critical";
+  stop_reason?: string;
   created_at: string;
   created_unix?: number;
   completed_at?: string; // RFC3339 finish time (done/failed); "" if unfinished
@@ -557,6 +561,7 @@ export interface FindingGroup {
   task_name?: string; // 可选任务名称;空/缺省=未命名
   task_description: string;
   task_status: string;
+  task_stop_reason?: string;
   count: number;
   critical: number;
   high: number;

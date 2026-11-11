@@ -1120,7 +1120,13 @@ export default function DashboardPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-3">
-                      <StatusBadge domain="task" value={t.status} dot className="px-1.5 py-0 text-[10px]" />
+                      <StatusBadge
+                        domain="task"
+                        value={t.status}
+                        stopReason={t.stop_reason}
+                        dot
+                        className="px-1.5 py-0 text-[10px]"
+                      />
                     </td>
                     <td className="px-4 py-3">
                       <StatusBadge

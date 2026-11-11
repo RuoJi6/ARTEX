@@ -388,6 +388,9 @@ export const api = {
     sourceTaskIds?: string[];
     companyIds?: number[];
     timeoutSeconds?: number;
+    noResultSeconds?: number;
+    noResultMinFindings?: number;
+    noResultMinSeverity?: "" | "low" | "medium" | "high" | "critical";
     seedFirstIntent?: boolean;
     planHeartbeatSeconds?: number;
     shareGlobalAssets?: boolean;
@@ -406,6 +409,9 @@ export const api = {
       source_task_ids: input.sourceTaskIds ?? [],
       company_ids: input.companyIds ?? [],
       timeout_seconds: input.timeoutSeconds ?? 0,
+      no_result_seconds: input.noResultSeconds ?? 0,
+      no_result_min_findings: input.noResultMinFindings ?? 1,
+      no_result_min_severity: input.noResultMinSeverity ?? "",
       seed_first_intent: input.seedFirstIntent ?? false,
       plan_heartbeat_seconds: input.planHeartbeatSeconds ?? 0, // 0 = 后端归一到默认 600(10min)
       share_global_assets: input.shareGlobalAssets ?? false,

@@ -523,6 +523,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     company_id     BIGINT REFERENCES companies(id) ON DELETE SET NULL,
     parent_ref     TEXT,
     timeout_seconds INTEGER NOT NULL DEFAULT 0,
+    no_result_seconds INTEGER NOT NULL DEFAULT 0,
+    no_result_min_findings INTEGER NOT NULL DEFAULT 1,
+    no_result_min_severity TEXT NOT NULL DEFAULT '',
+    no_result_base_seconds BIGINT NOT NULL DEFAULT 0,
+    no_result_checked_at TIMESTAMPTZ,
+    stop_reason TEXT NOT NULL DEFAULT '',
     plan_heartbeat_seconds INTEGER NOT NULL DEFAULT 300,
     coverage_enabled BOOLEAN NOT NULL DEFAULT true,
     worker_count   INTEGER NOT NULL DEFAULT 0, -- 0=用全局默认 workers
@@ -537,6 +543,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Opt-in checkpoint based on active runtime; defaults preserve existing tasks.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_min_findings INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_min_severity TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_base_seconds BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_checked_at TIMESTAMPTZ;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS stop_reason TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_tasks_alive  ON tasks(created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)          WHERE deleted_at IS NULL;
 DROP TRIGGER IF EXISTS trg_tasks_upd ON tasks;

@@ -239,6 +239,9 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			"parent_ref":             strParam("可选：父任务 id(做父子关联)"),
 			"source_task_ids":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": fmt.Sprintf("可选：只读继承的来源任务 id 列表(最多 %d 个)。子任务可只读引用这些任务已探明的资产/结论作为起点；与 parent_ref 的纯父子指针不同，这是内容继承。", db.MaxTaskSourceCount)},
 			"llm_profile_id":         map[string]any{"type": "integer", "description": "可选：指定本子任务 planner/worker 用的 LLM 配置 id(见 list_llm_profiles)；留空则继承父任务、再回退全局激活配置"},
+			"no_result_seconds":      map[string]any{"type": "integer", "description": "可选：累计实际运行这些秒后仅检查一次，不足达标漏洞数时停止。0=关闭，正数最低60秒；暂停和排队不计时"},
+			"no_result_min_findings": map[string]any{"type": "integer", "description": "无成果止损最少独立漏洞数，默认1；误报不计"},
+			"no_result_min_severity": map[string]any{"type": "string", "enum": []string{"", "low", "medium", "high", "critical"}, "description": "计数的最低漏洞等级（含以上），空=不限"},
 			"timeout_seconds":        map[string]any{"type": "integer", "description": "可选：任务级超时(秒)。到点后触发优雅收尾并进入 timeout 终态；留空或 0 = 不限时"},
 			"plan_heartbeat_seconds": map[string]any{"type": "integer", "description": "可选：planner 心跳触发间隔(秒)。距上轮规划结束/任务开始满该值且期间无触发 → 触发一轮规划(兜底死锁 + 唤醒去监督飞行中的 worker)。留空或 0 = 默认 600(10min)；"},
 			"seed_first_intent":      map[string]any{"type": "boolean", "description": "可选：对于简单任务可开启，创建时直接下发一条种子意图(内容=描述+目标)让 worker 免等首轮 planner 直接开跑测试；默认 false(走标准先规划再执行)。"},
@@ -250,6 +253,9 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				ParentRef            string          `json:"parent_ref"`
 				SourceTaskIDs        []string        `json:"source_task_ids"`
 				LLMProfileID         json.RawMessage `json:"llm_profile_id"`
+				NoResultSeconds      int             `json:"no_result_seconds"`
+				NoResultMinFindings  int             `json:"no_result_min_findings"`
+				NoResultMinSeverity  string          `json:"no_result_min_severity"`
 				TimeoutSeconds       int             `json:"timeout_seconds"`
 				PlanHeartbeatSeconds int             `json:"plan_heartbeat_seconds"`
 				SeedFirstIntent      bool            `json:"seed_first_intent"`
@@ -330,9 +336,10 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				}
 			}
 			t, err := s.m.CreateTaskWithOptions(a.Description, a.Goal, db.TaskCreateOptions{
-				Name:                 name,
-				SourceTaskIDs:        sourceIDs,
-				LLMProfileIDs:        llmIDs,
+				Name:            name,
+				SourceTaskIDs:   sourceIDs,
+				LLMProfileIDs:   llmIDs,
+				NoResultSeconds: a.NoResultSeconds, NoResultMinFindings: a.NoResultMinFindings, NoResultMinSeverity: a.NoResultMinSeverity,
 				TimeoutSeconds:       a.TimeoutSeconds,
 				PlanHeartbeatSeconds: a.PlanHeartbeatSeconds,
 			})

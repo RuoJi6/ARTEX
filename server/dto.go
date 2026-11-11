@@ -71,6 +71,11 @@ type TaskDTO struct {
 	CoverageEnabled    bool               `json:"coverage_enabled"` // 资产覆盖度功能开关(创建时定)
 	ShareGlobalAssets  bool               `json:"share_global_assets"`
 	WorkerCount        int                `json:"worker_count"` // 本任务 Worker 数;0=用全局默认
+
+	NoResultSeconds     int    `json:"no_result_seconds"`
+	NoResultMinFindings int    `json:"no_result_min_findings"`
+	NoResultMinSeverity string `json:"no_result_min_severity"`
+	StopReason          string `json:"stop_reason"`
 }
 
 type ProxyReconnectDTO struct {
@@ -166,6 +171,11 @@ func taskDTO(t *Task, status string) TaskDTO {
 		CoverageEnabled:    t.CoverageEnabled,
 		ShareGlobalAssets:  lifecycle.ShareGlobalAssets,
 		WorkerCount:        t.WorkerCount,
+
+		NoResultSeconds:     t.NoResultSeconds,
+		NoResultMinFindings: t.NoResultMinFindings,
+		NoResultMinSeverity: t.NoResultMinSeverity,
+		StopReason:          lifecycle.StopReason,
 	}
 }
 
