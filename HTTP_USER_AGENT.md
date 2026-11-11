@@ -18,7 +18,28 @@
 
 ## 配置
 
-默认采用随机 UA 池方案，Go 与两个独立 Python 模板内置相同的 6 个完整浏览器 UA 样本，覆盖 Chrome / Firefox / Safari 的桌面格式。随机选择完整样本，允许重复，不拼接随机版本，不调用 AI 服务。
+默认采用随机 UA 池方案，Go 与两个独立 Python 模板内置相同的 20 个完整浏览器 UA 样本，覆盖 Chrome / Edge / Firefox / Safari 的标准桌面格式。随机选择完整样本，允许重复，不拼接随机版本，不调用 AI 服务。
+
+2026-11-11 核对并更新样本，采用主流浏览器近期稳定版本的标准格式：
+
+| 浏览器 | 版本 | 平台 | 数量 |
+|---|---|---|---|
+| Chrome | 154 / 155 / 156 / 157 | Windows / macOS / Linux | 12 |
+| Edge | 156 / 157 | Windows / macOS | 4 |
+| Firefox | 159 | Windows / macOS / Linux | 3 |
+| Safari | 27.1 | macOS | 1 |
+
+保留浏览器正常的 UA 缩减字段（如 Chrome 的 `0.0.0` 和 macOS 的冻结版本），不添加工具名称、随机设备型号、扩展标记或自定义后缀。“常见”指主流浏览器的标准 UA 格式，不代表已测量这 20 项在目标站点中的使用占比；浏览器类型和版本仍可从 UA 中读出。
+
+格式与版本参考：
+
+- [Chromium UA Reduction](https://www.chromium.org/updates/ua-reduction/)
+- [Chrome 稳定版发布记录](https://chromereleases.googleblog.com/search/label/Stable%20updates)
+- [Edge UA 格式](https://learn.microsoft.com/en-us/microsoft-edge/web-platform/user-agent-guidance)
+- [Edge 稳定版发布记录](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-relnote-stable-channel)
+- [Firefox UA 格式](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent/Firefox)
+- [Firefox 159 发布记录](https://www.firefox.com/en-US/firefox/159.0/releasenotes/)
+- [Safari 27.1 发布记录](https://developer.apple.com/documentation/safari-release-notes/safari-27_1-release-notes)
 
 - Go 每次 HTTP 逻辑请求抽选一次；WebFetch 每次工具调用重新抽选，重定向、代理请求及失败后的直连重试复用同一值。
 - Python 脚本每次运行抽选一次，入口、并发资源下载及重试复用同一值；独立调用 `fetch()` 时每次调用单独选择。
@@ -58,7 +79,7 @@ go test -race ./internal/httpidentity ./internal/webfetch ./enrich ./traffic
 python3 -m unittest discover -s skills/api-recon/scripts -p 'test_*.py' -v
 ```
 
-以上专项回归、Go race 检查及 Python 3 项测试均通过。
+以上专项回归、Go race 检查及 Python 3 项测试均通过。池扩展后的回归还检查恰好 20 个不重复样本、逐项选择以及 Go 与两个 Python 模板的样本一致性。
 
 2026-11-11 使用项目提供的本地 PostgreSQL，在新建的独立测试库中执行了 `go test ./... -count=1 -p 1 -timeout 180s`，测试库用后删除。完整套件未全部通过：
 

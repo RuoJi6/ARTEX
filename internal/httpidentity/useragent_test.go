@@ -45,8 +45,16 @@ func TestApplyOnWire(t *testing.T) {
 }
 
 func TestRandomUserAgentSelection(t *testing.T) {
+	if len(userAgents) != 20 {
+		t.Fatalf("pool size = %d, want 20", len(userAgents))
+	}
+	seen := make(map[string]bool, len(userAgents))
 	// Exercise every choice deterministically without a statistical/flaky test.
 	for index, want := range userAgents {
+		if seen[want] {
+			t.Errorf("duplicate sample: %q", want)
+		}
+		seen[want] = true
 		if got := randomUserAgent(bytes.NewReader([]byte{byte(index)})); got != want {
 			t.Errorf("choice %d = %q, want %q", index, got, want)
 		}

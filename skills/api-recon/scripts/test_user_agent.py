@@ -4,6 +4,7 @@ import http.server
 import importlib.util
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -63,8 +64,13 @@ class UserAgentTests(unittest.TestCase):
         self.assertTrue(all(ua == expected for _, ua, _ in seen), seen)
 
     def test_random_selection_and_explicit_override(self):
+        go_source = (SCRIPTS.parents[2] / "internal/httpidentity/useragent.go").read_text()
+        go_pool = tuple(re.findall(r'^\s*"(Mozilla/5\.0 [^"]+)",$', go_source, re.MULTILINE))
+        self.assertEqual(len(go_pool), 20)
+        self.assertEqual(len(set(go_pool)), 20)
         for name in ("harvest_static", "spider_mpa"):
             module = load_script(name)
+            self.assertEqual(module.USER_AGENTS, go_pool)
             for sample in module.USER_AGENTS:
                 with self.subTest(script=name, sample=sample):
                     with patch.dict(os.environ, {"ARTEX_HTTP_USER_AGENT": ""}), patch.object(module.secrets, "choice", return_value=sample) as choose:
