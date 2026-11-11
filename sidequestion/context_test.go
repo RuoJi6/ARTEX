@@ -240,8 +240,131 @@ func TestSideSummaryCancellationAndFailureDoNotAdvanceMemory(t *testing.T) {
 				replay.Save = func(context.Context, Memory) error { return errors.New("cleared") }
 			}
 			out, _, err := (SideQuestionService{p}).Respond(ctx, Snapshot{Request: fixture()}, "q", replay, ContextOptions{}, nil)
-			if err == nil || calls != 1 || memory.Through != 0 || out.Usage.InputTokens != 9 {
+			wantCalls := 1
+			if mode == "empty" || mode == "truncated" || mode == "too-large" {
+				wantCalls = 2
+			}
+			if err == nil || calls != wantCalls || memory.Through != 0 || out.Usage.InputTokens != 9*wantCalls {
 				t.Fatalf("failed preparation: %+v %+v %v", memory, out, err)
+			}
+		})
+	}
+}
+
+func TestSideSummaryRecoversWithoutSavingPartialOutput(t *testing.T) {
+	for _, mode := range []string{"length", "max_tokens", "empty", "thinking-only", "too-large"} {
+		t.Run(mode, func(t *testing.T) {
+			var memory Memory
+			var requests []llm.CompletionRequest
+			answers, saves := 0, 0
+			p := fakeProvider{complete: func(_ context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+				if req.Thinking != "disabled" {
+					answers++
+					if memory.History != "complete summary" || memory.Through != 1 {
+						t.Fatalf("answer started before complete summary was saved: %+v", memory)
+					}
+					return assistant("answer"), "end_turn", llm.Usage{InputTokens: 7}, nil
+				}
+				requests = append(requests, req)
+				if len(req.Tools) != 0 || EstimateInputTokens(req)+req.MaxTokens+512 > 32000 {
+					t.Fatal("summary recovery exceeds budget or enables tools")
+				}
+				if memory != (Memory{}) || saves != 0 {
+					t.Fatalf("incomplete summary persisted: %+v", memory)
+				}
+				if len(requests) == 1 {
+					usage := llm.Usage{InputTokens: 9, OutputTokens: 2048}
+					switch mode {
+					case "empty":
+						return assistant("  "), "end_turn", usage, nil
+					case "thinking-only":
+						return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockThinking, Thinking: "reasoning only"}}}, "end_turn", usage, nil
+					case "too-large":
+						return assistant(strings.Repeat("中", 5000)), "end_turn", usage, nil
+					default:
+						return assistant("partial summary"), mode, usage, nil
+					}
+				}
+				if len(requests) != 2 || req.MaxTokens <= requests[0].MaxTokens || req.Messages[0].Text() != requests[0].Messages[0].Text() || len(req.System) <= len(requests[0].System) {
+					t.Fatal("recovery must increase output budget, tighten instructions and replay original material")
+				}
+				return assistant("complete summary"), "end_turn", llm.Usage{InputTokens: 11, OutputTokens: 30}, nil
+			}}
+			var history []Exchange
+			for i := 1; i <= 21; i++ {
+				history = append(history, Exchange{Ordinal: int64(i), Question: "q", Answer: "a", Status: "completed"})
+			}
+			replay := replayFixture(history, &memory)
+			replay.Save = func(_ context.Context, value Memory) error { saves++; memory = value; return nil }
+			out, _, err := (SideQuestionService{p}).Respond(t.Context(), Snapshot{Request: fixture(), Model: Model{WindowTokens: 32000}}, "q", replay, ContextOptions{}, nil)
+			if err != nil || out.Text != "answer" || len(requests) != 2 || answers != 1 || saves != 1 || out.Usage.InputTokens != 27 || out.Usage.OutputTokens != 2078 {
+				t.Fatalf("recovery: summaries=%d answers=%d saves=%d out=%+v err=%v", len(requests), answers, saves, out, err)
+			}
+		})
+	}
+}
+
+func TestSideSummaryRecoveryReservesWindowForEveryChunk(t *testing.T) {
+	for _, window := range []int{32000, 200000} {
+		t.Run(fmt.Sprint(window), func(t *testing.T) {
+			calls := 0
+			var first llm.CompletionRequest
+			p := fakeProvider{complete: func(_ context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+				calls++
+				if EstimateInputTokens(req)+req.MaxTokens+512 > window || !utf8.ValidString(req.Messages[0].Text()) {
+					t.Fatal("unsafe chunk during recovery")
+				}
+				if calls%2 == 1 {
+					first = req
+					return assistant("partial"), "max_tokens", llm.Usage{OutputTokens: 2048}, nil
+				}
+				if !reflect.DeepEqual(req.Messages, first.Messages) {
+					t.Fatal("recovery skipped or changed source material")
+				}
+				return assistant("complete rolling summary"), "end_turn", llm.Usage{OutputTokens: 10}, nil
+			}}
+			b := contextBuilder{service: SideQuestionService{p}, window: window}
+			got, err := b.summarize(t.Context(), "prior", strings.Repeat("中文 evidence ", 12000))
+			if err != nil || got != "complete rolling summary" || calls < 4 || calls > maxSummaryCalls || b.usage.OutputTokens != calls/2*2058 {
+				t.Fatalf("chunk recovery: calls=%d usage=%+v err=%v", calls, b.usage, err)
+			}
+		})
+	}
+}
+
+func TestSideSummaryRecoveryHonorsCancellationAndSharedCallCap(t *testing.T) {
+	for _, mode := range []string{"cancel", "call-cap", "provider-error"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			calls := 0
+			p := fakeProvider{complete: func(context.Context, llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+				calls++
+				if mode == "provider-error" && calls == 2 {
+					return llm.Message{}, "", llm.Usage{InputTokens: 5}, errors.New("unavailable")
+				}
+				return assistant("partial"), "max_tokens", llm.Usage{InputTokens: 9}, nil
+			}}
+			b := contextBuilder{service: SideQuestionService{p}, window: 32000}
+			if mode == "call-cap" {
+				b.calls = maxSummaryCalls - 1
+			}
+			if mode == "cancel" {
+				b.onUpdate = func(Answer, ContextInfo) { cancel() }
+			}
+			_, err := b.summarize(ctx, "prior", "new evidence")
+			wantCalls, wantUsage := 1, 9
+			if mode == "provider-error" {
+				wantCalls, wantUsage = 2, 14
+			}
+			if err == nil || calls != wantCalls || b.usage.InputTokens != wantUsage || b.memory != (Memory{}) {
+				t.Fatalf("unbounded recovery: calls=%d usage=%+v err=%v", calls, b.usage, err)
+			}
+			if mode == "cancel" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation lost: %v", err)
+			}
+			if mode == "call-cap" && !strings.Contains(err.Error(), "处理上限") {
+				t.Fatalf("call cap lost: %v", err)
 			}
 		})
 	}
