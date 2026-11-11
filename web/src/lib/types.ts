@@ -1981,3 +1981,19 @@ export interface EgressReport {
   warnings?: string[];
   warning_details?: { code: string; params?: Record<string, unknown>; message: string }[];
 }
+
+// Task-relative, read-only file browser.
+export interface TaskFileEntry extends WorkspaceEntry {
+  symlink: boolean;
+  intent_id?: number;
+  intent_title?: string;
+  intent_state?: string;
+}
+export interface TaskFileListing {
+  path: string;
+  entries: TaskFileEntry[];
+  total: number;
+  size: number;
+  truncated: boolean;
+  missing: boolean;
+}

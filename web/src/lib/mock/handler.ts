@@ -38,6 +38,7 @@ import { MAX_TASK_REMARK_RUNES, MAX_TASK_WORKER_COUNT } from "../types";
 import * as D from "./data";
 import { createMockNotifications } from "./notifications";
 import { createMockSchedules } from "./schedules";
+import { mockTaskFileRead, mockTaskFiles } from "./task-files";
 
 const delay = (ms = 120) => new Promise((r) => setTimeout(r, ms));
 
@@ -1060,6 +1061,13 @@ export async function mockHandle<T>(method: string, rawPath: string, body?: Body
 
 function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Record<string, unknown>): unknown {
   const task = q.get("task") ?? undefined;
+  if (seg[0] === "tasks" && seg[2] === "files") {
+    if (!mockTasks.some((item) => item.id === seg[1] || mockTaskAssetID(item.id) === Number(seg[1])))
+      throw new Error("taskFiles.unavailable");
+    return seg[3] === "read"
+      ? mockTaskFileRead(q.get("path") ?? "")
+      : mockTaskFiles(q.get("path") ?? "", seg[3] === "all");
+  }
 
   if (seg[0] === "schedules") return mockSchedules(m, path, b, new Set(mockTaskAssetIDs.values()));
 
@@ -1792,8 +1800,24 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     };
 
   // ── 工作空间文件管理器（demo：静态示例树；写/建/删走下方写兜底 {ok:true}）──
-  if (path === "/workspace/list") return D.workspaceList(q.get("path") ?? "");
-  if (path === "/workspace/read") return D.workspaceRead(q.get("path") ?? "");
+  if (path === "/workspace/list") {
+    const value = q.get("path") ?? "";
+    const taskPath = value.match(/^tasks\/[^/]+(?:\/(.*))?$/);
+    if (taskPath) {
+      const result = mockTaskFiles(taskPath[1] ?? "");
+      return {
+        ...result,
+        path: value,
+        entries: result.entries.map((entry) => ({ ...entry, path: `tasks/${value.split("/")[1]}/${entry.path}` })),
+      };
+    }
+    return D.workspaceList(value);
+  }
+  if (path === "/workspace/read") {
+    const value = q.get("path") ?? "";
+    if (value.startsWith("tasks/")) return { ...mockTaskFileRead(value.split("/").slice(2).join("/")), path: value };
+    return D.workspaceRead(value);
+  }
 
   // ── stats ──
   if (path === "/stats") {
@@ -2814,3 +2838,5 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     ? []
     : {};
 }
+
+export { mockTaskFileURL } from "./task-files";
