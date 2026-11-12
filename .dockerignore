@@ -6,6 +6,7 @@ jwt.key
 **/node_modules
 web/.next
 web/out
+!web/out
 server/webui/dist
 /artex
 data
