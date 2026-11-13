@@ -2,7 +2,7 @@ import type { RepeaterSendResponse } from "@/lib/types";
 
 import type { RepeaterInitial } from "./repeater-http";
 
-export const STORAGE_KEY = "artex_repeater_workspace_v1";
+export const STORAGE_KEY = "mysterysecurityteam_repeater_workspace_v1";
 export const MAX_HISTORY = 20;
 export const MAX_RESPONSE_CHARS = 256 * 1024;
 // Count UTF-16 storage bytes (two per code unit), reserving headroom below 5 MiB

@@ -10,12 +10,12 @@
 - [OpenCode 会话压缩](https://github.com/anomalyco/opencode/blob/b3f1a96c6dd7adeb28b36dd11add1998fc84d67b/packages/core/src/session/compaction.ts)：完整请求估算、输出/缓冲预留、近期内容加滚动摘要、无工具摘要请求；该实现默认近期预算 8000、摘要输出上限 4096 tokens。
 - [OpenCode 溢出恢复](https://github.com/anomalyco/opencode/blob/b3f1a96c6dd7adeb28b36dd11add1998fc84d67b/packages/core/src/session/runner/llm.ts)：尚未开始助手输出时才尝试溢出恢复，恢复后的调用不再进入同一溢出恢复路径。
 
-ARTEX 借鉴独立输出预算、近期内容与滚动摘要、有限恢复的做法。保持 norma v0.3.6 的结构化消息与工具配对，不照搬 Grok 的文本摘录；不把 OpenCode 的主会话压缩事件写入 ARTEX 主 transcript。
+MysterySecurityTeam 借鉴独立输出预算、近期内容与滚动摘要、有限恢复的做法。保持 norma v0.3.6 的结构化消息与工具配对，不照搬 Grok 的文本摘录；不把 OpenCode 的主会话压缩事件写入 MysterySecurityTeam 主 transcript。
 
 ## 请求预算与执行
 
 - 消息沿用 norma 的按内容块 UTF-8 字节估算及 4/3 余量；额外计入系统提示、工具 schema 和消息封装开销。估算不是模型精确 token 计数。
-- 旁路输出默认最多 8192 tokens，也不超过主配置已设的输出上限。可用服务环境变量 `ARTEX_BTW_MAX_OUTPUT_TOKENS` 设置 256–32768 的上限；不会修改产品默认模型或主任务参数。
+- 旁路输出默认最多 8192 tokens，也不超过主配置已设的输出上限。可用服务环境变量 `MYSTERYSECURITYTEAM_BTW_MAX_OUTPUT_TOKENS` 设置 256–32768 的上限；不会修改产品默认模型或主任务参数。
 - 输入预算为上下文窗口减去输出上限和安全余量；未知窗口使用平台默认 200K。安全余量为窗口的 5%，最小 128、最大 8192 tokens。
 - 成功问答按递增序号每批最多加载 20 组。最多保留 20 组原文，其 token 预算最多为输入预算的 1/4，且不超过 16K。
 - 超额问答更新到滚动摘要。摘要带历史来源与上下文时间；历史助手回答不等同于新的工具证据，冲突时优先依据最新主快照。
@@ -58,9 +58,9 @@ POST 先接纳并返回请求，准备与压缩在后台执行，不持有准入
 
 ```sh
 go test -race ./sidequestion ./db ./server -run 'TestSide|TestCheckpoint|TestSnapshot|TestBuildRequest|TestService|TestMainSide|TestTaskArchive' -count=1
-go build ./cmd/artex
+go build ./cmd/mysterysecurityteam
 npx tsc --noEmit
 npm run build -- --webpack
 ```
 
-前端生产构建使用独立副本，避免覆盖当前预览的 `.next`。候选服务位于 `/private/tmp/artex-btw-budget-candidate`，已复制到 `/private/tmp/artex-btw-preview/artex` 并启动；原二进制备份为同目录下的 `artex.before-context-budget`。
+前端生产构建使用独立副本，避免覆盖当前预览的 `.next`。候选服务位于 `/private/tmp/mysterysecurityteam-btw-budget-candidate`，已复制到 `/private/tmp/mysterysecurityteam-btw-preview/mysterysecurityteam` 并启动；原二进制备份为同目录下的 `mysterysecurityteam.before-context-budget`。

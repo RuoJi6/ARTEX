@@ -25,14 +25,14 @@ func singleMsg() Message {
 			Severity:  "high",
 			Summary:   "参数 id\n未过滤 导致注入",
 			Assets:    []string{"a.example.com", "b.example.com"},
-			DetailURL: "https://artex.local/function/findings/detail?id=42",
+			DetailURL: "https://mysterysecurityteam.local/function/findings/detail?id=42",
 		}},
 	}
 }
 
 // batchMsg 构造一批汇总消息。
 func batchMsg(n int) Message {
-	m := Message{Batch: true, WindowMinutes: 30, HomeURL: "https://artex.local/function/findings"}
+	m := Message{Batch: true, WindowMinutes: 30, HomeURL: "https://mysterysecurityteam.local/function/findings"}
 	for i := 0; i < n; i++ {
 		m.Items = append(m.Items, Item{
 			FindingID: int64(i + 1),
@@ -73,7 +73,7 @@ func TestDingTalkSendsActionCardWhenLinkPresent(t *testing.T) {
 			t.Fatalf("有回链时应发 actionCard，得到 %v", body["msgtype"])
 		}
 		card, _ := body["actionCard"].(map[string]any)
-		if card["singleURL"] != "https://artex.local/function/findings/detail?id=42" {
+		if card["singleURL"] != "https://mysterysecurityteam.local/function/findings/detail?id=42" {
 			t.Errorf("回链丢失: %v", card["singleURL"])
 		}
 	})
@@ -176,7 +176,7 @@ func TestFeishuCardStructureAndSign(t *testing.T) {
 			actions, _ := em["actions"].([]any)
 			for _, a := range actions {
 				am, _ := a.(map[string]any)
-				if am["url"] == "https://artex.local/function/findings/detail?id=42" {
+				if am["url"] == "https://mysterysecurityteam.local/function/findings/detail?id=42" {
 					foundButton = true
 				}
 			}
@@ -317,11 +317,11 @@ func TestWebhookValidateCatchesBadConfigEarly(t *testing.T) {
 }
 
 func TestEmailMessageIsWellFormed(t *testing.T) {
-	msg, err := buildEmailMessage("artex@example.com", []string{"a@example.com", "b@example.com"}, singleMsg())
+	msg, err := buildEmailMessage("mysterysecurityteam@example.com", []string{"a@example.com", "b@example.com"}, singleMsg())
 	if err != nil {
 		t.Fatalf("组装邮件失败: %v", err)
 	}
-	if !strings.HasPrefix(msg, "From: artex@example.com\r\n") {
+	if !strings.HasPrefix(msg, "From: mysterysecurityteam@example.com\r\n") {
 		t.Fatalf("From 头有误:\n%s", msg)
 	}
 	if !strings.Contains(msg, "To: a@example.com, b@example.com\r\n") {
@@ -367,7 +367,7 @@ func TestEmailEscapesStructuralInjection(t *testing.T) {
 			Severity:  "high",
 			Name:      `<script>alert(1)</script>`,
 			Summary:   "a & b > c",
-			DetailURL: `https://artex.local/x?a="onmouseover=alert(1)`,
+			DetailURL: `https://mysterysecurityteam.local/x?a="onmouseover=alert(1)`,
 		}},
 	}
 	html := htmlBody(m, 0)

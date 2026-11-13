@@ -1546,7 +1546,7 @@ func skillRelPath(file string) (string, string) {
 		return "", "invalid path: must be relative with no empty segments"
 	}
 	// 4. Normalize as a URL/API path, not as a host filesystem path. API paths
-	//    always use '/', including when ARTEX runs on Windows. Filesystem calls
+	//    always use '/', including when MysterySecurityTeam runs on Windows. Filesystem calls
 	//    below accept this canonical form through filepath.Join.
 	clean := path.Clean(file)
 	if clean == "." || path.IsAbs(clean) || strings.HasPrefix(clean, "..") {

@@ -18,7 +18,7 @@ const (
 	// 而不是功能的启用条件——真正的启用条件是「有没有配渠道」。
 	settingNotifyEnabled = "notify_enabled"
 	// settingNotifyPublicBaseURL 是生成漏洞详情回链的外部访问地址
-	// （如 https://artex.example.com）。留空则消息里不带回链按钮。
+	// （如 https://mysterysecurityteam.example.com）。留空则消息里不带回链按钮。
 	// 项目里没有可复用的外部地址配置，所以这里新增一项。
 	settingNotifyPublicBaseURL = "notify_public_base_url"
 	// settingNotifyDigestMinutes 是汇总模式的周期（分钟）。

@@ -1,4 +1,4 @@
-// ARTEX domain model — types used across the UI.
+// MysterySecurityTeam domain model — types used across the UI.
 // Derived from the functional spec (section 7: 关键数据形状).
 
 export type TaskStatus = "created" | "queued" | "running" | "paused" | "done" | "failed" | "timeout";
@@ -1761,7 +1761,7 @@ export interface UpdateCheck {
   os: string;
   arch: string;
   repo: string;
-  /** 是否存在可回滚的上一版本（artex.old）。 */
+  /** 是否存在可回滚的上一版本（mysterysecurityteam.old）。 */
   has_backup: boolean;
   /** 本次启动时自更新自举的结论（换装失败 / 已回滚等），无事发生时为空。 */
   boot_notice?: string;

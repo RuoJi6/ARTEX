@@ -125,7 +125,7 @@ export function UpdateCard() {
   // 携带管理员 JWT 轮询 /api/version 直到版本号变化。
   //
   // 判据必须是"版本变了"而不是"能连上了"：换装过程中旧版本会短暂地重新起来一次
-  // （那一次只负责把 artex.new 换上去然后立刻退出），只看连通性会误判成功。
+  // （那一次只负责把 mysterysecurityteam.new 换上去然后立刻退出），只看连通性会误判成功。
   const waitForNewVersion = React.useCallback(
     async (fromVersion: string) => {
       setRestarting(true);
@@ -370,7 +370,7 @@ export function UpdateCard() {
             {t("settings.dockerUpdateHelpStart")}
             <span className="font-mono"> docker compose up -d </span>
             {t("settings.dockerUpdateHelpMiddle")}
-            <span className="font-mono"> docker compose pull artex &amp;&amp; docker compose up -d artex</span>。
+            <span className="font-mono"> docker compose pull mysterysecurityteam &amp;&amp; docker compose up -d mysterysecurityteam</span>。
           </p>
         )}
 

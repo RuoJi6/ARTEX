@@ -1,13 +1,13 @@
 // Translations of the existing terms; the original scope and restrictions are preserved.
 export const termsMessages = {
-  "terms.title": ["ARTEX 使用须知与免责声明", "ARTEX Terms of Use and Disclaimer"],
+  "terms.title": ["MysterySecurityTeam 使用须知与免责声明", "MysterySecurityTeam Terms of Use and Disclaimer"],
   "terms.version": [
     "版本 v1.0 · 生效日期 2026-09-18 · 请在登录前完整阅读以下全部条款",
     "Version v1.0 · Effective September 18, 2026 · Read all terms before signing in",
   ],
   "terms.introduction": [
-    '本《使用须知与免责声明》（以下简称"本声明"）是您与 ARTEX 项目作者及贡献者之间就使用本软件所达成的约定。请您在使用前审慎阅读、充分理解各条款内容，特别是以粗体或色块标注的免责、责任限制及禁止性条款。',
-    'These Terms of Use and Disclaimer (the "Statement") constitute an agreement between you and the ARTEX authors and contributors regarding your use of this software. Read and understand all provisions carefully, especially the disclaimers, limitations of liability and restrictions highlighted in bold or colored blocks.',
+    '本《使用须知与免责声明》（以下简称"本声明"）是您与 MysterySecurityTeam 项目作者及贡献者之间就使用本软件所达成的约定。请您在使用前审慎阅读、充分理解各条款内容，特别是以粗体或色块标注的免责、责任限制及禁止性条款。',
+    'These Terms of Use and Disclaimer (the "Statement") constitute an agreement between you and the MysterySecurityTeam authors and contributors regarding your use of this software. Read and understand all provisions carefully, especially the disclaimers, limitations of liability and restrictions highlighted in bold or colored blocks.',
   ],
   "terms.acceptance": [
     "一旦您下载、安装、访问或以任何方式使用本软件，即视为您已阅读、理解并同意接受本声明的全部约束。",
@@ -15,8 +15,8 @@ export const termsMessages = {
   ],
   "terms.licenseTitle": ["第一条 · 定义与开源许可", "Article 1 · Definitions and open-source license"],
   "terms.license": [
-    "本软件（ARTEX）是一款基于 GNU Affero General Public License v3.0（AGPL-3.0）发布的开源程序。您可依据该协议自由使用、复制、修改和分发本软件；但任何衍生作品（包括通过网络向第三方提供的在线服务）均须同样以 AGPL-3.0 协议开源并向使用者公开对应的完整源代码。AGPL-3.0 完整条款以随附的 LICENSE 文件为准。",
-    "ARTEX is open-source software released under the GNU Affero General Public License v3.0 (AGPL-3.0). You may use, copy, modify and distribute it under that license. Any derivative work, including an online service provided to third parties over a network, must also be released under AGPL-3.0 with its complete corresponding source code made available to users. The accompanying LICENSE file contains the full AGPL-3.0 terms.",
+    "本软件（MysterySecurityTeam）是一款基于 GNU Affero General Public License v3.0（AGPL-3.0）发布的开源程序。您可依据该协议自由使用、复制、修改和分发本软件；但任何衍生作品（包括通过网络向第三方提供的在线服务）均须同样以 AGPL-3.0 协议开源并向使用者公开对应的完整源代码。AGPL-3.0 完整条款以随附的 LICENSE 文件为准。",
+    "MysterySecurityTeam is open-source software released under the GNU Affero General Public License v3.0 (AGPL-3.0). You may use, copy, modify and distribute it under that license. Any derivative work, including an online service provided to third parties over a network, must also be released under AGPL-3.0 with its complete corresponding source code made available to users. The accompanying LICENSE file contains the full AGPL-3.0 terms.",
   ],
   "terms.scopeTitle": ["第二条 · 授权使用范围", "Article 2 · Permitted use"],
   "terms.scope": [

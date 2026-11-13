@@ -649,14 +649,14 @@ func TestNotifyMetaAndSettingsRoundTrip(t *testing.T) {
 	}
 
 	// 三项全局设置往返。尾部斜杠应被规范化掉，否则回链会拼出 "//function/..."。
-	if r := f.request("PUT", "/api/settings", `{"notify_public_base_url":"https://artex.example.com/","notify_digest_interval_min":15,"notify_enabled":true}`); r.Code != 200 {
+	if r := f.request("PUT", "/api/settings", `{"notify_public_base_url":"https://mysterysecurityteam.example.com/","notify_digest_interval_min":15,"notify_enabled":true}`); r.Code != 200 {
 		t.Fatalf("写设置失败 %d: %s", r.Code, r.Body)
 	}
 	t.Cleanup(func() {
 		f.pg.Exec(`DELETE FROM settings WHERE key IN ($1,$2)`, settingNotifyPublicBaseURL, settingNotifyDigestMinutes)
 	})
 	payload := f.s.settingsPayload()
-	if payload["notify_public_base_url"] != "https://artex.example.com" {
+	if payload["notify_public_base_url"] != "https://mysterysecurityteam.example.com" {
 		t.Fatalf("回链地址未规范化: %v", payload["notify_public_base_url"])
 	}
 	if payload["notify_digest_interval_min"] != 15 {
@@ -686,14 +686,14 @@ func TestNotifyDeepLinkUsesPublicBaseURL(t *testing.T) {
 		"config": map[string]any{"webhook": hook.URL},
 	})
 	finding := f.record(t, "带回链的漏洞", "high")
-	f.deliver(t, chID, "https://artex.example.com")
+	f.deliver(t, chID, "https://mysterysecurityteam.example.com")
 
 	body := hook.last(t)
 	card, _ := body["actionCard"].(map[string]any)
 	if card == nil {
 		t.Fatalf("有回链时应用 ActionCard，得到 msgtype=%v", body["msgtype"])
 	}
-	want := fmt.Sprintf("https://artex.example.com/function/findings/detail?id=%d", finding)
+	want := fmt.Sprintf("https://mysterysecurityteam.example.com/function/findings/detail?id=%d", finding)
 	if card["singleURL"] != want {
 		t.Fatalf("回链不对\n期望 %s\n得到 %v", want, card["singleURL"])
 	}

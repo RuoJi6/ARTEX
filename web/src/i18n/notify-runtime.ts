@@ -2,7 +2,7 @@ import type { TFunction } from "i18next";
 
 import { localizedError } from "./errors";
 
-// Only recognize messages owned by ARTEX. Provider responses remain verbatim.
+// Only recognize messages owned by MysterySecurityTeam. Provider responses remain verbatim.
 const messages: Record<string, string> = {
   渠道类型无效: "notify.runtime.invalidKind",
   缺少渠道名称: "notify.runtime.nameMissing",

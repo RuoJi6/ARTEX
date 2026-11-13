@@ -115,7 +115,7 @@ export const CHANNEL_FIELDS: Record<string, FieldDef[]> = {
     },
     { key: "username", label: "notify.fields.username", kind: "text" },
     { key: "password", label: "notify.fields.password", kind: "password" },
-    { key: "from", label: "notify.fields.from", kind: "text", placeholder: "artex@example.com" },
+    { key: "from", label: "notify.fields.from", kind: "text", placeholder: "mysterysecurityteam@example.com" },
     { key: "to", label: "notify.fields.to", kind: "list", help: "notify.fields.toHelp" },
     { key: "tls", label: "notify.fields.tls", kind: "switch", help: "notify.fields.tlsHelp" },
   ],

@@ -18,7 +18,7 @@ func TestReviewInputIgnoresAuditHistoryAndPreservesCurrentCall(t *testing.T) {
 		{Kind: "tool_use", ToolUseID: "created", Tool: "Write", Text: `{"path":"prior-only.txt"}`},
 		{Kind: "tool_result", ToolUseID: "created", Text: "Created a new file"},
 		{Kind: "tool_use", ToolUseID: "denied", Tool: "Bash", Text: `{"command":"delete prior-only.txt"}`},
-		{Kind: "tool_result", ToolUseID: "denied", Text: "【ARTEX 平台管控·非目标防御】此调用被平台拦截。", IsError: true},
+		{Kind: "tool_result", ToolUseID: "denied", Text: "【MysterySecurityTeam 平台管控·非目标防御】此调用被平台拦截。", IsError: true},
 		{Kind: "tool_use", ToolUseID: "partial", Tool: "Bash", Text: `{}`},
 		{Kind: "tool_result", ToolUseID: "partial", Text: strings.Repeat("部分写入", 10000), IsError: true},
 		{Kind: "tool_result", ToolUseID: "partial", Text: "conflicting result"},

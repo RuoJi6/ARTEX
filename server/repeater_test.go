@@ -428,7 +428,7 @@ func TestRepeaterHonorsExplicitHTTPVersion(t *testing.T) {
 	}
 }
 
-func TestRepeaterExplicitHTTP2Cleartext(t *testing.T) {
+func TestRepeaterExplicitHTTP2Clemysterysecurityteamt(t *testing.T) {
 	t.Setenv(repeaterAllowLocalEnv, "1")
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, r.Proto) }))
 	srv.Config.Protocols = new(http.Protocols)

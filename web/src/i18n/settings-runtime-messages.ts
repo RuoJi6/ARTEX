@@ -41,7 +41,7 @@ export const settingsRuntimeMessages = {
     "Traffic capture is enabled, but no global proxy is configured. Capture records traffic; outbound connections are still direct.",
   ],
   "settings.egressWarning.loopback_proxy": [
-    "代理地址是回环地址（127.0.0.1 / localhost）。如果 ARTEX 跑在容器里，这里的 127.0.0.1 指容器自身，连不到宿主机上的代理；请改用宿主机的可达 IP（如 http://192.168.x.x:端口）。",
+    "代理地址是回环地址（127.0.0.1 / localhost）。如果 MysterySecurityTeam 跑在容器里，这里的 127.0.0.1 指容器自身，连不到宿主机上的代理；请改用宿主机的可达 IP（如 http://192.168.x.x:端口）。",
     "The proxy uses a loopback address (127.0.0.1 / localhost). Inside a container this refers to the container itself, not the host proxy. Use a reachable host IP, such as http://192.168.x.x:port.",
   ],
   "error.demo_basic_auth_disabled": [

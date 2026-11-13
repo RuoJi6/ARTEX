@@ -24,7 +24,7 @@ import type { Finding, FindingStatus, Severity } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const FINDING_SORT_FIELDS: readonly FindingSortField[] = ["time", "severity"];
-const FINDING_SORT_PREFERENCE_KEY = "artex_task_findings_sort";
+const FINDING_SORT_PREFERENCE_KEY = "mysterysecurityteam_task_findings_sort";
 
 function findingLabel(finding: Finding, ui: UITranslate): string {
   if (finding.name?.trim()) return finding.name;
