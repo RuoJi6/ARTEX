@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // 静态导出：`NEXT_EXPORT=1 next build` 产出纯静态目录到 web/out，可直接丢进
@@ -6,14 +7,28 @@ const isExport = process.env.NEXT_EXPORT === "1";
 // Vercel demo：整站走 mock，无后端，无需 /api 反代。
 const isMock = process.env.NEXT_PUBLIC_MOCK === "1";
 
+function gitCommitBuildId() {
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "artex";
+  }
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // 避免父目录的 lockfile 影响根目录推断及资源路径生成。
   turbopack: { root: fileURLToPath(new URL(".", import.meta.url)) },
   reactCompiler: true,
   // 可复现构建：Next 每次 build 会随机生成 BUILD_ID，并写进 index.html 与 RSC payload 等
-  // 300+ 个产物，导致同一份源码两次构建得到不同的二进制。固定它，构建才能逐字节对账。
-  generateBuildId: async () => process.env.ARTEX_BUILD_ID || "artex",
+  // 300+ 个产物，导致同一份源码两次构建得到不同的二进制。默认取当前提交的短哈希：
+  // 同一提交重复构建仍逐字节一致，不同提交不会共用同一个产物目录。可用 ARTEX_BUILD_ID
+  // 显式覆盖；没有 .git 的源码包回退到 "artex"。
+  generateBuildId: async () => process.env.ARTEX_BUILD_ID || gitCommitBuildId(),
   // 允许从局域网 IP 访问 dev 资源（HMR），按需增删。
   // dev 阶段放开任意 IPv4 来源访问 /_next/* 与 HMR（局域网 IP 变动也不受影响）。
   // 注意：Next 出于安全禁止裸 "*"，需用分段通配；"*.*.*.*" 匹配任意 IPv4。
