@@ -110,7 +110,7 @@ Demo 只运行 `web/` 前端，构建时启用 `NEXT_PUBLIC_MOCK=1`，不需要 
 
 ```bash
 git clone https://github.com/RuoJi6/ARTEX.git
-cd MysterySecurityTeam
+cd ARTEX
 ./install.sh
 ```
 
@@ -125,7 +125,7 @@ cd MysterySecurityTeam
 
 ```bash
 git clone https://github.com/RuoJi6/ARTEX.git
-cd MysterySecurityTeam
+cd ARTEX
 cp .env.example .env          # 填 POSTGRES_PASSWORD、可选 ANTHROPIC_API_KEY
 docker compose up -d          # 拉取 ruoji6/mysterysecurityteam 镜像 + postgres
 # → http://localhost:8787
@@ -214,6 +214,10 @@ git push origin v0.3.17
 
 工作流固定标签对应的提交，用 Node.js 22 导出前端，按照 `go.mod` 指定的 Go 版本编译内嵌前端的五个平台程序，并生成 ZIP 与 `SHA256SUMS`。AMD64 和 ARM64 镜像分别在 GitHub 原生 runner 上构建，连接临时 PostgreSQL 验证程序启动、版本和内嵌前端；两种架构都通过后发布多架构镜像的版本标签与 `latest`。镜像发布成功后上传完整 ZIP 和校验文件，最后公开 Release。已公开的同版本不允许覆盖，应发布新标签。
 
+更名后的前三个正式版本同时上传新旧名称 ZIP（旧包内仍为 `artex` / `artex.exe`），并双推 Docker 镜像；第四个版本起只发布新名称。工作流按已发布的新名称包计数，`SHA256SUMS` 覆盖所有 ZIP。更新客户端优先下载新包，缺失时读取旧包，升级时保留当前可执行文件名。
+
+发布前须在 Docker Hub 创建 `ruoji6/mysterysecurityteam` 仓库，并设置 Actions 变量 `MYSTERYSECURITYTEAM_LEGACY_DOCKER_IMAGE=ruoji6/artex`（过渡期旧镜像）。
+
 维护者需在本仓库 Settings → Secrets and variables → Actions 中配置变量 `MYSTERYSECURITYTEAM_DOCKER_IMAGE`（Docker Hub 用户名/镜像名）和 Secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`（有镜像推送权限）。程序包通过 GitHub 自带 `GITHUB_TOKEN` 上传，镜像通过上述凭据推送到 Docker Hub。凭据只供工作流登录使用，不写入源码或镜像。镜像地址同时记录在 `.env.example` 和 Compose 默认值中。
 
 ### 已有 Docker 部署迁移到本仓库镜像
@@ -256,7 +260,7 @@ curl --fail http://127.0.0.1:8787/api/health
 ### 方式二：一键更新脚本
 
 ```bash
-cd MysterySecurityTeam
+cd ARTEX
 ./update.sh
 ```
 
@@ -268,7 +272,7 @@ cd MysterySecurityTeam
 ### 方式三：Docker Compose（手动）
 
 ```bash
-cd MysterySecurityTeam
+cd ARTEX
 git pull                       # 更新 compose / 脚本（可选）
 # 指定版本：在 .env 设 MYSTERYSECURITYTEAM_TAG=v0.3.17；不设则用 latest
 docker compose pull mysterysecurityteam
@@ -638,3 +642,9 @@ https://github.com/oritera/Cairn
 Worker 可调用 `record_intelligence`，或在 `record_fact` 的单条/批量事实中附带 `intelligence` 数组一起提交。`insert_assets` 本次提交的服务 `auth` 自动登记为未验证凭据，避免重复上报。任务、执行节点由系统绑定，记录需要真实来源证据；获取凭据不等于登录成功。
 
 页面支持分类、标题/上报者搜索、状态筛选、分页、状态更新及来源查看。凭据、敏感数据的正文和来源证据直接展示在列表及详情中，无需额外点击显示。直接关联任务的记录标明继承且只读；在资产页选择一项资产后点击「关联情报」可查看同一份记录。情报随任务归档、恢复和删除；新版归档格式为 v4，仍支持读取 v1–v3。此功能不自动补提取历史会话。
+
+### 更名兼容
+
+环境变量统一使用 `MYSTERYSECURITYTEAM_*`。未设置新变量时，后端和 Bash 构建/管理脚本仍读取同后缀的 `ARTEX_*` 并打印不含值的弃用提示；显式设置为空的新变量也优先。Compose 兼容旧 `.env` 的镜像、tag 和 LLM 变量。PostgreSQL 用户名、库名与持久化卷保持原值。Compose 服务名已改为 `mysterysecurityteam`，原服务需先停止，沿用原 Compose 项目名与数据挂载后再启动新服务，避免两个实例并行运行。
+
+登录用户名为 `MysterySecurityTeam`，接口仍接受 `ARTEX`；旧登录 Cookie 可继续读取，退出时清理两种名称。浏览器首次载入新版时迁移 `artex_` / `artex.` 前缀的 localStorage 和 sessionStorage，保留新 key 已有值，成功复制才删除旧 key。Basic Auth 会话需重新验证一次。

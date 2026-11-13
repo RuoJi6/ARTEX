@@ -1,5 +1,9 @@
 # 更新日志
 
+## Unreleased
+
+- 项目更名为 MysterySecurityTeam，替换 Logo；兼容旧环境变量、登录凭据和更新包。
+
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
 ## [Unreleased]
