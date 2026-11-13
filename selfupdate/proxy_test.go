@@ -61,7 +61,7 @@ func TestUpdateRequestsUseProxy(t *testing.T) {
 	if _, err := FetchLatest(t.Context(), c); err == nil {
 		t.Fatal("expected proxy error")
 	}
-	for _, name := range []string{"SHA256SUMS", "artex-0.3.21-linux-arm64.zip"} {
+	for _, name := range []string{"SHA256SUMS", "mysterysecurityteam-0.3.21-linux-arm64.zip"} {
 		if _, err := get(t.Context(), c, "https://github.com/"+Repo+"/releases/download/v0.3.21/"+name); err == nil {
 			t.Fatal("expected proxy error")
 		}

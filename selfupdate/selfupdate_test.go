@@ -17,15 +17,15 @@ func testPaths(t *testing.T) Paths {
 	dir := t.TempDir()
 	return Paths{
 		Dir:     dir,
-		Current: filepath.Join(dir, "artex"),
-		New:     filepath.Join(dir, "artex.new"),
-		Sum:     filepath.Join(dir, "artex.new.sha256"),
-		Old:     filepath.Join(dir, "artex.old"),
-		Marker:  filepath.Join(dir, "artex.upgrade.json"),
+		Current: filepath.Join(dir, "mysterysecurityteam"),
+		New:     filepath.Join(dir, "mysterysecurityteam.new"),
+		Sum:     filepath.Join(dir, "mysterysecurityteam.new.sha256"),
+		Old:     filepath.Join(dir, "mysterysecurityteam.old"),
+		Marker:  filepath.Join(dir, "mysterysecurityteam.upgrade.json"),
 	}
 }
 
-// fakeBin 写一个可执行的壳脚本冒充 artex。smokeTest 只是用 -h 拉起它看退出码，
+// fakeBin 写一个可执行的壳脚本冒充 mysterysecurityteam。smokeTest 只是用 -h 拉起它看退出码，
 // 脚本完全够用，而且比编译一个真二进制快得多。
 func fakeBin(t *testing.T, path, marker string, exitCode int) {
 	t.Helper()
@@ -42,7 +42,7 @@ func itoa(n int) string {
 	return string(rune('0' + n))
 }
 
-// stage 把 bin 布置成"已暂存待换装"的样子：写好 artex.new 和它的校验和。
+// stage 把 bin 布置成"已暂存待换装"的样子：写好 mysterysecurityteam.new 和它的校验和。
 func stage(t *testing.T, p Paths, marker string, exitCode int) {
 	t.Helper()
 	fakeBin(t, p.New, marker, exitCode)
@@ -162,13 +162,13 @@ func TestApplyStagedHappyPath(t *testing.T) {
 		t.Error("换装后状态应为 Pending")
 	}
 	if !strings.Contains(readAll(t, p.Current), "new") {
-		t.Error("artex 应已被替换为新版本")
+		t.Error("mysterysecurityteam 应已被替换为新版本")
 	}
 	if !strings.Contains(readAll(t, p.Old), "old") {
-		t.Error("旧版本应备份到 artex.old")
+		t.Error("旧版本应备份到 mysterysecurityteam.old")
 	}
 	if _, err := os.Stat(p.New); !os.IsNotExist(err) {
-		t.Error("换装后 artex.new 应已消失")
+		t.Error("换装后 mysterysecurityteam.new 应已消失")
 	}
 	if _, err := os.Stat(p.Sum); !os.IsNotExist(err) {
 		t.Error("换装后校验和文件应已清理")
@@ -293,18 +293,18 @@ func TestParseSums(t *testing.T) {
 		winSum   = "ABCDEF0000000000000000000000000000000000000000000000000000000000"
 	)
 	// sha256sum 输出是双空格分隔；shasum -a 256 在二进制模式下会给文件名加 *。
-	raw := linuxSum + "  artex-0.3.8-linux-amd64.zip\n" +
-		winSum + " *artex-0.3.8-windows-amd64.zip\n" +
+	raw := linuxSum + "  mysterysecurityteam-0.3.8-linux-amd64.zip\n" +
+		winSum + " *mysterysecurityteam-0.3.8-windows-amd64.zip\n" +
 		"\n" +
 		"garbage line\n" + // 恰好两个字段，但第一个不是摘要
-		"deadbeef  artex-0.3.8-darwin-arm64.zip\n" // 摘要长度不对
+		"deadbeef  mysterysecurityteam-0.3.8-darwin-arm64.zip\n" // 摘要长度不对
 
 	out := parseSums(raw)
-	if out["artex-0.3.8-linux-amd64.zip"] != linuxSum {
+	if out["mysterysecurityteam-0.3.8-linux-amd64.zip"] != linuxSum {
 		t.Errorf("linux 条目解析错误: %v", out)
 	}
 	// 摘要统一小写，比对时才不会因大小写误判为不匹配。
-	if got := out["artex-0.3.8-windows-amd64.zip"]; got != strings.ToLower(winSum) {
+	if got := out["mysterysecurityteam-0.3.8-windows-amd64.zip"]; got != strings.ToLower(winSum) {
 		t.Errorf("windows 条目错误（* 前缀应剥离、摘要应转小写）: %q", got)
 	}
 	if len(out) != 2 {
@@ -314,7 +314,7 @@ func TestParseSums(t *testing.T) {
 
 func TestExtractBinaryFindsNestedEntry(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("包内基名在 Windows 上是 artex.exe，此用例按 Unix 命名构造")
+		t.Skip("包内基名在 Windows 上是 mysterysecurityteam.exe，此用例按 Unix 命名构造")
 	}
 	dir := t.TempDir()
 	zipPath := filepath.Join(dir, "release.zip")
@@ -324,12 +324,12 @@ func TestExtractBinaryFindsNestedEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	zw := zip.NewWriter(f)
-	// 真实发布包的结构：artex-<版本>-<os>-<arch>/artex，外加若干干扰文件。
+	// 真实发布包的结构：mysterysecurityteam-<版本>-<os>-<arch>/mysterysecurityteam，外加若干干扰文件。
 	for name, body := range map[string]string{
-		"artex-0.3.8-linux-amd64/README.md":           "readme",
-		"artex-0.3.8-linux-amd64/skills/a.md":         "skill",
-		"artex-0.3.8-linux-amd64/artex":               "#!/bin/sh\nexit 0\n",
-		"artex-0.3.8-linux-amd64/config.example.json": "{}",
+		"mysterysecurityteam-0.3.8-linux-amd64/README.md":           "readme",
+		"mysterysecurityteam-0.3.8-linux-amd64/skills/a.md":         "skill",
+		"mysterysecurityteam-0.3.8-linux-amd64/mysterysecurityteam": "#!/bin/sh\nexit 0\n",
+		"mysterysecurityteam-0.3.8-linux-amd64/config.example.json": "{}",
 	} {
 		w, err := zw.Create(name)
 		if err != nil {
@@ -349,7 +349,7 @@ func TestExtractBinaryFindsNestedEntry(t *testing.T) {
 		t.Fatalf("extractBinary: %v", err)
 	}
 	if got := readAll(t, dst); !strings.Contains(got, "exit 0") {
-		t.Errorf("解压出来的不是 artex 可执行文件: %q", got)
+		t.Errorf("解压出来的不是 mysterysecurityteam 可执行文件: %q", got)
 	}
 	info, err := os.Stat(dst)
 	if err != nil {
@@ -368,7 +368,7 @@ func TestExtractBinaryMissingEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	zw := zip.NewWriter(f)
-	w, _ := zw.Create("artex-0.3.8-linux-amd64/README.md")
+	w, _ := zw.Create("mysterysecurityteam-0.3.8-linux-amd64/README.md")
 	_, _ = w.Write([]byte("readme"))
 	_ = zw.Close()
 	f.Close()
@@ -380,9 +380,9 @@ func TestExtractBinaryMissingEntry(t *testing.T) {
 
 func TestCheckURLRejectsNonGitHub(t *testing.T) {
 	bad := []string{
-		"http://github.com/x",           // 非 HTTPS
-		"https://evil.com/artex.zip",    // 域名不在白名单
-		"https://github.com.evil.com/x", // 后缀伪装
+		"http://github.com/x",                      // 非 HTTPS
+		"https://evil.com/mysterysecurityteam.zip", // 域名不在白名单
+		"https://github.com.evil.com/x",            // 后缀伪装
 		"https://raw.githubusercontent.com.evil.com/x",
 	}
 	for _, raw := range bad {
@@ -405,12 +405,12 @@ func TestCheckURLRejectsNonGitHub(t *testing.T) {
 }
 
 func TestAssetNameMatchesBuildScript(t *testing.T) {
-	// build.sh 的 package_binary 用的是 artex-<版本>-<os>-<arch>.zip，且版本号
+	// build.sh 的 package_binary 用的是 mysterysecurityteam-<版本>-<os>-<arch>.zip，且版本号
 	// 去掉了 v 前缀。这里对错一个字符，所有平台的一键更新都会找不到资产。
-	if got := AssetName("v0.3.8", "linux", "amd64"); got != "artex-0.3.8-linux-amd64.zip" {
+	if got := AssetName("v0.3.8", "linux", "amd64"); got != "mysterysecurityteam-0.3.8-linux-amd64.zip" {
 		t.Errorf("AssetName = %q", got)
 	}
-	if got := AssetName("0.3.8", "windows", "amd64"); got != "artex-0.3.8-windows-amd64.zip" {
+	if got := AssetName("0.3.8", "windows", "amd64"); got != "mysterysecurityteam-0.3.8-windows-amd64.zip" {
 		t.Errorf("AssetName = %q", got)
 	}
 }

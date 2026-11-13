@@ -125,7 +125,7 @@ func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "artex-selfupdate")
+	req.Header.Set("User-Agent", "mysterysecurityteam-selfupdate")
 
 	resp, err := c.Do(req)
 	if err != nil {
@@ -154,9 +154,18 @@ func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 }
 
 // AssetName 返回当前平台对应的发布包名，与 build.sh 的 package_binary 保持一致：
-// artex-<版本>-<os>-<arch>.zip（版本号不带 v 前缀）。
+// mysterysecurityteam-<版本>-<os>-<arch>.zip（版本号不带 v 前缀）。
 func AssetName(tag, goos, goarch string) string {
-	return fmt.Sprintf("artex-%s-%s-%s.zip", strings.TrimPrefix(tag, "v"), goos, goarch)
+	return fmt.Sprintf("mysterysecurityteam-%s-%s-%s.zip", strings.TrimPrefix(tag, "v"), goos, goarch)
+}
+
+// PlatformAsset prefers the renamed package, retaining old releases as fallback.
+func (r *Release) PlatformAsset(goos, goarch string) (Asset, bool) {
+	name := AssetName(r.TagName, goos, goarch)
+	if asset, ok := r.FindAsset(name); ok {
+		return asset, true
+	}
+	return r.FindAsset(strings.Replace(name, "mysterysecurityteam-", "artex-", 1))
 }
 
 // FindAsset 在 Release 里按名字找资产。

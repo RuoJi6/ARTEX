@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/Autumn-27/mysterysecurityteam/internal/envx"
 	"io"
 	"log"
 	"os"
@@ -16,10 +17,10 @@ import (
 
 // smokeEnv 让被冒烟测试拉起的子进程直接跳过 Bootstrap。
 //
-// 严格来说不加也不会出事：子进程的 os.Executable() 是 artex.new，推导出来的
+// 严格来说不加也不会出事：子进程的 os.Executable() 是 mysterysecurityteam.new，推导出来的
 // 全部路径都带 .new 前缀，碰不到真正的升级文件。但依赖这种巧合太脆弱，
 // 显式短路一目了然，也省掉子进程一次无谓的磁盘探测。
-const smokeEnv = "ARTEX_SELFUPDATE_SMOKE"
+const smokeEnv = "MYSTERYSECURITYTEAM_SELFUPDATE_SMOKE"
 
 // Action 是 Bootstrap 给 main 的指令。
 type Action int
@@ -44,11 +45,11 @@ type State struct {
 //
 // 三种局面：
 //
-//	① 存在暂存件 artex.new  → 校验 + 冒烟，通过则换装并要求重启；不通过则丢弃继续跑旧版
+//	① 存在暂存件 mysterysecurityteam.new  → 校验 + 冒烟，通过则换装并要求重启；不通过则丢弃继续跑旧版
 //	② 只剩标记文件          → 说明刚换装完，累计一次尝试；连续失败够多次则回滚
 //	③ 什么都没有            → 正常启动
 func Bootstrap() (Action, State) {
-	if os.Getenv(smokeEnv) != "" {
+	if envx.Get("SELFUPDATE_SMOKE") != "" {
 		return Continue, State{}
 	}
 	p, err := ResolvePaths()
@@ -182,7 +183,8 @@ func smokeTest(bin string) error {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, "-h")
-	cmd.Env = append(os.Environ(), smokeEnv+"=1")
+	// Old staged binaries must also skip their bootstrap during a smoke test.
+	cmd.Env = append(os.Environ(), smokeEnv+"=1", "ARTEX_SELFUPDATE_SMOKE=1")
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		return errors.New("冒烟测试超时（新二进制无响应）")

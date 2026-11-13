@@ -23,7 +23,7 @@ func TestFetchLatestUsesForkRelease(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{
 			"tag_name":"v0.3.16",
 			"assets":[
-				{"name":"artex-0.3.16-linux-arm64.zip","browser_download_url":"https://github.com/RuoJi6/ARTEX/releases/download/v0.3.16/artex-0.3.16-linux-arm64.zip"},
+				{"name":"mysterysecurityteam-0.3.16-linux-arm64.zip","browser_download_url":"https://github.com/RuoJi6/ARTEX/releases/download/v0.3.16/mysterysecurityteam-0.3.16-linux-arm64.zip"},
 				{"name":"SHA256SUMS","browser_download_url":"https://github.com/RuoJi6/ARTEX/releases/download/v0.3.16/SHA256SUMS"}
 			]
 		}`))}, nil

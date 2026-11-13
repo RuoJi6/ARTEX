@@ -1,4 +1,4 @@
-// Package selfupdate implements ARTEX 的页面一键更新：从 GitHub Release 拉取新版
+// Package selfupdate implements MysterySecurityTeam 的页面一键更新：从 GitHub Release 拉取新版
 // 二进制、校验、暂存，并在下次启动时原子换装。
 //
 // 整体分工（见 start.sh / start.bat）：
@@ -12,12 +12,12 @@
 //
 // 一次完整升级经过三次进程启动：
 //
-//	① 旧版 server 收到 /api/update/apply → 下载校验 → 暂存 artex.new → exit 75
-//	② 脚本重新拉起旧版 → Bootstrap 发现 artex.new → 校验+冒烟 → 换装 → exit 75
+//	① 旧版 server 收到 /api/update/apply → 下载校验 → 暂存 mysterysecurityteam.new → exit 75
+//	② 脚本重新拉起旧版 → Bootstrap 发现 mysterysecurityteam.new → 校验+冒烟 → 换装 → exit 75
 //	③ 脚本重新拉起，此时已是新版 → Bootstrap 记一次尝试 → 启动成功后清除标记
 //
 // 任何一步失败都退回旧版：② 校验不过就删掉暂存件继续跑旧版；③ 连续 3 次没活到
-// 清除标记（起不来就崩）则自动把 artex.old 换回去。
+// 清除标记（起不来就崩）则自动把 mysterysecurityteam.old 换回去。
 package selfupdate
 
 import (
@@ -42,11 +42,11 @@ const maxAttempts = 3
 // 别处，换装逻辑直接失效。
 type Paths struct {
 	Dir     string // 可执行文件所在目录
-	Current string // 当前运行的二进制        artex      / artex.exe
-	New     string // 暂存的新版本            artex.new  / artex.new.exe
-	Sum     string // 新版本的 sha256（hex）  artex.new.sha256 / artex.new.exe.sha256
-	Old     string // 换装前备份的旧版本      artex.old  / artex.old.exe
-	Marker  string // 升级状态标记            artex.upgrade.json
+	Current string // 当前运行的二进制        mysterysecurityteam      / mysterysecurityteam.exe
+	New     string // 暂存的新版本            mysterysecurityteam.new  / mysterysecurityteam.new.exe
+	Sum     string // 新版本的 sha256（hex）  mysterysecurityteam.new.sha256 / mysterysecurityteam.new.exe.sha256
+	Old     string // 换装前备份的旧版本      mysterysecurityteam.old  / mysterysecurityteam.old.exe
+	Marker  string // 升级状态标记            mysterysecurityteam.upgrade.json
 }
 
 // ResolvePaths 按当前可执行文件推导全部升级路径。
@@ -106,7 +106,7 @@ func writeMarker(path string, m marker) error {
 }
 
 // cleanStaged 清掉暂存件。换装成功、校验失败、用户取消都走它，避免残留的
-// artex.new 在下次启动时被重新尝试。
+// mysterysecurityteam.new 在下次启动时被重新尝试。
 func cleanStaged(p Paths) {
 	_ = os.Remove(p.New)
 	_ = os.Remove(p.Sum)
