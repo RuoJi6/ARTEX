@@ -22,20 +22,46 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       commit: ${{ steps.commit.outputs.sha }}
+      legacy: ${{ steps.compatibility.outputs.legacy }}
     steps:
+      # Dual ZIP/image publishing lasts for the first three renamed releases.
+      # Count published renamed releases, so tag gaps and minor bumps are safe.
+      - name: Determine three-release compatibility window
+        id: compatibility
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        with:
+          script: |
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              ...context.repo, per_page: 100,
+            });
+            const renamed = releases.filter(r => !r.draft && !r.prerelease &&
+              r.assets.some(a => /^mysterysecurityteam-.*\.zip$/.test(a.name)))
+              .sort((a, b) => Date.parse(a.published_at) - Date.parse(b.published_at));
+            const index = renamed.findIndex(r => r.tag_name === process.env.RELEASE_TAG);
+            core.setOutput('legacy', String(index < 0 ? renamed.length < 3 : index < 3));
       - name: Validate release version
         id: version
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-          ARTEX_DOCKER_IMAGE: ${{ vars.ARTEX_DOCKER_IMAGE }}
+          MYSTERYSECURITYTEAM_DOCKER_IMAGE: ${{ vars.MYSTERYSECURITYTEAM_DOCKER_IMAGE }}
+          LEGACY_IMAGE: ${{ vars.MYSTERYSECURITYTEAM_LEGACY_DOCKER_IMAGE }}
+          LEGACY_COMPAT: ${{ steps.compatibility.outputs.legacy }}
         run: |
           if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "正式版本必须是 v主版本.次版本.修订号，例如 v0.3.15" >&2
             exit 1
           fi
-          if [[ ! "$ARTEX_DOCKER_IMAGE" =~ ^[a-z0-9][a-z0-9_-]*/[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
-            echo "请先配置 Actions 变量 ARTEX_DOCKER_IMAGE，格式为 Docker Hub 用户名/镜像名" >&2
+          if [[ ! "$MYSTERYSECURITYTEAM_DOCKER_IMAGE" =~ ^[a-z0-9][a-z0-9_-]*/[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
+            echo "请先配置 Actions 变量 MYSTERYSECURITYTEAM_DOCKER_IMAGE，格式为 Docker Hub 用户名/镜像名" >&2
             exit 1
+          fi
+          if [[ "$LEGACY_COMPAT" == "true" ]]; then
+            if [[ ! "$LEGACY_IMAGE" =~ ^[a-z0-9][a-z0-9_-]*/[a-z0-9]+([._-][a-z0-9]+)*$ || "$LEGACY_IMAGE" == "$MYSTERYSECURITYTEAM_DOCKER_IMAGE" ]]; then
+              echo "过渡期请配置独立的 MYSTERYSECURITYTEAM_LEGACY_DOCKER_IMAGE（ruoji6/artex）" >&2
+              exit 1
+            fi
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
@@ -93,21 +119,22 @@ jobs:
           path: server/webui/dist
       - name: Build and package with build.sh
         env:
-          ARTEX_TARGET_OS: ${{ matrix.goos }}
-          ARTEX_TARGET_ARCH: ${{ matrix.goarch }}
-          ARTEX_BUILD_VERSION: ${{ needs.prepare.outputs.tag }}
-          ARTEX_SKIP_FRONTEND: "1"
-          ARTEX_SKIP_NPM_CI: "1"
+          MYSTERYSECURITYTEAM_TARGET_OS: ${{ matrix.goos }}
+          MYSTERYSECURITYTEAM_TARGET_ARCH: ${{ matrix.goarch }}
+          MYSTERYSECURITYTEAM_BUILD_VERSION: ${{ needs.prepare.outputs.tag }}
+          MYSTERYSECURITYTEAM_SKIP_FRONTEND: "1"
+          MYSTERYSECURITYTEAM_SKIP_NPM_CI: "1"
           # UPX 自解压 ELF 在部分 Linux 内核、虚拟化和安全策略下会崩溃。
           # Release 使用 Go linker 裁剪和 zip 压缩，优先保证可移植性。
-          ARTEX_COMPRESS: "0"
-          ARTEX_PACKAGE: "1"
-          ARTEX_PACKAGE_DIR: dist
+          MYSTERYSECURITYTEAM_COMPRESS: "0"
+          MYSTERYSECURITYTEAM_PACKAGE: "1"
+          MYSTERYSECURITYTEAM_PACKAGE_DIR: dist
+          MYSTERYSECURITYTEAM_LEGACY_PACKAGE: ${{ needs.prepare.outputs.legacy == 'true' && '1' || '0' }}
         run: |
-          ./build.sh --target "${ARTEX_TARGET_OS}/${ARTEX_TARGET_ARCH}"
+          ./build.sh --target "${MYSTERYSECURITYTEAM_TARGET_OS}/${MYSTERYSECURITYTEAM_TARGET_ARCH}"
       - name: Smoke test Linux amd64 binary
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-        run: dist/artex-linux-amd64/artex -h
+        run: dist/mysterysecurityteam-linux-amd64/mysterysecurityteam -h
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -117,7 +144,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bin-linux-${{ matrix.goarch }}
-          path: dist/artex-linux-${{ matrix.goarch }}/artex
+          path: dist/mysterysecurityteam-linux-${{ matrix.goarch }}/mysterysecurityteam
 
   # ③ 汇总所有 zip → 创建 GitHub Release
   release:
@@ -136,11 +163,16 @@ jobs:
           merge-multiple: true
           path: dist
       - name: Generate checksums
+        env:
+          LEGACY_COMPAT: ${{ needs.prepare.outputs.legacy }}
         working-directory: dist
         run: |
           version="${RELEASE_TAG#v}"
           for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64; do
-            test -s "artex-${version}-${target}.zip"
+            test -s "mysterysecurityteam-${version}-${target}.zip"
+            if [[ "$LEGACY_COMPAT" == "true" ]]; then
+              test -s "artex-${version}-${target}.zip"
+            fi
           done
           sha256sum *.zip > SHA256SUMS
           sha256sum --check SHA256SUMS
@@ -148,9 +180,9 @@ jobs:
         env:
           RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
         run: |
-          if gh release view "$RELEASE_TAG" --json isDraft,targetCommitish > /tmp/artex-release.json 2>/tmp/artex-release.err; then
-            draft=$(jq -r .isDraft /tmp/artex-release.json)
-            target=$(jq -r '.targetCommitish // empty' /tmp/artex-release.json)
+          if gh release view "$RELEASE_TAG" --json isDraft,targetCommitish > /tmp/mysterysecurityteam-release.json 2>/tmp/mysterysecurityteam-release.err; then
+            draft=$(jq -r .isDraft /tmp/mysterysecurityteam-release.json)
+            target=$(jq -r '.targetCommitish // empty' /tmp/mysterysecurityteam-release.json)
             if [[ "$draft" != "true" ]]; then
               if [[ "$target" == "$RELEASE_COMMIT" ]]; then
                 echo "该版本已发布且已指向当前提交，拒绝重复发布" >&2
@@ -159,8 +191,8 @@ jobs:
               echo "标签已移动到新提交，删除旧 Release 后重新创建 $RELEASE_TAG"
               gh release delete "$RELEASE_TAG" --yes
             fi
-          elif ! grep -qi 'release not found\|HTTP 404' /tmp/artex-release.err; then
-            cat /tmp/artex-release.err >&2
+          elif ! grep -qi 'release not found\|HTTP 404' /tmp/mysterysecurityteam-release.err; then
+            cat /tmp/mysterysecurityteam-release.err >&2
             exit 1
           fi
       - uses: softprops/action-gh-release@v2
@@ -174,7 +206,7 @@ jobs:
             dist/SHA256SUMS
           generate_release_notes: true
           body: |
-            Docker Hub 镜像：`${{ vars.ARTEX_DOCKER_IMAGE }}:${{ needs.prepare.outputs.tag }}`，同时提供 `latest`。
+            Docker Hub 镜像：`${{ vars.MYSTERYSECURITYTEAM_DOCKER_IMAGE }}:${{ needs.prepare.outputs.tag }}`，同时提供 `latest`。
             支持 Linux AMD64 / ARM64，Docker 会自动选择宿主机架构。
             程序包提供 Linux、macOS 的 AMD64 / ARM64 及 Windows AMD64，并附 SHA256SUMS。
             部署和在线更新说明见本仓库 README。
@@ -233,37 +265,39 @@ jobs:
           context: .
           platforms: linux/${{ matrix.arch }}
           load: true
-          tags: artex:smoke
+          tags: mysterysecurityteam:smoke
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
       - name: Test application startup and embedded frontend
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          docker run --rm --entrypoint /app/artex artex:smoke -h
-          docker run -d --name artex-smoke --network host \
-            -e ARTEX_PG_DSN='postgres://artex:artex-ci-test@127.0.0.1:5432/artex?sslmode=disable' artex:smoke
-          trap 'docker logs artex-smoke; docker rm -f artex-smoke' EXIT
+          docker run --rm --entrypoint /app/mysterysecurityteam mysterysecurityteam:smoke -h
+          docker run -d --name mysterysecurityteam-smoke --network host \
+            -e MYSTERYSECURITYTEAM_PG_DSN='postgres://artex:artex-ci-test@127.0.0.1:5432/artex?sslmode=disable' mysterysecurityteam:smoke
+          trap 'docker logs mysterysecurityteam-smoke; docker rm -f mysterysecurityteam-smoke' EXIT
           curl --fail --retry 30 --retry-connrefused --retry-delay 2 --max-time 3 \
-            http://127.0.0.1:8787/api/health > /tmp/artex-health.json
-          jq -e '. == {"ok": true}' /tmp/artex-health.json
+            http://127.0.0.1:8787/api/health > /tmp/mysterysecurityteam-health.json
+          jq -e '. == {"ok": true}' /tmp/mysterysecurityteam-health.json
           curl --fail -H 'Content-Type: application/json' \
             --data '{"password":"smoke-test-admin-password"}' \
-            http://127.0.0.1:8787/api/auth/init > /tmp/artex-auth.json
-          token=$(jq -er '.token' /tmp/artex-auth.json)
+            http://127.0.0.1:8787/api/auth/init > /tmp/mysterysecurityteam-auth.json
+          token=$(jq -er '.token' /tmp/mysterysecurityteam-auth.json)
           echo "::add-mask::$token"
           curl --fail -H "Authorization: Bearer $token" \
-            http://127.0.0.1:8787/api/version > /tmp/artex-version.json
-          jq -e --arg version "${RELEASE_TAG#v}" '.version == $version' /tmp/artex-version.json
-          curl --fail http://127.0.0.1:8787/ > /tmp/artex-index.html
-          grep -qi '<!doctype html' /tmp/artex-index.html
+            http://127.0.0.1:8787/api/version > /tmp/mysterysecurityteam-version.json
+          jq -e --arg version "${RELEASE_TAG#v}" '.version == $version' /tmp/mysterysecurityteam-version.json
+          curl --fail http://127.0.0.1:8787/ > /tmp/mysterysecurityteam-index.html
+          grep -qi '<!doctype html' /tmp/mysterysecurityteam-index.html
       - name: Push tested architecture image
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
           push: true
-          tags: ${{ vars.ARTEX_DOCKER_IMAGE }}:${{ needs.prepare.outputs.tag }}-${{ matrix.arch }}
+          tags: |
+            ${{ vars.MYSTERYSECURITYTEAM_DOCKER_IMAGE }}:${{ needs.prepare.outputs.tag }}-${{ matrix.arch }}
+            ${{ needs.prepare.outputs.legacy == 'true' && format('{0}:{1}-{2}', vars.MYSTERYSECURITYTEAM_LEGACY_DOCKER_IMAGE, needs.prepare.outputs.tag, matrix.arch) || '' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.prepare.outputs.tag }}
@@ -283,11 +317,18 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Publish multi-platform image
         env:
-          IMAGE: ${{ vars.ARTEX_DOCKER_IMAGE }}
+          IMAGE: ${{ vars.MYSTERYSECURITYTEAM_DOCKER_IMAGE }}
+          LEGACY_IMAGE: ${{ vars.MYSTERYSECURITYTEAM_LEGACY_DOCKER_IMAGE }}
+          LEGACY_COMPAT: ${{ needs.prepare.outputs.legacy }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           docker buildx imagetools create \
             --tag "$IMAGE:$RELEASE_TAG" --tag "$IMAGE:latest" \
             "$IMAGE:$RELEASE_TAG-amd64" "$IMAGE:$RELEASE_TAG-arm64"
-          docker buildx imagetools inspect "$IMAGE:$RELEASE_TAG" --raw > /tmp/artex-manifest.json
-          jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | index("amd64") != null and index("arm64") != null' /tmp/artex-manifest.json
+          docker buildx imagetools inspect "$IMAGE:$RELEASE_TAG" --raw > /tmp/mysterysecurityteam-manifest.json
+          jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | index("amd64") != null and index("arm64") != null' /tmp/mysterysecurityteam-manifest.json
+          if [[ "$LEGACY_COMPAT" == "true" ]]; then
+            docker buildx imagetools create \
+              --tag "$LEGACY_IMAGE:$RELEASE_TAG" --tag "$LEGACY_IMAGE:latest" \
+              "$IMAGE:$RELEASE_TAG-amd64" "$IMAGE:$RELEASE_TAG-arm64"
+          fi

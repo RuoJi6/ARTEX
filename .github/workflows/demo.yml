@@ -60,7 +60,7 @@ jobs:
             const version = tag.slice(1);
             const assets = new Set(release.assets.map(asset => asset.name));
             for (const platform of ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64', 'windows-amd64']) {
-              if (!assets.has(`artex-${version}-${platform}.zip`)) throw new Error(`缺少 ${platform} 发布包`);
+              if (!assets.has(`mysterysecurityteam-${version}-${platform}.zip`)) throw new Error(`缺少 ${platform} 发布包`);
             }
             if (!assets.has('SHA256SUMS')) throw new Error('缺少发布校验文件');
             core.setOutput('tag', tag);
