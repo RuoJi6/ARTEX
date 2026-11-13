@@ -1,4 +1,4 @@
-module github.com/Autumn-27/artex
+module github.com/Autumn-27/mysterysecurityteam
 
 go 1.26.10
 

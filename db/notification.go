@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/notify"
+	"github.com/Autumn-27/mysterysecurityteam/notify"
 )
 
 // 本文件是 IM 推送的渠道配置与事件层。投递任务的领取与状态流转见

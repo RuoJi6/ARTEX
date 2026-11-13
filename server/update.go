@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/artex/selfupdate"
+	"github.com/Autumn-27/mysterysecurityteam/selfupdate"
 )
 
 // 页面一键更新的 HTTP 面。真正的下载/校验/换装逻辑全在 selfupdate 包里，

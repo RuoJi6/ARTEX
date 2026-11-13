@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/mysterysecurityteam/db"
 )
 
 // ---------- P3 agent triggers (仅自定义 agent) ----------

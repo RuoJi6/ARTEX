@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/agent"
+	"github.com/Autumn-27/mysterysecurityteam/agent"
 )
 
 func proxyTestManager(t *testing.T) *Manager {

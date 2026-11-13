@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/mysterysecurityteam/intercept"
 )
 
 func TestFindingCaseReviewTaskMessagePolicy(t *testing.T) {

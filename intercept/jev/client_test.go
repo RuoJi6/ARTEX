@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/mysterysecurityteam/intercept"
 )
 
 func TestBuildRequestMapsReviewInputAndChoiceCriteria(t *testing.T) {

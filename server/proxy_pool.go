@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/Autumn-27/mysterysecurityteam/traffic"
 )
 
 const (

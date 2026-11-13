@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/Autumn-27/mysterysecurityteam/traffic"
 )
 
 func repeaterTestSend(t *testing.T, s *Server, payload any) (int, repeaterSendResponse, string) {
