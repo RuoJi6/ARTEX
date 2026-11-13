@@ -13,6 +13,7 @@
 #   MYSTERYSECURITYTEAM_OUTPUT_DIR=dist             Directory for default binary paths.
 #   MYSTERYSECURITYTEAM_PACKAGE=1                   Create a zip archive for each target.
 #   MYSTERYSECURITYTEAM_PACKAGE_DIR=dist            Directory for release archives.
+#   MYSTERYSECURITYTEAM_LEGACY_PACKAGE=1            Also package the legacy name (transition releases).
 #   MYSTERYSECURITYTEAM_COMPRESS=off                UPX mode: off, auto, or required.
 #   MYSTERYSECURITYTEAM_UPX_ARGS="--best --lzma"    Arguments passed to UPX.
 #   MYSTERYSECURITYTEAM_SKIP_FRONTEND=1             Reuse server/webui/dist (for CI artifact builds).

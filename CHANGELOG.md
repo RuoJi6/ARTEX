@@ -1,13 +1,10 @@
 # 更新日志
 
-## Unreleased
-
-- 项目更名为 MysterySecurityTeam，替换 Logo；兼容旧环境变量、登录凭据和更新包。
-
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
 ## [Unreleased]
 
+- 项目更名为 MysterySecurityTeam；兼容旧环境变量、登录凭据和更新包。
 - 新增可选「无成果止损」：按实际运行时长、独立漏洞数量与最低等级做一次检查，未达标时自动收尾并显示「无成果停止」；暂停、排队及计划窗口外不计时，复活后重新计时，默认关闭。停止状态复用 `timeout`，已有 `on_task_timeout` 触发器仍会执行并可能消耗 token。
 
 ## [0.3.18] - 2026-10-12
