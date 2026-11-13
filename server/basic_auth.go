@@ -18,7 +18,7 @@ import (
 )
 
 const basicAuthKey = "auth.http_basic"
-const basicAuthCookie = "artex_basic_auth"
+const basicAuthCookie = "mysterysecurityteam_basic_auth"
 const basicAuthTTL = 12 * time.Hour
 const basicAuthSaveTimeout = 10 * time.Second
 
@@ -84,7 +84,7 @@ func validBasicUsername(username string) bool {
 // A separate signing key prevents a gate cookie from being used as an admin JWT.
 func (s *Server) basicAuthSigningKey() []byte {
 	m := hmac.New(sha256.New, s.jwtKey)
-	m.Write([]byte("artex/http-basic-auth/session/v1"))
+	m.Write([]byte("mysterysecurityteam/http-basic-auth/session/v1"))
 	return m.Sum(nil)
 }
 
@@ -97,7 +97,7 @@ func (s *Server) validBasicAuthCookie(r *http.Request, cfg basicAuthConfig) bool
 	_, err = jwt.ParseWithClaims(cookie.Value, claims, func(*jwt.Token) (any, error) {
 		return s.basicAuthSigningKey(), nil
 	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired(),
-		jwt.WithAudience("artex-basic-auth"), jwt.WithSubject(cfg.Revision))
+		jwt.WithAudience("mysterysecurityteam-basic-auth"), jwt.WithSubject(cfg.Revision))
 	return err == nil
 }
 
@@ -110,7 +110,7 @@ func (s *Server) setBasicAuthCookie(w http.ResponseWriter, r *http.Request, cfg 
 	if cfg.Enabled {
 		now := time.Now()
 		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-			Subject: cfg.Revision, Audience: jwt.ClaimStrings{"artex-basic-auth"},
+			Subject: cfg.Revision, Audience: jwt.ClaimStrings{"mysterysecurityteam-basic-auth"},
 			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(basicAuthTTL)),
 		}).SignedString(s.basicAuthSigningKey())
 		if err != nil {
@@ -142,7 +142,7 @@ func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 			// Background requests use Bearer auth. Challenging them with Basic
 			// can trap the browser in repeated native dialogs. Let the client
 			// reload the current page once to renew only the outer session.
-			w.Header().Set("X-Artex-Auth", "basic")
+			w.Header().Set("X-MysterySecurityTeam-Auth", "basic")
 			if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/basic-auth/check" || r.URL.Path == "/api/health" {
 				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted", charset="UTF-8"`)
 			}

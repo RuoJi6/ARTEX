@@ -9,7 +9,7 @@ import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.
 // 这里把旧键位还回来作为可选项。
 export type ChatSendMode = "enter" | "ctrl-enter";
 
-export const CHAT_SEND_MODE_KEY = "artex_chat_send_mode";
+export const CHAT_SEND_MODE_KEY = "mysterysecurityteam_chat_send_mode";
 export const DEFAULT_CHAT_SEND_MODE: ChatSendMode = "enter";
 
 export const CHAT_SEND_MODE_OPTIONS: { value: ChatSendMode; label: string }[] = [

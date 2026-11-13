@@ -122,7 +122,7 @@ func TestVersionRequiresAuthentication(t *testing.T) {
 			}
 			if token != "" {
 				if tc.cookie {
-					r.AddCookie(&http.Cookie{Name: "artex_token", Value: token})
+					r.AddCookie(&http.Cookie{Name: "mysterysecurityteam_token", Value: token})
 				} else {
 					r.Header.Set("Authorization", "Bearer "+token)
 				}

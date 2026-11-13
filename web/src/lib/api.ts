@@ -142,7 +142,7 @@ export function downloadFilename(contentDisposition: string, fallback: string): 
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("artex_token");
+  return localStorage.getItem("mysterysecurityteam_token");
 }
 
 let basicAuthReloading = false;
@@ -155,7 +155,7 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
   if (basicAuthReloading) throw new Error("访问验证已过期，正在重新验证");
   const response = await fetch(input, init);
   if (basicAuthReloading) throw new Error("访问验证已过期，正在重新验证");
-  if (response.status === 401 && response.headers.get("X-Artex-Auth") === "basic") {
+  if (response.status === 401 && response.headers.get("X-MysterySecurityTeam-Auth") === "basic") {
     basicAuthReloading = true;
     window.location.reload();
     throw new Error("访问验证已过期，正在重新验证");
@@ -203,7 +203,9 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
       // Keep the status-based fallback for empty or non-JSON error responses.
     }
     if (r.status === 401 && typeof window !== "undefined") {
+      localStorage.removeItem("mysterysecurityteam_token");
       localStorage.removeItem("artex_token");
+      document.cookie = "mysterysecurityteam_token=; path=/; max-age=0";
       document.cookie = "artex_token=; path=/; max-age=0";
       window.location.href = "/login";
     }
@@ -231,7 +233,7 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
 // Token is appended as ?token= because SSE can't carry cookies cross-origin.
 // mockReport returns a canned Markdown report for the demo.
 function mockReport(_task?: string): string {
-  return `# ARTEX 渗透测试报告 — Acme Corp
+  return `# MysterySecurityTeam 渗透测试报告 — Acme Corp
 
 ## 概览
 - 范围：acme.com（含 www / admin / api / shop / vpn 子域）

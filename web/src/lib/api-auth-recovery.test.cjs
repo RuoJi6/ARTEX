@@ -13,7 +13,7 @@ function client(fetch) {
   const exports = {};
   const state = { token: "original-admin-token", reloads: 0, requests: [], streams: [] };
   const location = { href: "http://localhost/function/tasks/?page=2", hostname: "localhost", reload: () => state.reloads++ };
-  const document = { cookie: "artex_token=original-admin-token" };
+  const document = { cookie: "mysterysecurityteam_token=original-admin-token" };
   class EventSource {
     constructor(url, options) { this.url = url; this.options = options; this.listeners = {}; state.streams.push(this); }
     addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -34,12 +34,12 @@ function client(fetch) {
 }
 
 const gateFailure = () => new Response('{"error":"请先完成 HTTP Basic Auth 验证","code":"basic_auth_required"}', {
-  status: 401, headers: { "X-Artex-Auth": "basic" },
+  status: 401, headers: { "X-MysterySecurityTeam-Auth": "basic" },
 });
 
 function assertSessionPreserved(c) {
   assert.equal(c.state.token, "original-admin-token");
-  assert.equal(c.document.cookie, "artex_token=original-admin-token");
+  assert.equal(c.document.cookie, "mysterysecurityteam_token=original-admin-token");
   assert.equal(c.location.href, "http://localhost/function/tasks/?page=2");
 }
 

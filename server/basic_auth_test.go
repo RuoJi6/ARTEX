@@ -284,7 +284,7 @@ func TestBasicAuthGate(t *testing.T) {
 				if got := w.Header().Get("WWW-Authenticate"); (got != "") != wantChallenge {
 					t.Fatalf("browser challenge=%q, want challenge=%v", got, wantChallenge)
 				}
-				if w.Header().Get("X-Artex-Auth") != "basic" {
+				if w.Header().Get("X-MysterySecurityTeam-Auth") != "basic" {
 					t.Fatal("missing gate failure marker")
 				}
 			}
@@ -383,7 +383,7 @@ func TestBasicAuthExpiredCookieAndSecureFlag(t *testing.T) {
 	cfg := s.basicAuth.snapshot()
 	for _, expires := range []*jwt.NumericDate{nil, jwt.NewNumericDate(time.Now().Add(-time.Minute))} {
 		token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-			Subject: cfg.Revision, Audience: jwt.ClaimStrings{"artex-basic-auth"}, ExpiresAt: expires,
+			Subject: cfg.Revision, Audience: jwt.ClaimStrings{"mysterysecurityteam-basic-auth"}, ExpiresAt: expires,
 		}).SignedString(s.basicAuthSigningKey())
 		r := httptest.NewRequest("GET", "/", nil)
 		r.AddCookie(&http.Cookie{Name: basicAuthCookie, Value: token})
@@ -483,11 +483,11 @@ func TestBasicAuthPostgresLoginFlow(t *testing.T) {
 	if err := restarted.basicAuth.load(m.pg); err != nil {
 		t.Fatal(err)
 	}
-	loginBody := `{"username":"ARTEX","password":"admin-password"}`
+	loginBody := `{"username":"MysterySecurityTeam","password":"admin-password"}`
 	r = httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(loginBody))
 	w = httptest.NewRecorder()
 	restarted.Handler().ServeHTTP(w, r)
-	if w.Code != 401 || w.Header().Get("X-Artex-Auth") != "basic" || w.Header().Get("WWW-Authenticate") != "" {
+	if w.Code != 401 || w.Header().Get("X-MysterySecurityTeam-Auth") != "basic" || w.Header().Get("WWW-Authenticate") != "" {
 		t.Fatal("login must fail with a recoverable gate error after restart")
 	}
 	r = httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(loginBody))
@@ -521,7 +521,7 @@ func TestBasicAuthExpiredSessionRecovery(t *testing.T) {
 	}
 	cfg := s.basicAuth.snapshot()
 	expired, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Subject: cfg.Revision, Audience: jwt.ClaimStrings{"artex-basic-auth"},
+		Subject: cfg.Revision, Audience: jwt.ClaimStrings{"mysterysecurityteam-basic-auth"},
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Minute)),
 	}).SignedString(s.basicAuthSigningKey())
 	if err != nil {
@@ -539,7 +539,7 @@ func TestBasicAuthExpiredSessionRecovery(t *testing.T) {
 			r.AddCookie(&http.Cookie{Name: basicAuthCookie, Value: expired})
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, r)
-			if w.Code != 401 || w.Header().Get("X-Artex-Auth") != "basic" || w.Header().Get("WWW-Authenticate") != "" {
+			if w.Code != 401 || w.Header().Get("X-MysterySecurityTeam-Auth") != "basic" || w.Header().Get("WWW-Authenticate") != "" {
 				t.Fatalf("API must signal recovery without a browser challenge: %d %v", w.Code, w.Header())
 			}
 			if w.Header().Get("Cache-Control") != "no-store" || len(w.Result().Cookies()) != 0 {
@@ -550,7 +550,7 @@ func TestBasicAuthExpiredSessionRecovery(t *testing.T) {
 	// Reloading the current document can use Basic authorization, while the
 	// admin JWT stays in its cookie for subsequent API requests.
 	r := httptest.NewRequest("GET", "/function/tasks/", nil)
-	r.AddCookie(&http.Cookie{Name: "artex_token", Value: adminJWT})
+	r.AddCookie(&http.Cookie{Name: "mysterysecurityteam_token", Value: adminJWT})
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != 401 || w.Header().Get("WWW-Authenticate") == "" {

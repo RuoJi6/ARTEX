@@ -60,7 +60,7 @@ export function FindingAutoChat({
     .replace(/[[\]\r\n]/g, " ")
     .trim()
     .slice(0, 100);
-  const storageKey = `artex.finding.${agentKey}-conversation.${findingId}`;
+  const storageKey = `mysterysecurityteam.finding.${agentKey}-conversation.${findingId}`;
 
   const createConversation = React.useCallback(async () => {
     setManualEmpty(false);
@@ -154,7 +154,7 @@ export function FindingAutoChat({
     if (!open || !conversation || loading || !messages.length) return;
     const viewport = chatViewportRef.current;
     if (!viewport) return;
-    const key = `artex.conversation-scroll.${conversation.id}`;
+    const key = `mysterysecurityteam.conversation-scroll.${conversation.id}`;
     const saved = window.sessionStorage.getItem(key);
     requestAnimationFrame(() => {
       if (saved != null) viewport.scrollTop = Number(saved) || 0;
@@ -352,7 +352,7 @@ export function FindingAutoChat({
           onScroll={(event) => {
             if (conversation)
               window.sessionStorage.setItem(
-                `artex.conversation-scroll.${conversation.id}`,
+                `mysterysecurityteam.conversation-scroll.${conversation.id}`,
                 String(event.currentTarget.scrollTop),
               );
           }}

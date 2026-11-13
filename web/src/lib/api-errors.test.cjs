@@ -75,7 +75,7 @@ test("legacy, invalid and non-JSON failures preserve useful fallback messages", 
 test("unauthorized requests still clear authentication and return to sign-in", async () => {
   const { http, location, removed, document } = client({ ok: false, status: 401 });
   await assert.rejects(http("/private"), (error) => error.code === "unauthorized");
-  assert.deepEqual(removed, ["artex_token"]);
+  assert.deepEqual(removed, ["mysterysecurityteam_token", "artex_token"]);
   assert.equal(document.cookie, "artex_token=; path=/; max-age=0");
   assert.equal(location.href, "/login");
 });

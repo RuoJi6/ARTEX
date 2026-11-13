@@ -53,7 +53,7 @@ export async function proxy(request: NextRequest) {
   };
 
   const { pathname } = request.nextUrl;
-  const token = request.cookies.get("artex_token")?.value;
+  const token = request.cookies.get("mysterysecurityteam_token")?.value || request.cookies.get("artex_token")?.value;
   const isAuthPage = AUTH_PAGES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   // 未登录 → 跳转登录页

@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_CONFIG } from "@/config/app-config";
 import { AppI18nProvider } from "@/i18n/provider";
 import { fontVars } from "@/lib/fonts/registry";
+import { BRAND_STORAGE_MIGRATION_SCRIPT } from "@/lib/brand-storage-migration";
 import { PREFERENCE_DEFAULTS } from "@/lib/preferences/preferences-config";
 import { ThemeBootScript } from "@/scripts/theme-boot";
 import { PreferencesStoreProvider } from "@/stores/preferences/preferences-provider";
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
       suppressHydrationWarning
     >
       <head>
+        <script dangerouslySetInnerHTML={{ __html: BRAND_STORAGE_MIGRATION_SCRIPT }} />
         {/* Applies theme and layout preferences on load to avoid flicker and unnecessary server rerenders. */}
         <ThemeBootScript />
       </head>

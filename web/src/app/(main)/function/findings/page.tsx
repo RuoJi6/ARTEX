@@ -70,7 +70,7 @@ import {
   UNASSIGNED_TASK,
 } from "./_components/findings-table";
 
-const FINDING_LIST_PREFERENCE_KEY = "artex_finding_list_preferences";
+const FINDING_LIST_PREFERENCE_KEY = "mysterysecurityteam_finding_list_preferences";
 
 // 列表视图:flat = 跨任务平铺大表(默认);grouped = 按任务分组折叠;
 // asset = 左侧资产树 + 右侧该子树下的发现。

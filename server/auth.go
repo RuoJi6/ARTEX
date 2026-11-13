@@ -83,10 +83,10 @@ func loadOrCreateJWTKey(keyDir, dataDir string) ([]byte, error) {
 	return buf, nil
 }
 
-// signJWT issues a 7-day HS256 token for user ARTEX.
+// signJWT issues a 7-day HS256 token for user MysterySecurityTeam.
 func signJWT(key []byte) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Subject:   "ARTEX",
+		Subject:   "MysterySecurityTeam",
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(jwtTTL)),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}).SignedString(key)
@@ -104,13 +104,15 @@ func verifyJWT(tokenStr string, key []byte) bool {
 }
 
 // extractToken reads the JWT from Authorization: Bearer header,
-// artex_token cookie, or ?token= query param (for SSE connections).
+// mysterysecurityteam_token cookie, or ?token= query param (for SSE connections).
 func extractToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimPrefix(h, "Bearer ")
 	}
-	if c, err := r.Cookie("artex_token"); err == nil && c.Value != "" {
-		return c.Value
+	for _, name := range []string{"mysterysecurityteam_token", "artex_token"} {
+		if c, err := r.Cookie(name); err == nil && c.Value != "" {
+			return c.Value
+		}
 	}
 	return r.URL.Query().Get("token")
 }
@@ -274,7 +276,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		writeProductError(w, 400, "invalid_request", "请求格式错误", nil)
 		return
 	}
-	if req.Username != "ARTEX" {
+	if req.Username != "MysterySecurityTeam" && req.Username != "ARTEX" {
 		writeProductError(w, 401, "invalid_credentials", "用户名或密码错误", nil)
 		return
 	}

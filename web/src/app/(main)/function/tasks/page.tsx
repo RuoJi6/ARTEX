@@ -272,9 +272,9 @@ function taskControlAction(status: TaskStatus): "pause" | "resume" | null {
 type TaskSortField = "id" | "created" | "duration" | "status";
 
 const TASK_SORT_FIELDS: readonly TaskSortField[] = ["id", "created", "duration", "status"];
-const TASK_SORT_PREFERENCE_KEY = "artex_task_list_sort";
-const TASK_FILTER_PREFERENCE_KEY = "artex_task_list_filters";
-const TASK_COLUMNS_PREFERENCE_KEY = "artex_task_list_columns";
+const TASK_SORT_PREFERENCE_KEY = "mysterysecurityteam_task_list_sort";
+const TASK_FILTER_PREFERENCE_KEY = "mysterysecurityteam_task_list_filters";
+const TASK_COLUMNS_PREFERENCE_KEY = "mysterysecurityteam_task_list_columns";
 type TaskColumnKey =
   | "id"
   | "name"
