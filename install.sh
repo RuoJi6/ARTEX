@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# ARTEX 安装脚本：① 全部 Docker  ② 本地编译运行
+# MysterySecurityTeam 安装脚本：① 全部 Docker  ② 本地编译运行
 set -euo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/scripts/env-compat.sh"
 cd "$(cd "$(dirname "$0")" && pwd)"
 
 info(){ printf '\033[36m[*]\033[0m %s\n' "$*"; }
@@ -50,7 +51,7 @@ install_docker(){
   docker compose pull
   docker compose up -d
   ok "启动完成 → http://localhost:8787"
-  info "查看日志：docker compose logs -f artex"
+  info "查看日志：docker compose logs -f mysterysecurityteam"
 }
 
 # ── ② 本地编译运行 ──────────────────────────────
@@ -62,9 +63,9 @@ install_local(){
     2)
       ensure_docker
       local pw; pw="$(ask 'Postgres 密码（回车随机）' "$(rand)")"
-      docker run -d --name artex-pg -p 5432:5432 \
+      docker run -d --name mysterysecurityteam-pg -p 5432:5432 \
         -e POSTGRES_USER=artex -e POSTGRES_PASSWORD="$pw" -e POSTGRES_DB=artex \
-        -v artex-pg:/var/lib/postgresql/data postgres:16-alpine
+        -v mysterysecurityteam-pg:/var/lib/postgresql/data postgres:16-alpine
       DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=artex DB_PASS="$pw" DB_NAME=artex DB_SSL=disable ;;
     *)
       DB_HOST="$(ask '数据库地址' 127.0.0.1)"
@@ -100,19 +101,19 @@ JSON
     ( cd web && npm ci && npm run build:static )
     rm -rf server/webui/dist && cp -r web/out server/webui/dist
     info "编译内嵌单二进制…"
-    CGO_ENABLED=0 go build -tags embedui -trimpath -o artex ./cmd/artex
+    CGO_ENABLED=0 go build -tags embedui -trimpath -o mysterysecurityteam ./cmd/mysterysecurityteam
   else
     warn "未检测到 npm：将编译**不内嵌前端**的后端（前端需另跑 npm run dev）"
-    CGO_ENABLED=0 go build -o artex ./cmd/artex
+    CGO_ENABLED=0 go build -o mysterysecurityteam ./cmd/mysterysecurityteam
   fi
-  ok "编译完成 → ./artex"
+  ok "编译完成 → ./mysterysecurityteam"
 
   info "启动…（Ctrl-C 退出）"
-  ./artex
+  ./mysterysecurityteam
 }
 
 echo "=============================="
-echo "  ARTEX 安装"
+echo "  MysterySecurityTeam 安装"
 echo "  1) 全部 Docker 安装"
 echo "  2) 本地运行（go 编译）"
 echo "=============================="

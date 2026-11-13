@@ -37,13 +37,13 @@ Thumbs.db
 .claude/
 
 # 内嵌前端的单二进制产物
-/artex
+/mysterysecurityteam
 # 一键更新在可执行文件旁留下的中间产物（暂存件 / 备份 / 失败版本 / 升级标记）
-/artex.new
-/artex.new.sha256
-/artex.old
-/artex.failed
-/artex.upgrade.json
+/mysterysecurityteam.new
+/mysterysecurityteam.new.sha256
+/mysterysecurityteam.old
+/mysterysecurityteam.failed
+/mysterysecurityteam.upgrade.json
 /server/webui/dist/
 /dist/
 
@@ -60,3 +60,12 @@ Thumbs.db
 /bench/
 /Dockerfile.bench
 /Dockerfile.bench.v2
+
+# Legacy installations remain upgradeable.
+/artex
+/artex.exe
+/artex.new*
+/artex.old*
+/artex.failed*
+/artex.upgrade.json
+/mysterysecurityteam.exe
