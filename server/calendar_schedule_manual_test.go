@@ -3,9 +3,9 @@ package server
 import (
 	"bytes"
 	"fmt"
+	"github.com/Autumn-27/mysterysecurityteam/internal/envx"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -15,8 +15,8 @@ import (
 
 func manualScheduleTestServer(t *testing.T) (*Server, *Scheduler) {
 	t.Helper()
-	if os.Getenv("ARTEX_PG_DSN") == "" {
-		t.Skip("requires isolated ARTEX_PG_DSN")
+	if envx.Get("PG_DSN") == "" {
+		t.Skip("requires isolated MYSTERYSECURITYTEAM_PG_DSN")
 	}
 	m, err := NewManager(t.TempDir(), "")
 	if err != nil {

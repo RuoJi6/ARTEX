@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"github.com/Autumn-27/mysterysecurityteam/internal/envx"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -16,9 +16,9 @@ import (
 )
 
 func TestJudgeConfigIncompleteScriptDefaultAndOverride(t *testing.T) {
-	dsn := os.Getenv("ARTEX_PG_DSN")
+	dsn := envx.Get("PG_DSN")
 	if dsn == "" {
-		t.Skip("requires isolated ARTEX_PG_DSN")
+		t.Skip("requires isolated MYSTERYSECURITYTEAM_PG_DSN")
 	}
 	pg, err := db.Open(dsn)
 	if err != nil {

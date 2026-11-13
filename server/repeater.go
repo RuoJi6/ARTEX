@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Autumn-27/mysterysecurityteam/internal/envx"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,7 +23,7 @@ const (
 	repeaterDefaultTimeout = 30_000
 	repeaterMinTimeout     = 1_000
 	repeaterMaxTimeout     = 120_000
-	repeaterAllowLocalEnv  = "ARTEX_REPEATER_ALLOW_LOCAL"
+	repeaterAllowLocalEnv  = "MYSTERYSECURITYTEAM_REPEATER_ALLOW_LOCAL"
 )
 
 var repeaterHopByHop = map[string]struct{}{
@@ -294,7 +294,7 @@ func (s *Server) repeaterTransport(useRecordingProxy, insecure bool) http.RoundT
 }
 
 func repeaterAllowLocal() bool {
-	v := strings.TrimSpace(os.Getenv(repeaterAllowLocalEnv))
+	v := strings.TrimSpace(envx.Get("REPEATER_ALLOW_LOCAL"))
 	return v == "1" || strings.EqualFold(v, "true")
 }
 

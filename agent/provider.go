@@ -1,5 +1,5 @@
 // Package agent wires real LLM-driven planner and work agents (on top of the
-// agent-core SDK) to the dual SQLite graph. See docs/ARTEX-架构设计.md
+// agent-core SDK) to the dual SQLite graph. See docs/MysterySecurityTeam-架构设计.md
 // §4.3 (planner) and §4.4 (work agent).
 //
 // Provider configuration is read from the environment so the system runs with
@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/Autumn-27/mysterysecurityteam/internal/envx"
 	"io"
 	"log"
 	"net/http"
@@ -140,13 +141,13 @@ func compactionConfig(windowTokens int) *compaction.Config {
 
 // FromEnv resolves the LLM provider config:
 //
-//	ARTEX_LLM_PROVIDER = anthropic|openai (default: inferred from keys)
-//	ARTEX_LLM_MODEL    = model id        (default: per provider)
-//	ARTEX_LLM_BASE_URL = endpoint        (optional)
-//	ARTEX_LLM_PROXY    = proxy URL        (optional; http/https/socks5)
+//	MYSTERYSECURITYTEAM_LLM_PROVIDER = anthropic|openai (default: inferred from keys)
+//	MYSTERYSECURITYTEAM_LLM_MODEL    = model id        (default: per provider)
+//	MYSTERYSECURITYTEAM_LLM_BASE_URL = endpoint        (optional)
+//	MYSTERYSECURITYTEAM_LLM_PROXY    = proxy URL        (optional; http/https/socks5)
 //	ANTHROPIC_API_KEY / OPENAI_API_KEY         = credentials
 func FromEnv() (Config, bool) {
-	prov := os.Getenv("ARTEX_LLM_PROVIDER")
+	prov := envx.Get("LLM_PROVIDER")
 	anthKey := os.Getenv("ANTHROPIC_API_KEY")
 	oaiKey := os.Getenv("OPENAI_API_KEY")
 
@@ -162,11 +163,11 @@ func FromEnv() (Config, bool) {
 	}
 
 	c := Config{
-		BaseURL: os.Getenv("ARTEX_LLM_BASE_URL"),
-		Model:   os.Getenv("ARTEX_LLM_MODEL"),
-		Proxy:   strings.TrimSpace(os.Getenv("ARTEX_LLM_PROXY")),
-		// 默认流式;ARTEX_LLM_STREAM=false/0/off 显式关闭走非流式。
-		Stream: !isFalsy(os.Getenv("ARTEX_LLM_STREAM")),
+		BaseURL: envx.Get("LLM_BASE_URL"),
+		Model:   envx.Get("LLM_MODEL"),
+		Proxy:   strings.TrimSpace(envx.Get("LLM_PROXY")),
+		// 默认流式;MYSTERYSECURITYTEAM_LLM_STREAM=false/0/off 显式关闭走非流式。
+		Stream: !isFalsy(envx.Get("LLM_STREAM")),
 	}
 	switch prov {
 	case "openai":
