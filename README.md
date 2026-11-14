@@ -160,7 +160,7 @@ cp config.example.json config.json   # 填好 database 连接
 ### 方式四：从源码编译单二进制
 
 ```bash
-# 1) 前端静态导出
+# 1) 前端静态导出（默认用当前提交短哈希作 BUILD_ID；可用 ARTEX_BUILD_ID 覆盖）
 cd web && npm ci && npm run build:static && cd ..
 # 2) 创建内嵌目录
 mkdir -p server/webui/dist
