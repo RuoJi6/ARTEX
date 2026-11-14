@@ -572,8 +572,9 @@ func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 	if err != nil || len(rules) == 0 {
 		return Decision{}, false
 	}
+	values := inputStrings(input)
 	for _, r := range rules {
-		if ruleMatches(r, toolName, input) {
+		if ruleMatches(r, toolName, input, values) {
 			msg := r.Message
 			if msg == "" {
 				msg = defaultMessage(r.Action, r.Name)
@@ -593,20 +594,60 @@ func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 	return Decision{}, false
 }
 
-func ruleMatches(r compiledRule, toolName string, input []byte) bool {
-	var subject string
+// ruleMatches reports whether r applies to the call. tool_input rules are tried
+// against the raw JSON first, then against each decoded string value in values.
+// The raw form alone is not enough: JSON escapes newlines, tabs and quotes, and
+// Go's encoder also escapes & < >, so a rule like `\brm\b` never fires on
+// "cd /tmp\nrm -rf /var/www" (the raw bytes read `\nrm`, with no word boundary).
+func ruleMatches(r compiledRule, toolName string, input []byte, values []string) bool {
 	switch r.MatchTarget {
 	case "tool_name":
-		subject = toolName
+		return r.matchString(toolName)
 	case "tool_input":
-		subject = string(input)
-	default:
-		return false
+		if r.matchString(string(input)) {
+			return true
+		}
+		for _, v := range values {
+			if r.matchString(v) {
+				return true
+			}
+		}
 	}
+	return false
+}
+
+func (r compiledRule) matchString(s string) bool {
 	if r.MatchType == "regex" {
-		return r.re != nil && r.re.MatchString(subject)
+		return r.re != nil && r.re.MatchString(s)
 	}
-	return strings.Contains(subject, r.Pattern)
+	return strings.Contains(s, r.Pattern)
+}
+
+// inputStrings returns every string value in a JSON tool input, at any depth.
+// Object keys are skipped. It returns nil if the input is not valid JSON.
+func inputStrings(input []byte) []string {
+	var doc any
+	if json.Unmarshal(input, &doc) != nil {
+		return nil
+	}
+	var out []string
+	var walk func(any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case string:
+			out = append(out, v)
+		case []any:
+			for _, e := range v {
+				walk(e)
+			}
+		case map[string]any:
+			for _, e := range v {
+				walk(e)
+			}
+		}
+	}
+	walk(doc)
+	return out
 }
 
 func defaultMessage(action, name string) string {
