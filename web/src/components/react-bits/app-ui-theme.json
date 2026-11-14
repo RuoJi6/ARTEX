@@ -1,0 +1,31 @@
+{
+  "name": "app-ui-theme",
+  "type": "registry:style",
+  "files": {},
+  "cssVars": {
+    "light": {
+      "rb-accent": "oklch(20.5% 0 0)",
+      "rb-accent-fg": "oklch(100% 0 0)"
+    },
+    "dark": {
+      "rb-accent": "oklch(100% 0 0)",
+      "rb-accent-fg": "oklch(20.5% 0 0)"
+    }
+  },
+  "css": {
+    ":root": {
+      "--rb-radius": "10px",
+      "--rb-r-xs": "max(0px, calc(var(--rb-radius) - 6px))",
+      "--rb-r-sm": "max(0px, calc(var(--rb-radius) - 4px))",
+      "--rb-r-md": "max(0px, calc(var(--rb-radius) - 2px))",
+      "--rb-r-lg": "var(--rb-radius)",
+      "--rb-r-xl": "calc(var(--rb-radius) + min(2px, var(--rb-radius)))",
+      "--rb-r-2xl": "calc(var(--rb-radius) + min(4px, var(--rb-radius)))",
+      "--rb-r-3xl": "calc(var(--rb-radius) + min(6px, var(--rb-radius)))",
+      "--rb-r-4xl": "calc(var(--rb-radius) + min(8px, var(--rb-radius)))",
+      "--rb-r-5xl": "calc(var(--rb-radius) + min(12px, var(--rb-radius) * 2))",
+      "--rb-r-6xl": "calc(var(--rb-radius) + min(16px, var(--rb-radius) * 3))",
+      "--rb-r-full": "max(var(--rb-radius) * 1.5, (var(--rb-radius) - 8px) * 999)"
+    }
+  }
+}

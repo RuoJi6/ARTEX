@@ -1,0 +1,7 @@
+{
+  "name": "app-sidebar-1",
+  "type": "registry:block",
+  "files": {
+    "app-sidebar-1.tsx": "components/blocks/app-sidebar-1.tsx"
+  }
+}

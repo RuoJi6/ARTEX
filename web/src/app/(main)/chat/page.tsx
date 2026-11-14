@@ -24,6 +24,7 @@ import { toast } from "sonner";
 
 import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
 import { MentionTextarea } from "@/components/mention-textarea";
+import { chip, chipRemove, composer, cx, ghostButton, iconButtonSm, primaryButton } from "@/components/rb/tokens";
 import { SideQuestionButton, SideQuestionWorkspace } from "@/components/side-question-workspace";
 import { TodoPopover } from "@/components/todo-popover";
 import { Transcript } from "@/components/transcript";
@@ -79,7 +80,7 @@ function fmtTokens(n: number): string {
 }
 
 // fmtDuration renders an elapsed milliseconds span compactly (90s → 1m30s).
-function fmtDuration(ms: number): string {
+function _fmtDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -139,7 +140,7 @@ function groupByAgent(conversations: Conversation[], agentByKey: Map<string, Age
 function LiveBadge() {
   const { t: translate } = useLiveTranslation();
   return (
-    <span className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
+    <span className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 font-medium text-[10px] text-blue-600 dark:text-blue-400">
       <span className="size-1 animate-pulse rounded-full bg-blue-500" />
       {translate("overview.live")}
     </span>
@@ -191,102 +192,104 @@ function Composer({
     onSend();
   }
   return (
-    <div className="border-t p-3">
-      {atts.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {atts.map((a) => (
-            <div
-              key={a.path}
-              className="flex items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-xs"
-              title={a.path}
+    <div className="shrink-0 p-3">
+      <div className={cx(composer, "p-2")}>
+        {atts.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5 px-1.5 pt-1.5">
+            {atts.map((a) => (
+              <span key={a.path} className={cx(chip, "h-7")} title={a.path}>
+                <PaperclipIcon className="size-3 shrink-0 text-rb-muted" />
+                <span className="max-w-[160px] truncate">{a.name}</span>
+                <span className="text-rb-muted">{fmtBytes(a.size)}</span>
+                {onRemoveAttachment && (
+                  <button
+                    type="button"
+                    className={chipRemove}
+                    onClick={() => onRemoveAttachment(a.path)}
+                    title={translate("overview.remove")}
+                  >
+                    <XIcon className="size-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex items-end gap-1.5 px-1.5">
+          {onPickFiles && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  // FileList 与 input 元素活绑定:必须先快照成数组,再清空 value,
+                  // 否则异步的 onPickFiles(比如草稿态要先建会话)恢复执行时会拿到空列表。
+                  const picked = Array.from(e.target.files ?? []);
+                  e.target.value = ""; // allow re-picking the same file
+                  if (picked.length > 0) onPickFiles(picked);
+                }}
+              />
+              <button
+                type="button"
+                className={cx(ghostButton, iconButtonSm, "mb-1")}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled || uploading}
+                aria-label={translate("overview.uploadFile")}
+                title={translate("overview.uploadFile")}
+              >
+                {uploading ? <Loader2Icon className="size-4 animate-spin" /> : <PaperclipIcon className="size-4" />}
+              </button>
+            </>
+          )}
+          {leftSlot ? <div className="mb-1">{leftSlot}</div> : null}
+          <MentionTextarea
+            className="max-h-40 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-1.5 py-1.5 text-[14px]/[20px] text-rb-fg outline-none placeholder:text-rb-muted"
+            rows={1}
+            placeholder={placeholder}
+            value={value}
+            disabled={disabled && !(running && allowBtw)}
+            onValueChange={onChange}
+            onKeyDown={onKeyDown}
+          />
+          {running && allowBtw && isBtwCommand(value) && (
+            <button
+              type="button"
+              className={cx(primaryButton, iconButtonSm, "mb-1")}
+              onClick={onSend}
+              aria-label={translate("overview.sendSideQuestion")}
+              title={translate("overview.sendSideQuestion")}
             >
-              <PaperclipIcon className="size-3 shrink-0 text-primary" />
-              <span className="max-w-[160px] truncate">{a.name}</span>
-              <span className="text-muted-foreground">{fmtBytes(a.size)}</span>
-              {onRemoveAttachment && (
-                <button
-                  type="button"
-                  className="ml-0.5 text-muted-foreground hover:text-foreground"
-                  onClick={() => onRemoveAttachment(a.path)}
-                  title={translate("overview.remove")}
-                >
-                  <XIcon className="size-3" />
-                </button>
-              )}
-            </div>
-          ))}
+              <ArrowUpIcon className="size-4" />
+            </button>
+          )}
+          {running ? (
+            // while a run is in flight the send button becomes a stop button —
+            // aborts just this session (the trigger queue keeps going).
+            <button
+              type="button"
+              className={cx(ghostButton, iconButtonSm, "mb-1 text-red-600 dark:text-red-400")}
+              onClick={onStop}
+              disabled={stopDisabled}
+              title={translate("overview.stopRun")}
+              aria-label={translate("overview.stopRun")}
+            >
+              <Square className="size-3.5 fill-current" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={cx(primaryButton, iconButtonSm, "mb-1")}
+              onClick={onSend}
+              disabled={disabled || (!value.trim() && atts.length === 0)}
+              title={translate("overview.sendMessage")}
+              aria-label={translate("overview.sendMessage")}
+            >
+              <ArrowUpIcon className="size-4" />
+            </button>
+          )}
         </div>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        {leftSlot ? <div className="w-full sm:w-auto">{leftSlot}</div> : null}
-        {onPickFiles && (
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                // FileList 与 input 元素活绑定:必须先快照成数组,再清空 value,
-                // 否则异步的 onPickFiles(比如草稿态要先建会话)恢复执行时会拿到空列表。
-                const picked = Array.from(e.target.files ?? []);
-                e.target.value = ""; // allow re-picking the same file
-                if (picked.length > 0) onPickFiles(picked);
-              }}
-            />
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || uploading}
-              title={translate("overview.uploadFile")}
-            >
-              {uploading ? <Loader2Icon className="size-4 animate-spin" /> : <PaperclipIcon className="size-4" />}
-            </Button>
-          </>
-        )}
-        <MentionTextarea
-          className="max-h-40 min-h-10 min-w-0 flex-1 resize-none"
-          rows={1}
-          placeholder={placeholder}
-          value={value}
-          disabled={disabled && !(running && allowBtw)}
-          onValueChange={onChange}
-          onKeyDown={onKeyDown}
-        />
-        {running && allowBtw && isBtwCommand(value) && (
-          <Button
-            size="icon"
-            onClick={onSend}
-            aria-label={translate("overview.sendSideQuestion")}
-            title={translate("overview.sendSideQuestion")}
-          >
-            <ArrowUpIcon />
-          </Button>
-        )}
-        {running ? (
-          // while a run is in flight the send button becomes a stop button —
-          // aborts just this session (the trigger queue keeps going).
-          <Button
-            size="icon"
-            variant="destructive"
-            onClick={onStop}
-            disabled={stopDisabled}
-            title={translate("overview.stopRun")}
-          >
-            <Square className="size-3.5 fill-current" />
-          </Button>
-        ) : (
-          <Button
-            size="icon"
-            onClick={onSend}
-            disabled={disabled || (!value.trim() && atts.length === 0)}
-            title={translate("overview.sendMessage")}
-            aria-label={translate("overview.sendMessage")}
-          >
-            <ArrowUpIcon />
-          </Button>
-        )}
       </div>
     </div>
   );
@@ -319,7 +322,7 @@ function LLMProfileRow({
 
   return (
     <div className="flex min-w-0 shrink-0 items-center gap-1 px-1 pt-0.5 pb-1">
-      <ZapIcon className="text-muted-foreground/50 size-3 shrink-0" />
+      <ZapIcon className="size-3 shrink-0 text-muted-foreground/50" />
       <span className="truncate text-muted-foreground/70 text-xs" title={label}>
         {label}
       </span>
@@ -335,7 +338,7 @@ function LLMProfileRow({
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-64 p-1">
-          <p className="text-muted-foreground px-2 py-1 text-[11px] font-medium">
+          <p className="px-2 py-1 font-medium text-[11px] text-muted-foreground">
             {translate("overview.chooseProfile")}
           </p>
           {/* default option */}
@@ -356,7 +359,7 @@ function LLMProfileRow({
                 : translate("overview.default")}
             </span>
             {activeDefault && (
-              <span className="text-muted-foreground text-[11px]">
+              <span className="text-[11px] text-muted-foreground">
                 {activeDefault.format} · {activeDefault.model}
               </span>
             )}
@@ -377,7 +380,7 @@ function LLMProfileRow({
                 )}
               >
                 <span className="text-sm">{p.name}</span>
-                <span className="text-muted-foreground text-[11px]">
+                <span className="text-[11px] text-muted-foreground">
                   {p.format} · {p.model}
                 </span>
               </button>
@@ -477,13 +480,13 @@ function DraftChat({
     <>
       {/* empty / landing state fills the panel */}
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
-        <div className="bg-primary/10 flex size-12 items-center justify-center rounded-full">
-          <Bot className="text-primary size-6" />
+        <div className="flex size-12 items-center justify-center rounded-full bg-primary/10">
+          <Bot className="size-6 text-primary" />
         </div>
-        <div className="text-sm font-medium">
+        <div className="font-medium text-sm">
           {translate("overview.startChat", { name: agent ? agentDisplayName(agent, translate) : "Agent" })}
         </div>
-        {agent?.description && <p className="text-muted-foreground max-w-md text-xs">{agent.description}</p>}
+        {agent?.description && <p className="max-w-md text-muted-foreground text-xs">{agent.description}</p>}
       </div>
 
       <Composer
@@ -811,20 +814,20 @@ function ChatView({
     >
       {/* header: which agent + live + token meta */}
       <div className="flex min-w-0 flex-wrap items-center gap-2 border-b px-4 py-2.5">
-        <Bot className="text-muted-foreground size-4 shrink-0" />
-        <span className="min-w-0 max-w-48 truncate text-sm font-medium">{agent?.name ?? conv.agent_key}</span>
-        <span className="text-muted-foreground hidden shrink-0 font-mono text-xs sm:inline">{conv.agent_key}</span>
+        <Bot className="size-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 max-w-48 truncate font-medium text-sm">{agent?.name ?? conv.agent_key}</span>
+        <span className="hidden shrink-0 font-mono text-muted-foreground text-xs sm:inline">{conv.agent_key}</span>
         {agent && !agent.builtin && (
           <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">
             {translate("overview.custom")}
           </Badge>
         )}
         {agent?.description && (
-          <span className="text-muted-foreground min-w-0 truncate text-xs">{agent.description}</span>
+          <span className="min-w-0 truncate text-muted-foreground text-xs">{agent.description}</span>
         )}
         {running && <LiveBadge />}
         <SideQuestionButton side={side} />
-        <div className="text-muted-foreground ml-auto flex min-w-0 max-w-full items-center justify-end gap-x-3 gap-y-1 text-xs max-sm:w-full max-sm:flex-wrap">
+        <div className="ml-auto flex min-w-0 max-w-full items-center justify-end gap-x-3 gap-y-1 text-muted-foreground text-xs max-sm:w-full max-sm:flex-wrap">
           {tokenTotal.turns > 0 && (
             <span title={translate("overview.roundsHint")} className="tabular-nums">
               {translate("overview.rounds", { count: tokenTotal.turns })}
@@ -841,16 +844,16 @@ function ChatView({
       <ApprovalExecutionFocus focus={approvalFocus} history={focusHistory} />
 
       {/* messages */}
-      <ScrollArea type="auto" className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
+      <ScrollArea type="auto" className="[&_[data-slot=scroll-area-viewport]>div]:block! min-h-0 min-w-0 flex-1">
         <div className="min-w-0 max-w-full px-4 py-3" ref={contentRef}>
           {messages.length === 0 && !running ? (
-            <div className="text-muted-foreground py-10 text-center text-sm">
+            <div className="py-10 text-center text-muted-foreground text-sm">
               {translate("overview.startChat", { name: agent?.name ?? conv.agent_key })}
             </div>
           ) : (
             <>
               {hasMore && (
-                <div className="text-muted-foreground/70 pb-2 text-center text-[11px]">
+                <div className="pb-2 text-center text-[11px] text-muted-foreground/70">
                   {translate("overview.olderMessages")}
                 </div>
               )}
@@ -945,9 +948,9 @@ const ConversationItem = React.memo(function ConversationItem({
 
   return (
     <div
-      className={cn(
-        "group flex min-w-0 items-center gap-1 rounded-md pr-1 transition-colors",
-        active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
+      className={cx(
+        "group flex min-w-0 items-center gap-1 rounded-[var(--rb-r-sm,6px)] pe-1 transition-colors",
+        active ? "bg-rb-soft text-rb-fg" : "hover:bg-rb-soft/60",
       )}
     >
       {selectionMode && (
@@ -976,7 +979,7 @@ const ConversationItem = React.memo(function ConversationItem({
               onCancelRename();
             }
           }}
-          className="border-input bg-background min-w-0 flex-1 rounded-md border px-2 py-1 text-sm"
+          className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
         />
       ) : (
         <button
@@ -984,11 +987,13 @@ const ConversationItem = React.memo(function ConversationItem({
           onClick={() => onSelect(conv.id)}
           onDoubleClick={() => onStartRename(conv)}
           title={translate("overview.renameHint")}
-          className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left"
+          className="min-w-0 flex-1 rounded-[var(--rb-r-sm,6px)] px-2 py-1.5 text-left"
         >
           <div className="flex min-w-0 items-center gap-1.5">
-            {pinned && <PinIcon className="text-primary size-3 shrink-0" aria-label={translate("overview.pinned")} />}
-            <div className="truncate text-sm">{conv.title || translate("overview.newConversation")}</div>
+            {pinned && <PinIcon className="size-3 shrink-0 text-rb-fg" aria-label={translate("overview.pinned")} />}
+            <div className="truncate text-[14px]/[18px] text-rb-fg">
+              {conv.title || translate("overview.newConversation")}
+            </div>
             {conv.running ? (
               <Badge variant="secondary" className="shrink-0 gap-1" title={translate("overview.agentRunning")}>
                 <Spinner className="size-3" aria-hidden="true" />
@@ -996,7 +1001,7 @@ const ConversationItem = React.memo(function ConversationItem({
               </Badge>
             ) : null}
           </div>
-          <div className="text-muted-foreground flex min-w-0 items-center gap-1 text-[11px]">
+          <div className="flex min-w-0 items-center gap-1 text-[11px] text-rb-muted">
             {showAgent && (
               <>
                 <Bot className="size-3 shrink-0" />
@@ -1021,7 +1026,7 @@ const ConversationItem = React.memo(function ConversationItem({
           <Button
             variant="ghost"
             size="icon-sm"
-            className="text-muted-foreground shrink-0"
+            className="shrink-0 text-muted-foreground"
             aria-label={translate("overview.manageConversation", {
               title: conv.title || translate("overview.newConversation"),
             })}
@@ -1092,7 +1097,7 @@ function AgentGroupHeader({
           : translate("overview.collapseGroup", { name: group.name })
       }
       className={cn(
-        "sticky top-0 z-10 flex min-w-0 items-center gap-1.5 rounded-md bg-card px-1.5 py-1 text-left font-medium text-[11px] transition-colors hover:bg-accent/50",
+        "sticky top-0 z-10 flex min-w-0 items-center gap-1.5 rounded-[var(--rb-r-sm,6px)] bg-rb-popover px-1.5 py-1 text-left font-[450] text-[11px] transition-colors hover:bg-rb-soft",
         collapsed && hasActive ? "text-foreground" : "text-muted-foreground",
       )}
     >
@@ -1442,12 +1447,12 @@ export default function ChatPage() {
   return (
     <div
       data-content-padding="false"
-      className="flex h-[calc(100svh-3rem)] min-w-0 flex-col overflow-hidden p-3 sm:p-4 md:h-[calc(100svh-4rem)] md:p-6"
+      className="flex h-[calc(100svh-3rem)] min-w-0 flex-col overflow-hidden bg-rb-canvas p-3 text-rb-fg sm:p-4 md:h-[calc(100svh-3.5rem)] md:p-6"
     >
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 grid-rows-[minmax(10rem,15rem)_minmax(0,1fr)] gap-3 md:grid-cols-[18rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:gap-4">
         {/* left: conversation list */}
-        <div className="bg-card flex flex-col overflow-hidden rounded-lg border">
-          <div className="flex flex-col gap-2 border-b p-2">
+        <div className="flex flex-col overflow-hidden rounded-[var(--rb-r-lg,10px)] border border-rb-line bg-rb-popover">
+          <div className="flex flex-col gap-2 border-rb-line border-b p-2">
             <Button size="sm" className="w-full" onClick={() => selectConversation(null)}>
               <PlusIcon />
               {translate("overview.createConversation")}
@@ -1481,7 +1486,7 @@ export default function ChatPage() {
                     aria-label={translate("overview.selectFilteredConversations")}
                     disabled={filteredConversations.length === 0 || bulkDeleting}
                   />
-                  <span className="text-muted-foreground min-w-0 flex-1 text-xs tabular-nums">
+                  <span className="min-w-0 flex-1 text-muted-foreground text-xs tabular-nums">
                     {selectedConversationCount > 0
                       ? translate("overview.selectedConversations", { count: selectedConversationCount })
                       : conversationCountLabel}
@@ -1503,7 +1508,7 @@ export default function ChatPage() {
                 </div>
               ) : (
                 <div className="flex items-center gap-2 px-1">
-                  <span className="text-muted-foreground min-w-0 flex-1 text-xs tabular-nums">
+                  <span className="min-w-0 flex-1 text-muted-foreground text-xs tabular-nums">
                     {conversationCountLabel}
                   </span>
                   <Button
@@ -1522,11 +1527,11 @@ export default function ChatPage() {
           <ScrollArea
             key={agentFilter === null ? "all" : `agent:${agentFilter}`}
             type="auto"
-            className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!"
+            className="[&_[data-slot=scroll-area-viewport]>div]:block! min-h-0 min-w-0 flex-1"
           >
             <div className="flex min-w-0 flex-col gap-0.5 p-2">
               {filteredConversations.length === 0 && (
-                <p className="text-muted-foreground px-2 py-6 text-center text-xs">
+                <p className="px-2 py-6 text-center text-muted-foreground text-xs">
                   {agentFilter === null
                     ? translate("overview.emptyConversations")
                     : translate("overview.emptyAgentConversations")}
@@ -1603,7 +1608,7 @@ export default function ChatPage() {
         </div>
 
         {/* right: chat view */}
-        <div className="bg-card flex min-w-0 flex-col overflow-hidden rounded-lg border">
+        <div className="flex min-w-0 flex-col overflow-hidden rounded-[var(--rb-r-lg,10px)] border border-rb-line bg-rb-popover">
           {selected ? (
             <ChatView
               key={selected.id}
@@ -1615,7 +1620,7 @@ export default function ChatPage() {
               onConvUpdated={reloadConvs}
             />
           ) : sourceRequested ? (
-            <div role="status" className="p-6 text-sm text-muted-foreground">
+            <div role="status" className="p-6 text-muted-foreground text-sm">
               {convsLoaded ? translate("overview.conversationDeleted") : translate("overview.loadingConversation")}
             </div>
           ) : (

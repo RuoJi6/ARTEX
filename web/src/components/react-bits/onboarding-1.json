@@ -1,0 +1,7 @@
+{
+  "name": "onboarding-1",
+  "type": "registry:block",
+  "files": {
+    "onboarding-1.tsx": "components/blocks/onboarding-1.tsx"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "command-menu-1",
+  "type": "registry:block",
+  "files": {
+    "command-menu-1.tsx": "components/blocks/command-menu-1.tsx"
+  }
+}

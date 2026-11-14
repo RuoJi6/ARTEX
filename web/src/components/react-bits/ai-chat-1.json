@@ -1,0 +1,7 @@
+{
+  "name": "ai-chat-1",
+  "type": "registry:block",
+  "files": {
+    "ai-chat-1.tsx": "components/blocks/ai-chat-1.tsx"
+  }
+}

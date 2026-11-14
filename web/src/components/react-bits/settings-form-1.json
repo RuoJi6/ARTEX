@@ -1,0 +1,7 @@
+{
+  "name": "settings-form-1",
+  "type": "registry:block",
+  "files": {
+    "settings-form-1.tsx": "components/blocks/settings-form-1.tsx"
+  }
+}

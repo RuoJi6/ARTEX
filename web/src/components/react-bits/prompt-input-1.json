@@ -1,0 +1,7 @@
+{
+  "name": "prompt-input-1",
+  "type": "registry:block",
+  "files": {
+    "prompt-input-1.tsx": "components/blocks/prompt-input-1.tsx"
+  }
+}

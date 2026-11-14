@@ -1,0 +1,7 @@
+{
+  "name": "notifications-1",
+  "type": "registry:block",
+  "files": {
+    "notifications-1.tsx": "components/blocks/notifications-1.tsx"
+  }
+}

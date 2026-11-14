@@ -1,0 +1,7 @@
+{
+  "name": "app-dialog-1",
+  "type": "registry:block",
+  "files": {
+    "app-dialog-1.tsx": "components/blocks/app-dialog-1.tsx"
+  }
+}

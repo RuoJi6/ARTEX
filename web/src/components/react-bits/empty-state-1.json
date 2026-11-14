@@ -1,0 +1,7 @@
+{
+  "name": "empty-state-1",
+  "type": "registry:block",
+  "files": {
+    "empty-state-1.tsx": "components/blocks/empty-state-1.tsx"
+  }
+}

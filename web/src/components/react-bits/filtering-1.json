@@ -1,0 +1,7 @@
+{
+  "name": "filtering-1",
+  "type": "registry:block",
+  "files": {
+    "filtering-1.tsx": "components/blocks/filtering-1.tsx"
+  }
+}

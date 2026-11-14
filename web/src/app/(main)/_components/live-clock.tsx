@@ -4,7 +4,7 @@ import * as React from "react";
 
 import { useTranslation } from "react-i18next";
 
-import { cn } from "@/lib/utils";
+import { cx } from "@/components/rb/tokens";
 
 function formatClock(value: Date) {
   const pad = (part: number) => String(part).padStart(2, "0");
@@ -25,8 +25,8 @@ export function LiveClock({ className }: { className?: string }) {
   return (
     <time
       role="timer"
-      className={cn(
-        "hidden rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground tabular-nums sm:inline-flex",
+      className={cx(
+        "hidden rounded-[var(--rb-r-sm,6px)] border border-rb-line bg-rb-subtle px-2 py-1 font-mono text-[11px] text-rb-muted tabular-nums sm:inline-flex",
         className,
       )}
       dateTime={now?.toISOString()}

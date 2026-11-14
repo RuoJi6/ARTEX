@@ -1,0 +1,7 @@
+{
+  "name": "tool-calls-1",
+  "type": "registry:block",
+  "files": {
+    "tool-calls-1.tsx": "components/blocks/tool-calls-1.tsx"
+  }
+}

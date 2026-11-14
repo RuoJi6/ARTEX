@@ -1,0 +1,7 @@
+{
+  "name": "monitoring-1",
+  "type": "registry:block",
+  "files": {
+    "monitoring-1.tsx": "components/blocks/monitoring-1.tsx"
+  }
+}

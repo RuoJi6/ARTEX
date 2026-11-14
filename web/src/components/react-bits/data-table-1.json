@@ -1,0 +1,7 @@
+{
+  "name": "data-table-1",
+  "type": "registry:block",
+  "files": {
+    "data-table-1.tsx": "components/blocks/data-table-1.tsx"
+  }
+}

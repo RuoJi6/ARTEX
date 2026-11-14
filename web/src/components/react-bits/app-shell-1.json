@@ -1,0 +1,7 @@
+{
+  "name": "app-shell-1",
+  "type": "registry:block",
+  "files": {
+    "app-shell-1.tsx": "components/blocks/app-shell-1.tsx"
+  }
+}

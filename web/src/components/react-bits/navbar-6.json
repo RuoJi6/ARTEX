@@ -1,0 +1,7 @@
+{
+  "name": "navbar-6",
+  "type": "registry:block",
+  "files": {
+    "navbar-6.tsx": "components/blocks/navbar-6.tsx"
+  }
+}

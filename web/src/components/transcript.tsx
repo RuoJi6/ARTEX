@@ -20,13 +20,14 @@ import { toast } from "sonner";
 
 import { ApprovalDetail } from "@/components/approval-records";
 import { Markdown } from "@/components/markdown";
+import { cx, disclosureRow, stepGlyph, toolOutput, toolRow } from "@/components/rb/tokens";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { localizedError } from "@/i18n/errors";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
-import { formatToolDetail, type ToolDetailPart, toolInputText } from "@/lib/execution-display";
+import { formatToolDetail, toolInputText } from "@/lib/execution-display";
 import type { Activity, InterceptPending } from "@/lib/types";
 
 // ---- per-agent lane color (planner + work#1/#2/#3 …) ---------------------------
@@ -40,7 +41,7 @@ function workerColor(name: string): string {
 }
 
 const chip = (worker: string) =>
-  "mt-0.5 shrink-0 rounded px-1 text-[9px] font-medium text-white " + workerColor(worker);
+  `mt-0.5 shrink-0 rounded px-1 text-[9px] font-medium text-white ${workerColor(worker)}`;
 
 // useInView latches true when the ref'd element first comes within `rootMargin` of
 // the enclosing scroll viewport. Blocks that always show their full body (user
@@ -139,7 +140,7 @@ function ActivityTime({ ts }: { ts: string }) {
     <time
       dateTime={date.toISOString()}
       title={date.toLocaleString(i18n.resolvedLanguage)}
-      className="text-[10px] text-muted-foreground tabular-nums"
+      className="text-[10px] text-rb-muted tabular-nums"
       suppressHydrationWarning
     >
       {date.toLocaleString(i18n.resolvedLanguage, {
@@ -241,19 +242,19 @@ function InterceptCard({ step, getDetail }: { step: Activity; getDetail: (seq: n
     : null;
 
   return (
-    <div className="my-2 rounded-lg border border-amber-400/50 bg-amber-50/40 dark:bg-amber-950/15 p-3 text-xs">
+    <div className="my-2 rounded-[var(--rb-r-lg,10px)] border border-amber-500/40 bg-amber-500/5 p-3 text-[13px]/[18px] text-rb-fg">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-start gap-2 min-w-0">
+        <div className="flex min-w-0 items-start gap-2">
           <ShieldAlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <div className="min-w-0 space-y-0.5">
-            <div className="flex items-center gap-1.5 font-medium">
+            <div className="flex items-center gap-1.5 font-[450]">
               <span className="text-amber-700 dark:text-amber-400">{translate("chatUI.approvalRequest")}</span>
-              <code className="rounded bg-amber-100 dark:bg-amber-900/50 px-1 font-mono text-amber-800 dark:text-amber-300">
+              <code className="rounded-[var(--rb-r-xs,4px)] bg-amber-500/10 px-1 font-mono text-amber-800 dark:text-amber-300">
                 {toolName}
               </code>
-              {pendingId && <span className="text-muted-foreground">#{pendingId}</span>}
+              {pendingId && <span className="text-rb-muted">#{pendingId}</span>}
             </div>
-            {inputStr && <p className="font-mono text-muted-foreground truncate">{inputStr}</p>}
+            {inputStr && <p className="truncate font-mono text-rb-muted">{inputStr}</p>}
           </div>
         </div>
 
@@ -261,14 +262,14 @@ function InterceptCard({ step, getDetail }: { step: Activity; getDetail: (seq: n
           <Badge variant="outline">{translate("chatUI.readOnlyHistory")}</Badge>
         ) : decided ? (
           <span
-            className={
-              "shrink-0 rounded px-2 py-0.5 text-[11px] font-medium " +
-              (decided === "allowed"
-                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
+            className={cx(
+              "shrink-0 rounded-[var(--rb-r-xs,4px)] px-2 py-0.5 font-[450] text-[11px]",
+              decided === "allowed"
+                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
                 : decided === "timeout"
-                  ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                  : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400")
-            }
+                  ? "bg-rb-soft text-rb-muted"
+                  : "bg-red-500/10 text-red-700 dark:text-red-400",
+            )}
           >
             {decided === "allowed"
               ? translate("chatUI.allowed")
@@ -331,7 +332,7 @@ function InterceptCard({ step, getDetail }: { step: Activity; getDetail: (seq: n
                 </Button>
               </div>
             ) : (
-              <p className="p-3 text-muted-foreground">{translate("chatUI.loadingApproval")}</p>
+              <p className="p-3 text-rb-muted">{translate("chatUI.loadingApproval")}</p>
             )}
           </CollapsibleContent>
         </Collapsible>
@@ -374,8 +375,9 @@ function ToolBlock({
     : ok
       ? "text-emerald-600 dark:text-emerald-400"
       : "text-red-600 dark:text-red-400";
-  const rawCmd =
-    use && use.summary.startsWith(toolName) ? use.summary.slice(toolName.length).trimStart() : (use?.summary ?? "");
+  const rawCmd = use?.summary.startsWith(toolName)
+    ? use.summary.slice(toolName.length).trimStart()
+    : (use?.summary ?? "");
   const cmd = toolInputText(toolName, rawCmd);
   // status only — the full result lives behind the expand (【输出】), not previewed inline
   const statusText = running ? translate("chatUI.executing") : ok ? "✓" : translate("chatUI.executionFailed");
@@ -453,20 +455,25 @@ function ToolBlock({
     <section
       ref={targetRef}
       aria-label={focused ? translate("chatUI.focusedCall", { seq: use?.seq }) : undefined}
-      className={focused ? "rounded-lg border-2 border-primary bg-primary/5 p-3 text-xs" : "text-xs"}
+      className={cx(toolRow, "w-[calc(100%+16px)]", focused && "border border-rb-line bg-rb-soft")}
     >
-      <button type="button" onClick={toggle} className="flex w-full items-start gap-2 py-1 text-left hover:bg-muted/40">
-        <span className="mt-0.5 text-muted-foreground">
-          {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+      <button type="button" onClick={toggle} className="flex w-full items-center gap-2 py-1 text-left">
+        <span className={stepGlyph}>
+          <ChevronDown className={cx("size-3 transition-transform duration-[120ms]", !open && "-rotate-90")} />
         </span>
-        <ToolIcon className={"mt-0.5 size-3.5 shrink-0 " + (running ? "text-sky-600 dark:text-sky-400" : statusTone)} />
+        <ToolIcon className={`size-3.5 shrink-0 ${running ? "text-sky-600 dark:text-sky-400" : statusTone}`} />
         {showWorker && <span className={chip(group.worker)}>{group.worker}</span>}
-        <span className="shrink-0 font-medium text-sky-600 dark:text-sky-400">{toolName}</span>
-        {cmd && <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{cmd}</span>}
-        <span className={"ml-auto shrink-0 font-medium " + statusTone}>{statusText}</span>
+        <span className="shrink-0 font-[450] text-sky-600 dark:text-sky-400">{toolName}</span>
+        {cmd && <span className="min-w-0 flex-1 truncate font-mono text-rb-muted">{cmd}</span>}
+        <span className={cx("ms-auto shrink-0 font-[450]", statusTone)}>{statusText}</span>
       </button>
       {open && (
-        <pre className="ml-7 mb-1 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed">
+        <pre
+          className={cx(
+            toolOutput,
+            "ms-7 mb-1 max-h-72 overflow-auto rounded-[var(--rb-r-sm,6px)] bg-rb-soft p-2 leading-relaxed",
+          )}
+        >
           {detail ?? translate("chatUI.loading")}
         </pre>
       )}
@@ -525,22 +532,27 @@ function MessageBlock({
   }
 
   return (
-    <div className="text-xs">
-      <button type="button" onClick={toggle} className="flex w-full items-start gap-2 py-1 text-left hover:bg-muted/40">
-        <span className="mt-0.5 text-muted-foreground">
-          {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+    <div>
+      <button type="button" onClick={toggle} className={cx(disclosureRow, "w-[calc(100%+16px)]")}>
+        <span className={stepGlyph}>
+          <ChevronDown className={cx("size-3 transition-transform duration-[120ms]", !open && "-rotate-90")} />
         </span>
-        <Icon className={"mt-0.5 size-3.5 shrink-0 " + tone} />
+        <Icon className={`size-3.5 shrink-0 ${tone}`} />
         {showWorker && <span className={chip(group.worker)}>{group.worker}</span>}
-        <span className={"min-w-0 flex-1 truncate " + tone}>
+        <span className={`min-w-0 flex-1 truncate ${tone}`}>
           {body}
           {hasThinking && (
-            <span className="ml-1 text-[10px] text-muted-foreground">{translate("chatUI.includesThinking")}</span>
+            <span className="ml-1 text-[10px] text-rb-muted">{translate("chatUI.includesThinking")}</span>
           )}
         </span>
       </button>
       {open && (
-        <pre className="ml-7 mb-1 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed">
+        <pre
+          className={cx(
+            toolOutput,
+            "ms-7 mb-1 max-h-72 overflow-auto rounded-[var(--rb-r-sm,6px)] bg-rb-soft p-2 leading-relaxed",
+          )}
+        >
           {detail ?? translate("chatUI.loading")}
         </pre>
       )}
@@ -617,25 +629,25 @@ function UserRow({
             {attachments.map((a) => (
               <div
                 key={a.path}
-                className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs shadow-sm"
+                className="flex min-w-0 max-w-full items-center gap-1.5 rounded-[var(--rb-r-sm,6px)] border border-rb-line bg-rb-popover px-2 py-1 text-xs shadow-rb-sm"
                 title={a.path}
               >
-                <PaperclipIcon className="size-3 shrink-0 text-primary" />
-                <span className="max-w-[180px] truncate font-medium">{a.name}</span>
-                <span className="shrink-0 text-muted-foreground">{fmtBytes(a.size)}</span>
+                <PaperclipIcon className="size-3 shrink-0 text-rb-muted" />
+                <span className="max-w-[180px] truncate font-[450] text-rb-fg">{a.name}</span>
+                <span className="shrink-0 text-rb-muted">{fmtBytes(a.size)}</span>
               </div>
             ))}
           </div>
         )}
         {text && (
-          <div className="min-w-0 max-w-full whitespace-pre-wrap rounded-lg rounded-tr-sm bg-primary px-3 py-1.5 text-sm text-primary-foreground [overflow-wrap:anywhere]">
+          <div className="min-w-0 max-w-full whitespace-pre-wrap rounded-[var(--rb-r-lg,10px)] border border-rb-line bg-rb-popover px-3.5 py-2 text-[14px]/[20px] text-rb-fg shadow-rb-sm [overflow-wrap:anywhere]">
             {text}
           </div>
         )}
         <ActivityTime ts={step.ts} />
       </div>
-      <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10">
-        <Icon className="size-3.5 text-primary" />
+      <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-rb-soft">
+        <Icon className="size-3.5 text-rb-fg" />
       </div>
     </div>
   );
@@ -662,11 +674,11 @@ function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: num
     };
   }, [inView, step.seq, getDetail, step.summary]);
   return (
-    <div ref={ref} className="mb-2 mt-1 flex min-w-0 max-w-full flex-col gap-1 overflow-hidden">
+    <div ref={ref} className="mt-1 mb-2 flex min-w-0 max-w-full flex-col gap-1 overflow-hidden">
       <div
         className={
-          "min-w-0 max-w-full flex-1 break-words [overflow-wrap:anywhere] rounded-lg bg-muted px-3 py-2 " +
-          (step.is_error ? "text-sm text-red-600 dark:text-red-400" : "")
+          "min-w-0 max-w-full flex-1 break-words text-[14px]/[20px] text-rb-fg [overflow-wrap:anywhere]" +
+          (step.is_error ? "text-red-600 dark:text-red-400" : "")
         }
       >
         {step.is_error ? (
@@ -709,27 +721,27 @@ function ExecView({
     <div className="flex flex-col">
       {groupSteps(activity, !!chat).map((g) =>
         g.type === "round" ? (
-          <div key={"r" + g.key} className="my-2 flex items-center gap-2 text-[10px] font-medium text-muted-foreground">
-            <span className="h-px flex-1 bg-border" />
+          <div key={`r${g.key}`} className="my-2 flex items-center gap-2 font-[450] text-[10px] text-rb-muted">
+            <span className="h-px flex-1 bg-rb-line" />
             {g.label || translate("chatUI.newRound")}
-            <span className="h-px flex-1 bg-border" />
+            <span className="h-px flex-1 bg-rb-line" />
           </div>
         ) : g.type === "user" ? (
-          <UserRow key={"u" + g.key} step={g.step} intent={g.intent} getDetail={getDetail} />
+          <UserRow key={`u${g.key}`} step={g.step} intent={g.intent} getDetail={getDetail} />
         ) : g.type === "answer" ? (
-          <AnswerBlock key={"a" + g.key} step={g.step} getDetail={getDetail} />
+          <AnswerBlock key={`a${g.key}`} step={g.step} getDetail={getDetail} />
         ) : g.type === "tool" ? (
           <ToolBlock
-            key={"t" + g.key}
+            key={`t${g.key}`}
             group={g}
             getDetail={getDetail}
             showWorker={showWorker}
             focused={focusedSeq != null && g.use?.seq === focusedSeq}
           />
         ) : g.type === "intercept" ? (
-          <InterceptCard key={"ic" + g.key} step={g.step} getDetail={getDetail} />
+          <InterceptCard key={`ic${g.key}`} step={g.step} getDetail={getDetail} />
         ) : (
-          <MessageBlock key={"m" + g.key} group={g} getDetail={getDetail} showWorker={showWorker} />
+          <MessageBlock key={`m${g.key}`} group={g} getDetail={getDetail} showWorker={showWorker} />
         ),
       )}
     </div>
@@ -778,7 +790,7 @@ export function Transcript({
     >
       <ExecView activity={activity} taskId={taskId} chat={chat} fetchDetail={fetchDetail} focusedSeq={focusedSeq} />
       {live && (
-        <div className="flex items-center gap-2 pl-2 pt-1 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2 pt-1 pl-2 text-[12px]/[16px] text-rb-muted">
           <span className="flex gap-1">
             <span className="size-1.5 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.3s]" />
             <span className="size-1.5 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.15s]" />

@@ -8,6 +8,7 @@ import { ArrowLeftIcon, ArrowUpRightIcon, BotIcon, FileTextIcon, Loader2Icon, Sh
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
+import { MobileNavButton } from "@/components/rb/mobile-nav-button";
 import { CopyButton } from "@/components/copy-button";
 import { FindingAutoChat } from "@/components/finding-auto-chat";
 import { FindingReproductionPanel } from "@/components/finding-reproduction-panel";
@@ -21,7 +22,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
@@ -170,7 +170,7 @@ function FindingDetailInner() {
         {/* Sticky header */}
         <header className="sticky top-0 z-10 flex flex-col gap-2 border-b bg-background/95 px-4 py-2.5 backdrop-blur lg:px-6">
           <div className="flex flex-wrap items-center gap-2">
-            <SidebarTrigger className="-ml-1" />
+            <MobileNavButton className="-ml-1" />
             <Button asChild variant="ghost" size="icon" className="size-7">
               <Link href={backHref}>
                 <ArrowLeftIcon />

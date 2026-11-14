@@ -40,7 +40,8 @@
       "!dist",
       "!out",
       "!src/components/ui",
-      "!src/components/calendar"
+      "!src/components/calendar",
+      "!src/components/react-bits"
     ]
   },
   "formatter": {

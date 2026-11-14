@@ -54,6 +54,18 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --font-heading: var(--font-sans);
   --font-sans: var(--font-sans);
+  /* React Bits Pro semantic tokens — map the library's neutral palette onto the
+     app's theme variables so vendored blocks follow every theme preset. */
+  --color-rb-canvas: var(--background);
+  --color-rb-surface: var(--card);
+  --color-rb-popover: var(--popover);
+  --color-rb-subtle: var(--muted);
+  --color-rb-fg: var(--foreground);
+  --color-rb-muted: var(--muted-foreground);
+  --color-rb-soft: var(--accent);
+  --color-rb-line: var(--border);
+  --color-rb-input: var(--input);
+  --color-rb-overlay: color-mix(in oklab, var(--foreground) 25%, transparent);
 }
 
 /* Default theme styles (used when no data-theme-preset is set or when 'default' is selected).
@@ -137,6 +149,30 @@ These serve as the fallback; there is no separate default.css file. */
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+}
+
+/* React Bits Pro theme (registry item @reactbits-pro/app-ui-theme).
+   Accent + radius derive from the app theme so vendored blocks stay in sync. */
+:root {
+  --rb-accent: var(--primary);
+  --rb-accent-fg: var(--primary-foreground);
+  --rb-radius: var(--radius);
+  --shadow-rb-sm: 0 1px 2px -1px rgb(0 0 0 / 0.12);
+  --shadow-rb-overlay: 0 12px 24px -12px rgb(0 0 0 / 0.2);
+}
+
+.dark {
+  --shadow-rb-sm: 0 1px 2px -1px rgb(0 0 0 / 0.36);
+  --shadow-rb-overlay: 0 12px 24px -12px rgb(0 0 0 / 0.6);
+}
+
+@layer utilities {
+  .shadow-rb-sm {
+    box-shadow: var(--shadow-rb-sm);
+  }
+  .shadow-rb-overlay {
+    box-shadow: var(--shadow-rb-overlay);
+  }
 }
 
 @layer base {

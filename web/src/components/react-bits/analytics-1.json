@@ -1,0 +1,7 @@
+{
+  "name": "analytics-1",
+  "type": "registry:block",
+  "files": {
+    "analytics-1.tsx": "components/blocks/analytics-1.tsx"
+  }
+}

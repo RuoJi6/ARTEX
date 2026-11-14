@@ -1,0 +1,7 @@
+{
+  "name": "authentication-1",
+  "type": "registry:block",
+  "files": {
+    "authentication-1.tsx": "components/blocks/authentication-1.tsx"
+  }
+}

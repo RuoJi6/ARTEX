@@ -1,0 +1,7 @@
+{
+  "name": "dashboard-3",
+  "type": "registry:block",
+  "files": {
+    "dashboard-3.tsx": "components/blocks/dashboard-3.tsx"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "list-1",
+  "type": "registry:block",
+  "files": {
+    "list-1.tsx": "components/blocks/list-1.tsx"
+  }
+}

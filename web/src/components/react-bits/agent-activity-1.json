@@ -1,0 +1,7 @@
+{
+  "name": "agent-activity-1",
+  "type": "registry:block",
+  "files": {
+    "agent-activity-1.tsx": "components/blocks/agent-activity-1.tsx"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "card-6",
+  "type": "registry:block",
+  "files": {
+    "card-6.tsx": "components/blocks/card-6.tsx"
+  }
+}
