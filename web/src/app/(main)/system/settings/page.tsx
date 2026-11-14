@@ -31,6 +31,7 @@ import type { EgressReport, LLMProfile, ProxyPoolEntry, Settings, WorkerPool } f
 
 import { useEgressIp } from "../../_components/egress-ip-banner";
 import { BasicAuthCard } from "./_components/basic-auth-card";
+import { McpServerCard } from "./_components/mcp-server-card";
 import { UpdateCard } from "./_components/update-card";
 
 export default function SystemSettingsPage() {
@@ -766,6 +767,7 @@ export default function SystemSettingsPage() {
           <div className="flex flex-col divide-y rounded-xl border bg-card/30 px-3 [&>[data-slot=card]]:mb-0 [&>[data-slot=card]]:rounded-none [&>[data-slot=card]]:bg-transparent [&>[data-slot=card]]:py-4 [&>[data-slot=card]]:ring-0">
             {isSettingVisible("system", "settings.keywords.update") ? <UpdateCard /> : null}
             {isSettingVisible("system", "settings.keywords.basicAuth") ? <BasicAuthCard /> : null}
+            {isSettingVisible("system", "settings.keywords.mcpServer") ? <McpServerCard /> : null}
 
             <Card
               className={`${isSettingVisible("traffic", "settings.keywords.trafficCapture") ? "" : "hidden"} mb-4 break-inside-avoid md:mb-6`}

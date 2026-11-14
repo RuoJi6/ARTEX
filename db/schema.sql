@@ -1651,3 +1651,52 @@ CREATE INDEX IF NOT EXISTS idx_task_intelligence_assets ON task_intelligence USI
 
 -- Optional derived credential presentation; raw intelligence remains authoritative.
 ALTER TABLE task_intelligence ADD COLUMN IF NOT EXISTS credential_analysis JSONB;
+
+-- =====================================================================
+-- MCP server (ARTEX 作为 MCP 服务端，供外部智能体编排任务)
+--   api_tokens       访问令牌：长期、可吊销、可限权，只存 SHA-256，明文仅创建时返回一次
+--   api_token_tasks  令牌建过的任务，用于并发/每小时限额
+--   mcp_audit_log    每次 tools/call 的审计记录
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id                 BIGSERIAL PRIMARY KEY,
+    name               TEXT NOT NULL,
+    -- SHA-256(明文) 的十六进制。令牌本身是 32 字节随机数，不需要 bcrypt 这类慢哈希。
+    token_hash         TEXT NOT NULL UNIQUE,
+    -- 明文前缀，仅用于在列表里辨认是哪一个令牌。
+    token_prefix       TEXT NOT NULL,
+    -- 权限范围：read / task:create / task:control，由 server 侧白名单校验。
+    scopes             JSONB NOT NULL DEFAULT '[]',
+    -- 限定企业：非空时只能在这些企业下建任务、也只能看到/控制这些企业下的任务。
+    company_ids        JSONB NOT NULL DEFAULT '[]',
+    -- 限额，0 = 不限。max_active_tasks 统计本令牌建的、尚未进入终态的任务(含暂停/排队)。
+    max_active_tasks   INTEGER NOT NULL DEFAULT 0,
+    max_tasks_per_hour INTEGER NOT NULL DEFAULT 0,
+    expires_at         TIMESTAMPTZ,
+    last_used_at       TIMESTAMPTZ,
+    revoked_at         TIMESTAMPTZ,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- task_id 不加外键：任务删除后这行仍要计入「每小时建任务数」，否则建了就删可绕过限额。
+CREATE TABLE IF NOT EXISTS api_token_tasks (
+    token_id   BIGINT NOT NULL REFERENCES api_tokens(id) ON DELETE CASCADE,
+    task_id    BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (token_id, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_api_token_tasks_recent ON api_token_tasks(token_id, created_at DESC);
+
+-- token_id 不加外键：令牌删除后审计仍要留存，token_name 冗余保存当时的名称。
+CREATE TABLE IF NOT EXISTS mcp_audit_log (
+    id          BIGSERIAL PRIMARY KEY,
+    token_id    BIGINT NOT NULL,
+    token_name  TEXT NOT NULL DEFAULT '',
+    tool        TEXT NOT NULL,
+    args        TEXT NOT NULL DEFAULT '',
+    ok          BOOLEAN NOT NULL,
+    result      TEXT NOT NULL DEFAULT '',
+    remote_addr TEXT NOT NULL DEFAULT '',
+    duration_ms BIGINT NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
