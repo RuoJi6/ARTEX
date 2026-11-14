@@ -115,8 +115,8 @@ export const settingsMessages = {
     "basic auth authentication sign-in login username password",
   ],
   "settings.keywords.mcpServer": [
-    "MCP 服务端 访问令牌 token 智能体 编排 外部 bot 审计",
-    "mcp server access token agent orchestration external bot audit",
+    "MCP 服务端 访问令牌 token 智能体 编排 外部 bot 审计 白名单 来源 IP",
+    "mcp server access token agent orchestration external bot audit allowlist whitelist source ip",
   ],
   "settings.trafficCapture": ["流量捕获", "Traffic capture"],
   "settings.trafficCaptureHelp": [
@@ -506,6 +506,24 @@ export const settingsMessages = {
     "当前已启用 HTTP Basic Auth，/mcp 仍可直接凭访问令牌访问。",
     "HTTP Basic Auth is currently enabled; /mcp remains reachable with an access token alone.",
   ],
+  "settings.mcpServer.allowlist": ["来源白名单", "Source allowlist"],
+  "settings.mcpServer.allowlistHelp": [
+    "只有这些来源地址能调用 /mcp，每行一个 IP 或 CIDR（如 203.0.113.7 或 10.0.0.0/8）。留空 = 不限制来源。白名单在令牌之前检查：不在名单内的来源即使持有有效令牌也会被拒绝（403）。",
+    "Only these source addresses may call /mcp. One IP or CIDR per line (for example 203.0.113.7 or 10.0.0.0/8). Leave empty for no source restriction. The allowlist is checked before the token: a source that is not listed is rejected (403) even with a valid token.",
+  ],
+  "settings.mcpServer.allowlistPlaceholder": ["留空 = 不限制来源", "Empty = no source restriction"],
+  "settings.mcpServer.trustedProxies": ["可信代理", "Trusted proxies"],
+  "settings.mcpServer.trustedProxiesHelp": [
+    "ARTEX 部署在反向代理（nginx 等）之后时，填写代理的地址，每行一个 IP 或 CIDR；来自这些地址的请求改用 X-Forwarded-For 里的地址作为来源。不填则一律以直连地址为准——此时经代理进来的请求来源都是代理本身。不要填不受你控制的地址，否则对方可以伪造来源。",
+    "If ARTEX runs behind a reverse proxy (nginx and the like), list the proxy addresses here, one IP or CIDR per line; requests from them use the address in X-Forwarded-For as the source. Left empty, the direct connection address is always used, so every request arriving through a proxy appears to come from the proxy itself. Never list addresses you do not control, or their owner can forge the source.",
+  ],
+  "settings.mcpServer.trustedProxiesPlaceholder": ["没有反向代理则留空", "Leave empty without a reverse proxy"],
+  "settings.mcpServer.clientIp": [
+    "服务器看到的你当前的来源地址：{{ip}}",
+    "Your current source address as the server sees it: {{ip}}",
+  ],
+  "settings.mcpServer.saveAllowlist": ["保存来源白名单", "Save source allowlist"],
+  "settings.mcpServer.allowlistSaved": ["来源白名单已保存", "Source allowlist saved"],
   "settings.mcpServer.copy": ["复制", "Copy"],
   "settings.mcpServer.copied": ["已复制", "Copied"],
   "settings.mcpServer.tokens": ["访问令牌", "Access tokens"],

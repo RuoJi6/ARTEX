@@ -21,6 +21,7 @@ type mcpMemoryStore struct {
 	mu      sync.Mutex
 	enabled bool
 	tokens  map[string]*db.APIToken
+	access  string // JSON stored under db.SettingMCPServerAccess
 	touched []int64
 	audit   []db.MCPAuditEntry
 }
@@ -30,6 +31,13 @@ func (m *mcpMemoryStore) GetBool(key string, def bool) bool {
 		return m.enabled
 	}
 	return def
+}
+
+func (m *mcpMemoryStore) GetSetting(key string) (string, bool, error) {
+	if key == db.SettingMCPServerAccess && m.access != "" {
+		return m.access, true, nil
+	}
+	return "", false, nil
 }
 
 func (m *mcpMemoryStore) APITokenByHash(hash string) (*db.APIToken, error) {
@@ -225,6 +233,135 @@ func TestMCPServerTransportRules(t *testing.T) {
 	}
 }
 
+// mcpPostFrom sends a ping from a given TCP peer with optional X-Forwarded-For.
+func mcpPostFrom(s *Server, peer string, forwarded ...string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, mcpEndpointPath, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	r.RemoteAddr = peer
+	r.Header.Set("Authorization", "Bearer "+mcpTestReadToken)
+	for _, value := range forwarded {
+		r.Header.Add("X-Forwarded-For", value)
+	}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	return w
+}
+
+func TestMCPServerSourceAllowlist(t *testing.T) {
+	s, store := mcpTestServer(t)
+	// No allowlist: any source.
+	if w := mcpPostFrom(s, "203.0.113.9:4000"); w.Code != http.StatusOK {
+		t.Fatalf("no allowlist status=%d", w.Code)
+	}
+
+	store.access = `{"allowed_ips":["198.51.100.7","10.1.0.0/16","2001:db8::/32"]}`
+	for peer, want := range map[string]int{
+		"198.51.100.7:1":          http.StatusOK,
+		"10.1.200.3:1":            http.StatusOK,
+		"[2001:db8::5]:1":         http.StatusOK,
+		"[::ffff:198.51.100.7]:1": http.StatusOK, // IPv4-mapped peer matches the IPv4 entry
+		"198.51.100.8:1":          http.StatusForbidden,
+		"10.2.0.1:1":              http.StatusForbidden,
+		"[2001:db9::1]:1":         http.StatusForbidden,
+		"not-an-address":          http.StatusForbidden,
+	} {
+		if w := mcpPostFrom(s, peer); w.Code != want {
+			t.Errorf("peer %s status=%d want %d", peer, w.Code, want)
+		}
+	}
+	// The allowlist is checked before the token: a blocked source gets 403
+	// whether or not it holds a valid token, and the token is never touched.
+	before := len(store.touched)
+	r := httptest.NewRequest(http.MethodPost, mcpEndpointPath, strings.NewReader(`{}`))
+	r.RemoteAddr = "198.51.100.8:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "198.51.100.8") {
+		t.Fatalf("blocked source without token status=%d body=%s", w.Code, w.Body.String())
+	}
+	mcpPostFrom(s, "198.51.100.8:1")
+	if len(store.touched) != before {
+		t.Fatal("token was looked up for a blocked source")
+	}
+
+	// Without a trusted proxy, X-Forwarded-For is ignored: it cannot be used to
+	// claim an allowed address, and an allowed peer is not affected by it.
+	if w := mcpPostFrom(s, "203.0.113.9:1", "198.51.100.7"); w.Code != http.StatusForbidden {
+		t.Fatalf("spoofed X-Forwarded-For status=%d", w.Code)
+	}
+	if w := mcpPostFrom(s, "198.51.100.7:1", "203.0.113.9"); w.Code != http.StatusOK {
+		t.Fatalf("allowed peer with foreign X-Forwarded-For status=%d", w.Code)
+	}
+
+	// Behind a trusted proxy the rightmost untrusted hop is the client.
+	store.access = `{"allowed_ips":["198.51.100.7"],"trusted_proxies":["127.0.0.1","10.9.0.0/24"]}`
+	for name, tc := range map[string]struct {
+		peer      string
+		forwarded []string
+		want      int
+	}{
+		"client via proxy":               {"127.0.0.1:1", []string{"198.51.100.7"}, http.StatusOK},
+		"other client via proxy":         {"127.0.0.1:1", []string{"203.0.113.9"}, http.StatusForbidden},
+		"client forges leftmost entry":   {"127.0.0.1:1", []string{"198.51.100.7, 203.0.113.9"}, http.StatusForbidden},
+		"two trusted proxies":            {"127.0.0.1:1", []string{"203.0.113.1, 198.51.100.7, 10.9.0.4"}, http.StatusOK},
+		"header split across lines":      {"127.0.0.1:1", []string{"198.51.100.7", "10.9.0.4"}, http.StatusOK},
+		"proxy sends no header":          {"127.0.0.1:1", nil, http.StatusForbidden},
+		"malformed hop stops the chain":  {"127.0.0.1:1", []string{"198.51.100.7, garbage, 10.9.0.4"}, http.StatusForbidden},
+		"untrusted peer ignores header":  {"203.0.113.9:1", []string{"198.51.100.7"}, http.StatusForbidden},
+		"allowed client connects direct": {"198.51.100.7:1", nil, http.StatusOK},
+	} {
+		if w := mcpPostFrom(s, tc.peer, tc.forwarded...); w.Code != tc.want {
+			t.Errorf("%s: status=%d want %d", name, w.Code, tc.want)
+		}
+	}
+
+	// The audit records the resolved client, not the proxy.
+	call := httptest.NewRequest(http.MethodPost, mcpEndpointPath, strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"spawn_task","arguments":{"goal":"x"}}}`))
+	call.RemoteAddr = "127.0.0.1:1"
+	call.Header.Set("Authorization", "Bearer "+mcpTestReadToken)
+	call.Header.Set("X-Forwarded-For", "198.51.100.7")
+	s.Handler().ServeHTTP(httptest.NewRecorder(), call)
+	if len(store.audit) != 1 || store.audit[0].RemoteAddr != "198.51.100.7" {
+		t.Fatalf("audit=%+v", store.audit)
+	}
+
+	// A corrupt configuration refuses requests instead of opening the endpoint.
+	store.access = `{"allowed_ips":["nonsense"]}`
+	if w := mcpPostFrom(s, "198.51.100.7:1"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("corrupt config status=%d", w.Code)
+	}
+}
+
+func TestNormalizeMCPAccessConfig(t *testing.T) {
+	cfg, _, err := normalizeMCPAccessConfig(mcpAccessConfig{
+		AllowedIPs:     []string{" 10.0.0.5 ", "10.0.0.5/32", "192.168.1.77/24", "", "::ffff:1.2.3.4", "2001:DB8::1"},
+		TrustedProxies: []string{"127.0.0.1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.AllowedIPs, " "); got != "10.0.0.5 192.168.1.0/24 1.2.3.4 2001:db8::1" {
+		t.Fatalf("allowed=%q", got)
+	}
+	if len(cfg.TrustedProxies) != 1 || cfg.TrustedProxies[0] != "127.0.0.1" {
+		t.Fatalf("proxies=%v", cfg.TrustedProxies)
+	}
+	for _, bad := range []string{"example.com", "10.0.0.1/33", "10.0.0", "1.2.3.4:80", "fe80::1%eth0/64"} {
+		if _, _, err := normalizeMCPAccessConfig(mcpAccessConfig{AllowedIPs: []string{bad}}); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	if _, _, err := normalizeMCPAccessConfig(mcpAccessConfig{TrustedProxies: []string{"bad"}}); err == nil || !strings.Contains(err.Error(), "可信代理") {
+		t.Fatalf("proxy error=%v", err)
+	}
+	tooMany := make([]string, 0, maxMCPAccessEntries+1)
+	for i := 0; i <= maxMCPAccessEntries; i++ {
+		tooMany = append(tooMany, "10.0."+strconv.Itoa(i/256)+"."+strconv.Itoa(i%256))
+	}
+	if _, _, err := normalizeMCPAccessConfig(mcpAccessConfig{AllowedIPs: tooMany}); err == nil {
+		t.Fatal("oversized list accepted")
+	}
+}
+
 func TestMCPServerInitializeNegotiatesVersion(t *testing.T) {
 	s, _ := mcpTestServer(t)
 	for requested, want := range map[string]string{
@@ -343,7 +480,7 @@ func TestMCPServerPostgresEndToEnd(t *testing.T) {
 	if err := m.SetConcurrency(false, defaultConcurrencyLimit); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{db.SettingMCPServerEnabled, basicAuthKey} {
+	for _, key := range []string{db.SettingMCPServerEnabled, db.SettingMCPServerAccess, basicAuthKey} {
 		old, exists, err := m.pg.GetSetting(key)
 		if err != nil {
 			t.Fatal(err)
@@ -357,6 +494,10 @@ func TestMCPServerPostgresEndToEnd(t *testing.T) {
 		}(key, old, exists)
 	}
 	if err := m.pg.SetSetting(basicAuthKey, `{"enabled":false}`); err != nil {
+		t.Fatal(err)
+	}
+	// Start without a source allowlist whatever the database held before.
+	if err := m.pg.SetSetting(db.SettingMCPServerAccess, `{}`); err != nil {
 		t.Fatal(err)
 	}
 	s := newAdmissionTestServer(m, nil)
@@ -585,6 +726,31 @@ func TestMCPServerPostgresEndToEnd(t *testing.T) {
 	}
 	if _, err := spawn(scoped, map[string]any{"goal": "测试 https://" + inScope, "company_ids": []int64{allowedID}}); err == nil || !strings.Contains(err.Error(), "尚未结束") {
 		t.Fatalf("active-task quota not enforced: %v", err)
+	}
+
+	// Source allowlist through the admin API: the test client is on loopback.
+	var settings struct {
+		AllowedIPs []string `json:"allowed_ips"`
+		ClientIP   string   `json:"client_ip"`
+	}
+	if code := admin(http.MethodPut, "/api/mcp-server/settings", `{"allowed_ips":["not-an-ip"]}`, nil); code != http.StatusBadRequest {
+		t.Fatalf("invalid allowlist status=%d", code)
+	}
+	if code := admin(http.MethodPut, "/api/mcp-server/settings", `{"allowed_ips":["203.0.113.0/24"]}`, &settings); code != http.StatusOK ||
+		len(settings.AllowedIPs) != 1 || settings.ClientIP != "127.0.0.1" {
+		t.Fatalf("set allowlist status=%d settings=%+v", code, settings)
+	}
+	if _, err := mcpCallTool(t, full, "list_tasks", map[string]any{}, nil); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("source outside the allowlist still works: %v", err)
+	}
+	if code := admin(http.MethodPut, "/api/mcp-server/settings", `{"allowed_ips":["203.0.113.0/24","127.0.0.1"]}`, nil); code != http.StatusOK {
+		t.Fatalf("extend allowlist status=%d", code)
+	}
+	if _, err := mcpCallTool(t, full, "list_tasks", map[string]any{}, nil); err != nil {
+		t.Fatalf("allowed source rejected: %v", err)
+	}
+	if code := admin(http.MethodPut, "/api/mcp-server/settings", `{"allowed_ips":[]}`, &settings); code != http.StatusOK || len(settings.AllowedIPs) != 0 {
+		t.Fatalf("clear allowlist status=%d settings=%+v", code, settings)
 	}
 
 	// Every call above was audited, refusals included.

@@ -50,6 +50,7 @@ const (
 // mcpStore is the persistence the endpoint itself needs. *db.DB satisfies it.
 type mcpStore interface {
 	GetBool(key string, def bool) bool
+	GetSetting(key string) (string, bool, error)
 	APITokenByHash(hash string) (*db.APIToken, error)
 	TouchAPIToken(id int64) error
 	InsertMCPAudit(e db.MCPAuditEntry) error
@@ -135,6 +136,20 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
+	// Source allowlist first: a source that is not allowed learns nothing about
+	// tokens. A configuration that cannot be read refuses the request.
+	_, access, err := loadMCPAccess(store)
+	if err != nil {
+		log.Printf("[mcp-server] 来源白名单读取失败: %v", err)
+		writeErr(w, http.StatusServiceUnavailable, "access configuration unavailable")
+		return
+	}
+	client, clientKnown := access.clientAddr(r)
+	if !access.permits(client, clientKnown) {
+		log.Printf("[mcp-server] 拒绝白名单外的来源 %s", client)
+		writeErr(w, http.StatusForbidden, fmt.Sprintf("source address %s is not allowed", client))
+		return
+	}
 	if !mcpOriginAllowed(r) {
 		writeErr(w, http.StatusForbidden, "origin not allowed")
 		return
@@ -213,7 +228,11 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeMCPResult(w, req.ID, map[string]any{"tools": out})
 	case "tools/call":
-		s.serveMCPToolCall(w, r, store, token, req)
+		remote := mcpRemoteAddr(r)
+		if clientKnown {
+			remote = client.String()
+		}
+		s.serveMCPToolCall(r.Context(), w, store, token, req, remote)
 	default:
 		writeMCPError(w, http.StatusOK, req.ID, rpcMethodNotFound, "method not found: "+req.Method)
 	}
@@ -245,7 +264,7 @@ func (s *Server) authenticateMCP(store mcpStore, r *http.Request) (*db.APIToken,
 	return token, ""
 }
 
-func (s *Server) serveMCPToolCall(w http.ResponseWriter, r *http.Request, store mcpStore, token *db.APIToken, req mcpRPCRequest) {
+func (s *Server) serveMCPToolCall(ctx context.Context, w http.ResponseWriter, store mcpStore, token *db.APIToken, req mcpRPCRequest, remote string) {
 	var p struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -277,13 +296,13 @@ func (s *Server) serveMCPToolCall(w http.ResponseWriter, r *http.Request, store 
 	case args[0] != '{':
 		result = actool.Errorf("arguments 必须是 JSON 对象")
 	default:
-		result = s.runMCPTool(r.Context(), tool, token, args)
+		result = s.runMCPTool(ctx, tool, token, args)
 	}
 	text := result.Flatten()
 	if err := store.InsertMCPAudit(db.MCPAuditEntry{
 		TokenID: token.ID, TokenName: token.Name, Tool: tool.Name,
 		Args: truncateRunes(compactJSON(args), mcpAuditArgsMax), OK: !result.IsError,
-		Result: truncateRunes(text, mcpAuditResMax), RemoteAddr: mcpRemoteAddr(r),
+		Result: truncateRunes(text, mcpAuditResMax), RemoteAddr: remote,
 		DurationMS: time.Since(start).Milliseconds(),
 	}); err != nil {
 		log.Printf("[mcp-server] 审计写入失败(token=%d tool=%s): %v", token.ID, tool.Name, err)
@@ -335,12 +354,26 @@ func (s *Server) getMCPServerSettings(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]any{
+	cfg, access, err := loadMCPAccess(pg)
+	if err != nil {
+		writeErr(w, 503, "来源白名单读取失败: "+err.Error())
+		return
+	}
+	out := map[string]any{
 		"enabled":            pg.GetBool(db.SettingMCPServerEnabled, false),
 		"path":               mcpEndpointPath,
 		"basic_auth_enabled": s.basicAuth.snapshot().Enabled,
-	})
+		"allowed_ips":        cfg.AllowedIPs,
+		"trusted_proxies":    cfg.TrustedProxies,
+	}
+	// How this server sees the administrator's own request, resolved exactly as
+	// /mcp would resolve it — the value to put on the allowlist, and a quick
+	// check that the trusted-proxy setting is right.
+	if client, ok := access.clientAddr(r); ok {
+		out["client_ip"] = client.String()
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) putMCPServerSettings(w http.ResponseWriter, r *http.Request) {
@@ -349,17 +382,45 @@ func (s *Server) putMCPServerSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Enabled *bool `json:"enabled"`
+		Enabled        *bool     `json:"enabled"`
+		AllowedIPs     *[]string `json:"allowed_ips"`
+		TrustedProxies *[]string `json:"trusted_proxies"`
 	}
-	if err := decode(r, &req); err != nil || req.Enabled == nil {
-		writeErr(w, 400, "enabled 为必填")
+	if err := decode(r, &req); err != nil || (req.Enabled == nil && req.AllowedIPs == nil && req.TrustedProxies == nil) {
+		writeErr(w, 400, "请求格式错误")
 		return
 	}
-	if err := pg.SetBool(db.SettingMCPServerEnabled, *req.Enabled); err != nil {
-		writeErr(w, 500, "保存失败: "+err.Error())
-		return
+	if req.AllowedIPs != nil || req.TrustedProxies != nil {
+		cfg, _, err := loadMCPAccess(pg)
+		if err != nil {
+			// A corrupt stored value must stay replaceable from the UI.
+			cfg = mcpAccessConfig{}
+		}
+		if req.AllowedIPs != nil {
+			cfg.AllowedIPs = *req.AllowedIPs
+		}
+		if req.TrustedProxies != nil {
+			cfg.TrustedProxies = *req.TrustedProxies
+		}
+		cfg, _, err = normalizeMCPAccessConfig(cfg)
+		if err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		data, _ := json.Marshal(cfg)
+		if err := pg.SetSetting(db.SettingMCPServerAccess, string(data)); err != nil {
+			writeErr(w, 500, "保存失败: "+err.Error())
+			return
+		}
+		log.Printf("[mcp-server] 来源白名单已更新: 允许 %d 条, 可信代理 %d 条", len(cfg.AllowedIPs), len(cfg.TrustedProxies))
 	}
-	log.Printf("[mcp-server] MCP 服务端已%s", map[bool]string{true: "开启", false: "关闭"}[*req.Enabled])
+	if req.Enabled != nil {
+		if err := pg.SetBool(db.SettingMCPServerEnabled, *req.Enabled); err != nil {
+			writeErr(w, 500, "保存失败: "+err.Error())
+			return
+		}
+		log.Printf("[mcp-server] MCP 服务端已%s", map[bool]string{true: "开启", false: "关闭"}[*req.Enabled])
+	}
 	s.getMCPServerSettings(w, r)
 }
 

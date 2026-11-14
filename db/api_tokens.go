@@ -18,6 +18,9 @@ import (
 // task starts real testing against a target, so exposure is an explicit choice.
 const SettingMCPServerEnabled = "mcp_server_enabled"
 
+// SettingMCPServerAccess holds the /mcp source allowlist and trusted proxies as JSON.
+const SettingMCPServerAccess = "mcp_server_access"
+
 // API token scopes. A tool is callable only when the token carries its scope.
 const (
 	APIScopeRead        = "read"

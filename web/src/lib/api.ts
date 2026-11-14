@@ -169,6 +169,10 @@ export interface McpServerSettings {
   enabled: boolean;
   path: string;
   basic_auth_enabled: boolean;
+  allowed_ips: string[];
+  trusted_proxies: string[];
+  // 服务端按 /mcp 的同一套规则解析出的、当前管理员请求的来源地址。
+  client_ip?: string;
 }
 
 export interface McpServerToken {
@@ -1148,6 +1152,8 @@ export const api = {
   // ---- MCP 服务端（ARTEX 对外暴露的 /mcp）：开关、访问令牌、调用审计 ----
   mcpServerSettings: () => get<McpServerSettings>("/mcp-server/settings"),
   setMcpServerEnabled: (enabled: boolean) => put<McpServerSettings>("/mcp-server/settings", { enabled }),
+  setMcpServerAccess: (access: { allowed_ips: string[]; trusted_proxies: string[] }) =>
+    put<McpServerSettings>("/mcp-server/settings", access),
   mcpServerTokens: () => get<{ tokens: McpServerToken[] }>("/mcp-server/tokens").then((r) => arr(r.tokens)),
   // 明文令牌只在创建响应里返回这一次。
   createMcpServerToken: (input: McpServerTokenInput) =>

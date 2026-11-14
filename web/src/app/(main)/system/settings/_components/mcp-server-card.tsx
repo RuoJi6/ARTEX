@@ -30,6 +30,7 @@ import {
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { localizedError } from "@/i18n/errors";
 import { useDateLocale } from "@/i18n/use-date-locale";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
@@ -98,6 +99,9 @@ export function McpServerCard() {
   const [tokens, setTokens] = useState<McpServerToken[]>([]);
   const [audit, setAudit] = useState<McpServerAuditEntry[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [allowedIps, setAllowedIps] = useState("");
+  const [trustedProxies, setTrustedProxies] = useState("");
+  const [savingAccess, setSavingAccess] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -116,6 +120,8 @@ export function McpServerCard() {
         api.mcpServerAudit(),
       ]);
       setSettings(nextSettings);
+      setAllowedIps(nextSettings.allowed_ips.join("\n"));
+      setTrustedProxies(nextSettings.trusted_proxies.join("\n"));
       setTokens(nextTokens);
       setAudit(nextAudit);
     } catch (e) {
@@ -143,6 +149,26 @@ export function McpServerCard() {
       toast.error(t("settings.saveFailed", { message: localizedError(e, t) }));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveAccess = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSavingAccess(true);
+    try {
+      const next = await api.setMcpServerAccess({
+        allowed_ips: allowedIps.split("\n"),
+        trusted_proxies: trustedProxies.split("\n"),
+      });
+      setSettings(next);
+      // Show the canonical form the server stored (trimmed, deduplicated, masked).
+      setAllowedIps(next.allowed_ips.join("\n"));
+      setTrustedProxies(next.trusted_proxies.join("\n"));
+      toast.success(t("settings.mcpServer.allowlistSaved"));
+    } catch (e) {
+      toast.error(t("settings.saveFailed", { message: localizedError(e, t) }));
+    } finally {
+      setSavingAccess(false);
     }
   };
 
@@ -237,6 +263,43 @@ export function McpServerCard() {
               <FieldDescription>{t("settings.mcpServer.basicAuthOn")}</FieldDescription>
             ) : null}
           </Field>
+
+          <form onSubmit={saveAccess} className="flex flex-col gap-4">
+            <Field>
+              <FieldLabel htmlFor="mcp-server-allowlist">{t("settings.mcpServer.allowlist")}</FieldLabel>
+              <Textarea
+                id="mcp-server-allowlist"
+                rows={3}
+                className="font-mono text-xs"
+                value={allowedIps}
+                disabled={!settings || savingAccess}
+                placeholder={t("settings.mcpServer.allowlistPlaceholder")}
+                onChange={(e) => setAllowedIps(e.target.value)}
+              />
+              <FieldDescription>{t("settings.mcpServer.allowlistHelp")}</FieldDescription>
+              {settings?.client_ip ? (
+                <FieldDescription>{t("settings.mcpServer.clientIp", { ip: settings.client_ip })}</FieldDescription>
+              ) : null}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="mcp-server-proxies">{t("settings.mcpServer.trustedProxies")}</FieldLabel>
+              <Textarea
+                id="mcp-server-proxies"
+                rows={2}
+                className="font-mono text-xs"
+                value={trustedProxies}
+                disabled={!settings || savingAccess}
+                placeholder={t("settings.mcpServer.trustedProxiesPlaceholder")}
+                onChange={(e) => setTrustedProxies(e.target.value)}
+              />
+              <FieldDescription>{t("settings.mcpServer.trustedProxiesHelp")}</FieldDescription>
+            </Field>
+            <div>
+              <Button type="submit" variant="outline" disabled={!settings || savingAccess}>
+                {savingAccess ? t("settings.saving") : t("settings.mcpServer.saveAllowlist")}
+              </Button>
+            </div>
+          </form>
 
           {error ? (
             <div className="flex items-center gap-2">
