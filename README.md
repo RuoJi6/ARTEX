@@ -322,7 +322,7 @@ CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
 
 在 **系统配置 → HTTP Basic Auth** 中填写独立的验证用户名和密码，打开「启用访问验证」并点击「保存访问验证」。默认关闭，保存后立即生效，无需重启；密码至少 8 位、最多 72 字节，用户名不能包含冒号。
 
-开启后，访客先完成浏览器原生账号密码验证，再进入原有 ARTEX 登录页。网页、静态资源和 API 均受保护，`/api/health` 的 GET/HEAD 健康检查同样需要通过 Basic Auth，未认证时返回 `401`；通过后仅返回 `{"ok":true}`，不暴露应用名称或版本。健康检查不额外要求管理员 JWT；外部探针需要配置相同的 Basic Auth 凭据，例如使用 `curl --fail --user '验证用户名' http://127.0.0.1:8787/api/health` 并按提示输入密码。未启用 Basic Auth 时保留原有的无需凭据探活行为。版本号由需要管理员 JWT 的 `/api/version` 提供，启用访问验证后该接口同时受 Basic Auth 保护。未认证请求的 Basic Auth realm 使用通用名称 `Restricted`；通过访问验证仍需登录 ARTEX 才能使用业务 API。公网部署请通过 HTTPS 访问。
+开启后，访客先完成浏览器原生账号密码验证，再进入原有 ARTEX 登录页。网页、静态资源和 API 均受保护（MCP 服务端的 `/mcp` 端点除外：它不经过 Basic Auth，也不能用 Basic 账号密码访问，只认访问令牌，见下文「MCP 服务端」），`/api/health` 的 GET/HEAD 健康检查同样需要通过 Basic Auth，未认证时返回 `401`；通过后仅返回 `{"ok":true}`，不暴露应用名称或版本。健康检查不额外要求管理员 JWT；外部探针需要配置相同的 Basic Auth 凭据，例如使用 `curl --fail --user '验证用户名' http://127.0.0.1:8787/api/health` 并按提示输入密码。未启用 Basic Auth 时保留原有的无需凭据探活行为。版本号由需要管理员 JWT 的 `/api/version` 提供，启用访问验证后该接口同时受 Basic Auth 保护。未认证请求的 Basic Auth realm 使用通用名称 `Restricted`；通过访问验证仍需登录 ARTEX 才能使用业务 API。公网部署请通过 HTTPS 访问。
 
 从仍使用 `/api/health` 读取版本的旧版网页升级到此版本时，旧页面可能无法自动判断升级完成；服务重启后手动刷新页面即可。新版网页的版本显示和升级轮询均使用 `/api/version`。
 
@@ -338,6 +338,75 @@ SET value = jsonb_set(value::jsonb, '{enabled}', 'false'::jsonb)::text,
     updated_at = now()
 WHERE key = 'auth.http_basic';
 ```
+
+### MCP 服务端（供外部智能体编排任务）
+
+ARTEX 可以作为 MCP 服务端，让外部智能体（个人助手、bot 等）查看任务与漏洞、创建任务、暂停或恢复任务。
+
+注意区分：「系统 → MCP」页面管理的是 ARTEX 自己的 agent **去调用**的外部 MCP；本文说的是 ARTEX **对外提供**的 MCP 端点。
+
+#### 开启与接入
+
+1. 「系统设置 → 系统与账号 → MCP 服务端」打开开关。默认关闭，关闭时 `/mcp` 返回 404。
+2. 在同一处「新建令牌」，选择权限范围。令牌只显示一次。
+3. 在智能体里配置：
+
+| 项 | 值 |
+| --- | --- |
+| 地址 | `https://<你的 ARTEX 地址>/mcp` |
+| 传输 | Streamable HTTP（无状态，只响应 `application/json`，不提供 SSE，不支持 stdio） |
+| 鉴权 | 请求头 `Authorization: Bearer artex_mcp_...` |
+
+```bash
+curl -s https://artex.example.com/mcp \
+  -H 'Authorization: Bearer artex_mcp_xxx' -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+#### 无法使用 HTTP Basic Auth
+
+`/mcp` **不经过** HTTP Basic Auth 验证，也**不接受** Basic 账号密码、ARTEX 登录密码或管理员登录后的 JWT，只认访问令牌。
+
+原因：一个 HTTP 请求只有一个 `Authorization` 头，外部智能体无法同时带上 Basic 凭证和 Bearer 令牌。因此：
+
+- 即使启用了 HTTP Basic Auth，`/mcp` 仍可直接凭访问令牌访问，Basic Auth 不会给它加一层保护。
+- 需要在网络层限制 `/mcp` 的话，请用反向代理或防火墙按来源 IP 限制，不要依赖 Basic Auth。
+- 公网暴露请使用 HTTPS，令牌是明文放在请求头里的。
+
+#### 权限范围与工具
+
+令牌只能看到、调用它的权限范围内的工具。
+
+| 权限范围 | 工具 | 说明 |
+| --- | --- | --- |
+| `read` | `list_tasks` | 列出任务，可按 `company_id`、`category_id`、`status` 筛选 |
+| `read` | `get_task` | 单个任务的状态、运行时长、目标完成数、漏洞数；用它轮询进度 |
+| `read` | `get_task_graph` | 任务的探索图总览 |
+| `read` | `list_task_findings` | 任务的确认漏洞（不含原始请求/响应流量） |
+| `read` | `list_companies` / `list_task_categories` / `list_llm_profiles` | 建任务时可选的企业、分类、模型配置（不含 API Key） |
+| `task:create` | `spawn_task` | 新建并启动任务，可带 `company_ids`、`category_id` |
+| `task:control` | `pause_task` / `resume_task` / `add_task_hint` | 暂停、恢复、补充提示 |
+
+ARTEX 没有独立的「项目」实体。智能体说的“某个项目”对应某个企业或某个任务分类下的一组任务。
+
+不会暴露的能力：建/改自定义工具、MCP、skill，workspace 文件读写，LLM 密钥，系统设置。
+
+#### 令牌的限制项
+
+- **限定企业**：勾选后，令牌只能在这些企业下建任务（必须带 `company_ids`，且目标地址须归属这些企业的范围），也只能看到、控制这些企业下的任务，其余任务对它表现为不存在。这是把任务绑定到企业的资产范围，不是网络层拦截；要硬性限制任务能访问什么，请配合资产拦截规则。
+- **未结束任务上限**：该令牌创建的、尚未结束的任务数（含暂停和排队）。
+- **每小时建任务上限**：按该令牌过去一小时创建的任务数计，任务删除后仍计入。
+- **有效期**与**吊销**：吊销立即生效，不可恢复。
+
+#### 审计
+
+每次工具调用都会记录：令牌、工具、参数、是否成功、失败原因、来源地址、时间，包括因权限不足被拒绝的调用。在设置页的「调用审计」查看，保留最近 20000 条。
+
+#### 安全提示
+
+- 创建任务会对目标发起真实的安全测试，只把 `task:create` 令牌交给可信的智能体，并尽量限定企业、设置限额。
+- 任务描述、漏洞摘要等返回内容可能包含来自被测目标的文本，对智能体而言是不可信输入，可能夹带提示注入。
+- 带 `Origin` 头的跨源浏览器请求会被拒绝（403），`/mcp` 不发送 CORS 头。
 
 ### 反向代理部署（HTTPS / 只开放 443）
 

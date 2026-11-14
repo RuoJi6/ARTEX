@@ -163,6 +163,50 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
   return response;
 }
 
+export type McpServerScope = "read" | "task:create" | "task:control";
+
+export interface McpServerSettings {
+  enabled: boolean;
+  path: string;
+  basic_auth_enabled: boolean;
+}
+
+export interface McpServerToken {
+  id: number;
+  name: string;
+  token_prefix: string;
+  scopes: McpServerScope[];
+  company_ids: number[];
+  max_active_tasks: number;
+  max_tasks_per_hour: number;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface McpServerTokenInput {
+  name: string;
+  scopes: McpServerScope[];
+  company_ids: number[];
+  max_active_tasks: number;
+  max_tasks_per_hour: number;
+  expires_in_days: number;
+}
+
+export interface McpServerAuditEntry {
+  id: number;
+  token_id: number;
+  token_name: string;
+  tool: string;
+  args: string;
+  ok: boolean;
+  result: string;
+  remote_addr: string;
+  duration_ms: number;
+  created_at: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -1100,6 +1144,18 @@ export const api = {
   setBasicAuthSettings: (settings: { enabled: boolean; username: string; password: string }) =>
     put<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth", settings),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
+
+  // ---- MCP 服务端（ARTEX 对外暴露的 /mcp）：开关、访问令牌、调用审计 ----
+  mcpServerSettings: () => get<McpServerSettings>("/mcp-server/settings"),
+  setMcpServerEnabled: (enabled: boolean) => put<McpServerSettings>("/mcp-server/settings", { enabled }),
+  mcpServerTokens: () => get<{ tokens: McpServerToken[] }>("/mcp-server/tokens").then((r) => arr(r.tokens)),
+  // 明文令牌只在创建响应里返回这一次。
+  createMcpServerToken: (input: McpServerTokenInput) =>
+    post<{ token: string; item: McpServerToken }>("/mcp-server/tokens", input),
+  revokeMcpServerToken: (id: number) => post<{ ok: boolean }>(`/mcp-server/tokens/${id}/revoke`),
+  deleteMcpServerToken: (id: number) => del<{ ok: boolean }>(`/mcp-server/tokens/${id}`),
+  mcpServerAudit: (limit = 50) =>
+    get<{ entries: McpServerAuditEntry[] }>(`/mcp-server/audit?limit=${limit}`).then((r) => arr(r.entries)),
   // Run a real "test" search with the given (or saved) config to verify it works.
   testWebSearch: (patch: {
     web_search_backend?: string;

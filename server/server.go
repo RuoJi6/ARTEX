@@ -53,6 +53,12 @@ type Server struct {
 	jwtKey    []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
 	basicAuth basicAuthGate
 
+	// mcpStoreOverride replaces the PostgreSQL-backed MCP server store in tests.
+	mcpStoreOverride mcpStore
+	// mcpCreateMu serializes MCP task creation so a token's quota check and the
+	// creation it guards cannot interleave with another request on the same token.
+	mcpCreateMu sync.Mutex
+
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
 	// free slots off the same snapshot and over-promote past the limit.
@@ -1079,6 +1085,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/mcp", s.pgSaveMCP)
 	mux.HandleFunc("DELETE /api/mcp/{id}", s.pgDeleteMCP)
 	mux.HandleFunc("GET /api/mcp/{id}/tools", s.pgMCPTools)
+	// MCP 服务端(ARTEX 对外暴露的 /mcp)：开关、访问令牌、调用审计
+	mux.HandleFunc("GET /api/mcp-server/settings", s.getMCPServerSettings)
+	mux.HandleFunc("PUT /api/mcp-server/settings", s.putMCPServerSettings)
+	mux.HandleFunc("GET /api/mcp-server/tokens", s.listMCPServerTokens)
+	mux.HandleFunc("POST /api/mcp-server/tokens", s.createMCPServerToken)
+	mux.HandleFunc("POST /api/mcp-server/tokens/{id}/revoke", s.revokeMCPServerToken)
+	mux.HandleFunc("DELETE /api/mcp-server/tokens/{id}", s.deleteMCPServerToken)
+	mux.HandleFunc("GET /api/mcp-server/audit", s.listMCPServerAudit)
 	mux.HandleFunc("POST /api/mcp/{id}/refresh", s.pgRefreshMCP)
 	// 资产同步 — ScopeSentry 数据源
 	mux.HandleFunc("GET /api/sync/scopesentry/status", s.syncSSStatus)
@@ -1151,7 +1165,13 @@ func (s *Server) Handler() http.Handler {
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
-	return s.requireBasicAuth(root)
+	// /mcp sits outside the Basic Auth gate on purpose: an external MCP client has
+	// one Authorization header and it carries the access token, so it could never
+	// satisfy both. The endpoint authenticates with access tokens only.
+	top := http.NewServeMux()
+	top.HandleFunc(mcpEndpointPath, s.serveMCP)
+	top.Handle("/", s.requireBasicAuth(root))
+	return top
 }
 
 // --- handlers ---
@@ -1731,12 +1751,31 @@ type createTaskReq struct {
 	InterceptRules []taskInterceptRuleReq `json:"intercept_rules,omitempty"`
 }
 
+// taskCreateError is a rejected task creation: an HTTP-style status plus a
+// message that is safe to show to the caller.
+type taskCreateError struct {
+	Status int
+	Msg    string
+}
+
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	var req createTaskReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, "bad json: "+err.Error())
 		return
 	}
+	t, cerr := s.createTaskFromRequest(req)
+	if cerr != nil {
+		writeErr(w, cerr.Status, cerr.Msg)
+		return
+	}
+	writeJSON(w, 201, taskDTO(t, s.resolvedTaskStatus(t)))
+}
+
+// createTaskFromRequest validates a creation request, stores the task and
+// launches it. It is the single creation path shared by POST /api/tasks and the
+// MCP spawn_task tool, so both apply identical validation.
+func (s *Server) createTaskFromRequest(req createTaskReq) (*Task, *taskCreateError) {
 	if strings.TrimSpace(req.Description) == "" {
 		req.Description = "未命名任务"
 	}
@@ -1744,68 +1783,57 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		req.LLMProfileIDs = []int64{*req.LLMProfileID}
 	}
 	if err := s.validateTaskProfileIDs(req.LLMProfileIDs); err != nil {
-		writeErr(w, 400, err.Error())
-		return
+		return nil, &taskCreateError{400, err.Error()}
 	}
 	if err := db.NormalizeNoResultOptions(&db.TaskCreateOptions{NoResultSeconds: req.NoResultSeconds, NoResultMinFindings: req.NoResultMinFindings, NoResultMinSeverity: req.NoResultMinSeverity}); err != nil {
-		writeErr(w, 400, err.Error())
-		return
+		return nil, &taskCreateError{400, err.Error()}
 	}
 	if req.TimeoutSeconds < 0 {
 		req.TimeoutSeconds = 0
 	}
 	if len(req.SourceTaskIDs) > db.MaxTaskSourceCount {
-		writeErr(w, 400, fmt.Sprintf("关联任务最多选择 %d 个", db.MaxTaskSourceCount))
-		return
+		return nil, &taskCreateError{400, fmt.Sprintf("关联任务最多选择 %d 个", db.MaxTaskSourceCount)}
 	}
 	sourceIDs := make([]int64, 0, len(req.SourceTaskIDs))
 	seenSources := map[int64]bool{}
 	for _, raw := range req.SourceTaskIDs {
 		id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 		if err != nil || id <= 0 || seenSources[id] {
-			writeErr(w, 400, "关联任务 id 无效或重复")
-			return
+			return nil, &taskCreateError{400, "关联任务 id 无效或重复"}
 		}
 		if _, ok := s.m.Task(strconv.FormatInt(id, 10)); !ok {
-			writeErr(w, 400, fmt.Sprintf("关联任务 #%d 不存在", id))
-			return
+			return nil, &taskCreateError{400, fmt.Sprintf("关联任务 #%d 不存在", id)}
 		}
 		seenSources[id] = true
 		sourceIDs = append(sourceIDs, id)
 	}
 	companyIDs, err := db.NormalizeTaskCompanyIDs(req.CompanyIDs)
 	if err != nil {
-		writeErr(w, 400, fmt.Sprintf("关联企业无效：最多选择 %d 个有效企业", db.MaxTaskCompanyCount))
-		return
+		return nil, &taskCreateError{400, fmt.Sprintf("关联企业无效：最多选择 %d 个有效企业", db.MaxTaskCompanyCount)}
 	}
 	req.CompanyIDs = companyIDs
 	interceptRules, err := buildTaskInterceptRules(req.InterceptRules)
 	if err != nil {
-		writeErr(w, 400, "任务级拦截规则无效："+err.Error())
-		return
+		return nil, &taskCreateError{400, "任务级拦截规则无效：" + err.Error()}
 	}
 	var schedule *db.TaskScheduleInput
 	if req.Schedule != nil {
 		input := s.scheduleInput(*req.Schedule, nil)
 		input.TaskIDs = nil
 		if err := db.ValidateTaskScheduleInput(input); err != nil {
-			writeErr(w, 400, err.Error())
-			return
+			return nil, &taskCreateError{400, err.Error()}
 		}
 		schedule = &input
 	}
 	remark, err := normalizeRemark(req.Remark)
 	if err != nil {
-		writeErr(w, 400, err.Error())
-		return
+		return nil, &taskCreateError{400, err.Error()}
 	}
 	if req.WorkerCount < 0 {
-		writeErr(w, 400, "Worker 运行数量不能为负数")
-		return
+		return nil, &taskCreateError{400, "Worker 运行数量不能为负数"}
 	}
 	if req.WorkerCount > db.MaxTaskWorkerCount {
-		writeErr(w, 400, fmt.Sprintf("Worker 运行数量最多 %d", db.MaxTaskWorkerCount))
-		return
+		return nil, &taskCreateError{400, fmt.Sprintf("Worker 运行数量最多 %d", db.MaxTaskWorkerCount)}
 	}
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
 		Schedule: schedule,
@@ -1821,15 +1849,12 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrTaskCategoryInvalid) || errors.Is(err, db.ErrTaskCategoryNotFound) {
-			writeErr(w, 400, "任务分类不存在或无效")
-			return
+			return nil, &taskCreateError{400, "任务分类不存在或无效"}
 		}
 		if errors.Is(err, db.ErrTaskCompanyIDsInvalid) || errors.Is(err, db.ErrTaskCompanyNotFound) {
-			writeErr(w, 400, "关联企业不存在或无效")
-			return
+			return nil, &taskCreateError{400, "关联企业不存在或无效"}
 		}
-		writeErr(w, 500, err.Error())
-		return
+		return nil, &taskCreateError{500, err.Error()}
 	}
 	log.Printf("[task] 新建任务 #%s «%s» 目标: %s", t.ID, req.Description, req.Goal)
 	// 共享的建后流程(seed + 种子意图 + 后台目标分解 + engine.Run),与 spawn_task 复用同一段。
@@ -1839,7 +1864,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.engine.Pause(t.ID, agent.AbortPausedBySchedule)
 	}
-	writeJSON(w, 201, taskDTO(t, s.resolvedTaskStatus(t)))
+	return t, nil
 }
 
 func (s *Server) validateTaskProfileIDs(ids []int64) error {

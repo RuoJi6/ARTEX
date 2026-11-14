@@ -108,6 +108,7 @@ export function BasicAuthCard() {
               <FieldDescription>{t("settings.basicAuthPasswordHelp")}</FieldDescription>
             </Field>
             <FieldDescription>{t("settings.basicAuthSessionHelp")}</FieldDescription>
+            <FieldDescription>{t("settings.basicAuthMcpNote")}</FieldDescription>
             {error ? (
               <p role="alert" className="text-destructive text-sm">
                 {t(error.key, { message: localizedError(error.cause, t) })}
