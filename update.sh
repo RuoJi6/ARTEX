@@ -59,7 +59,8 @@ update_local(){
   if command -v npm >/dev/null 2>&1; then
     info "重建前端静态产物…"
     ( cd web && npm ci && npm run build:static )
-    rm -rf server/webui/dist && cp -r web/out server/webui/dist
+    mkdir -p server/webui/dist
+    cp -r web/out/. server/webui/dist/
     info "重新编译内嵌单二进制…"
     CGO_ENABLED=0 go build -tags embedui -trimpath -o artex ./cmd/artex
   else
