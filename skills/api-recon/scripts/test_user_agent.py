@@ -1,0 +1,124 @@
+"""Offline regressions: python3 -m unittest discover -s skills/api-recon/scripts."""
+import contextlib
+import http.server
+import importlib.util
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+
+
+SCRIPTS = Path(__file__).resolve().parent
+# Keep the offline fixtures independent of the runner's outbound/recording proxy.
+DIRECT_ENV = {"no_proxy": "*", "NO_PROXY": "*"}
+
+
+def load_script(name):
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@contextlib.contextmanager
+def capture_server():
+    seen = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path, self.headers.get("User-Agent"), self.headers.get("Cookie")))
+            if self.path == "/start":
+                self.send_response(302)
+                self.send_header("Location", "/page")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b'<h1>Page</h1><script src="/app.js"></script><form action="/submit"></form>')
+
+        def log_message(self, *args):
+            pass
+
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}", seen
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+class UserAgentTests(unittest.TestCase):
+    def assert_identity(self, seen, expected, samples):
+        self.assertTrue(seen)
+        if expected == "random":
+            self.assertIn(seen[0][1], samples)
+            expected = seen[0][1]
+        self.assertTrue(all(ua == expected for _, ua, _ in seen), seen)
+
+    def test_random_selection_and_explicit_override(self):
+        go_source = (SCRIPTS.parents[2] / "internal/httpidentity/useragent.go").read_text()
+        go_pool = tuple(re.findall(r'^\s*"(Mozilla/5\.0 [^"]+)",$', go_source, re.MULTILINE))
+        self.assertEqual(len(go_pool), 20)
+        self.assertEqual(len(set(go_pool)), 20)
+        for name in ("harvest_static", "spider_mpa"):
+            module = load_script(name)
+            self.assertEqual(module.USER_AGENTS, go_pool)
+            for sample in module.USER_AGENTS:
+                with self.subTest(script=name, sample=sample):
+                    with patch.dict(os.environ, {"ARTEX_HTTP_USER_AGENT": ""}), patch.object(module.secrets, "choice", return_value=sample) as choose:
+                        self.assertEqual(module.user_agent(), sample)
+                        choose.assert_called_once_with(module.USER_AGENTS)
+                    with patch.dict(os.environ, {"ARTEX_HTTP_USER_AGENT": "Configured-UA"}), patch.object(module.secrets, "choice") as choose:
+                        self.assertEqual(module.user_agent(), "Configured-UA")
+                        self.assertEqual(module.user_agent("Override-UA"), "Override-UA")
+                        self.assertEqual(module.user_agent(""), "")
+                        choose.assert_not_called()
+
+    def test_fetch_and_redirect(self):
+        for name in ("harvest_static", "spider_mpa"):
+            module = load_script(name)
+            for value, expected in (("", "random"), (" Captured-UA/1.0 ", "Captured-UA/1.0"),
+                                    ("ok\r\nX-Injected: yes", "random"), ("客户端", "random")):
+                with self.subTest(script=name, value=value), capture_server() as (base, seen):
+                    with patch.dict(os.environ, {**DIRECT_ENV, "ARTEX_HTTP_USER_AGENT": value}):
+                        if name == "harvest_static":
+                            body, status = module.fetch(base + "/start")
+                            self.assertEqual(status, 200)
+                        else:
+                            body, _ = module.fetch(base + "/start", "session=sample")
+                            self.assertTrue(all(cookie == "session=sample" for _, _, cookie in seen))
+                    self.assertIn("Page", body)
+                    self.assertEqual([path for path, _, _ in seen], ["/start", "/page"])
+                    self.assert_identity(seen, expected, module.USER_AGENTS)
+
+    def test_cli_precedence_and_outputs(self):
+        for name in ("harvest_static", "spider_mpa"):
+            module = load_script(name)
+            for env_ua, flags, expected in (("", [], "random"),
+                                           ("Environment-UA/1.0", [], "Environment-UA/1.0"),
+                                           ("Environment-UA/1.0", ["--user-agent", "Override-UA/1.0"], "Override-UA/1.0"),
+                                           ("Environment-UA/1.0", ["--user-agent", ""], None)):
+                with self.subTest(script=name, flags=flags), capture_server() as (base, seen):
+                    with tempfile.TemporaryDirectory() as outdir:
+                        env = dict(os.environ, **DIRECT_ENV, ARTEX_HTTP_USER_AGENT=env_ua)
+                        command = [sys.executable, str(SCRIPTS / f"{name}.py"), base + "/start", outdir] + flags
+                        if name == "spider_mpa":
+                            command += ["--max", "1", "--delay", "0"]
+                        result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertGreaterEqual(len(seen), 2)
+                        self.assert_identity(seen, expected, module.USER_AGENTS)
+                        artifact = "api_static.txt" if name == "harvest_static" else "forms.txt"
+                        self.assertTrue((Path(outdir) / artifact).exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

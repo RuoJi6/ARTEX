@@ -27,6 +27,27 @@ func fakeIPServer(ip string) *httptest.Server {
 	}))
 }
 
+func TestProbeOneUserAgent(t *testing.T) {
+	for _, ua := range []string{"", "Captured-UA/1.0"} {
+		t.Run(ua, func(t *testing.T) {
+			t.Setenv("ARTEX_HTTP_USER_AGENT", ua)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.UserAgent(); ua == "" && !strings.HasPrefix(got, "Mozilla/5.0 ") {
+					t.Errorf("random UA missing: %q", got)
+				} else if ua != "" && got != ua {
+					t.Errorf("User-Agent = %q, want %q", got, ua)
+				}
+				fmt.Fprint(w, `{"ip":"203.0.113.7"}`)
+			}))
+			defer server.Close()
+			ip, err := probeOne(context.Background(), server.Client(), server.URL)
+			if err != nil || ip != "203.0.113.7" {
+				t.Fatalf("ip = %q, err = %v", ip, err)
+			}
+		})
+	}
+}
+
 // TestProbeEgress 覆盖 probeEgress 的输入/响应形态：成功、非法协议、死代理、坏响应、回落。
 // 每条用例自带服务端与断言，失败时 t.Run 的名字直接指出是哪一条。
 func TestProbeEgress(t *testing.T) {
