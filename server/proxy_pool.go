@@ -688,14 +688,14 @@ func (m *Manager) activateProxyID(id, reason string) error {
 }
 
 func (s *Server) handleProxyPoolFailure(cause error) bool {
-	if s == nil || s.m == nil || s.m.proxyPool == nil || !isGlobalProxyDialFailure(cause) {
+	if s == nil || s.m == nil || s.m.proxyPool == nil {
 		return false
 	}
 	cur := strings.TrimSpace(s.m.GlobalProxy())
-	if cur == "" {
+	if cur == "" || !proxyUnreachable(cause, cur) {
 		return false
 	}
-	res := s.runProxyProbe(serverContext(s), cur, "", s.m.egressProbes(), proxyPoolProbeTimeout)
+	res := s.confirmProxyUnavailable(cur)
 	if res.OK {
 		return false
 	}

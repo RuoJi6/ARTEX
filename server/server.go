@@ -140,6 +140,17 @@ type Server struct {
 	proxyPoolWG       sync.WaitGroup
 	proxyPoolProbeSem chan struct{}
 	proxyPoolTickMu   sync.Mutex
+	// proxyGate coalesces confirmation probes: at most one runs at a time and a
+	// finished result is reused briefly, so an upstream-error burst cannot spawn
+	// a probe storm against the very proxy whose health it is measuring.
+	proxyGateMu     sync.Mutex
+	proxyGateWait   chan struct{}
+	proxyGateResult egressProbeResult
+	proxyGateFor    string
+	proxyGateAt     time.Time
+	// proxyPauseMu guards the global proxy-pause cooldown.
+	proxyPauseMu     sync.Mutex
+	proxyPauseLastAt time.Time
 	// proxyProbe is injectable for deterministic reconnect race tests. Production
 	// servers leave it nil and use probeEgress directly.
 	proxyProbe func(context.Context, string, string, []string, time.Duration) egressProbeResult
