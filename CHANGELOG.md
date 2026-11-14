@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 - 新增可选「无成果止损」：按实际运行时长、独立漏洞数量与最低等级做一次检查，未达标时自动收尾并显示「无成果停止」；暂停、排队及计划窗口外不计时，复活后重新计时，默认关闭。停止状态复用 `timeout`，已有 `on_task_timeout` 触发器仍会执行并可能消耗 token。
+- 修复上游 SOCKS5 出口代理握手失败时反复输出 `http: panic serving ...: nil pointer dereference` 并中断 CONNECT 的问题：升级 `go-mitmproxy` v1.9.2 → v1.9.5，失败时改为返回 502 且不再 panic，使代理池自愈与任务重连能正常收到失败信号。
 
 ## [0.3.18] - 2026-10-12
 
