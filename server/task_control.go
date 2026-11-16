@@ -141,6 +141,10 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 				// actor. Reinstall the requested cause barrier while holding
 				// concMu instead of assuming the existing barrier is sufficient.
 				s.engine.Pause(t.ID, pauseCause)
+				// Proxy pauses no longer cancel the chat automatically (the chat
+				// must survive transient egress failures), so an explicit pause
+				// of an already-paused task still has to stop the running turn.
+				s.cancelTaskChat(t.ID, agent.AbortChatPausedWithTask)
 				out.Paused = true
 				out.Status = "paused"
 				return out, nil
