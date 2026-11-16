@@ -1100,6 +1100,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sync/scopesentry/projects", s.syncSSProjects)
 	mux.HandleFunc("GET /api/sync/scopesentry/tasks", s.syncSSTasks)
 	mux.HandleFunc("POST /api/sync/scopesentry/sync", s.syncSSRun)
+	// 资产同步 — FOFA 数据源（官方/第三方代理/自定义端点）
+	mux.HandleFunc("GET /api/sync/fofa/config", s.fofaConfigGet)
+	mux.HandleFunc("POST /api/sync/fofa/config", s.fofaConfigSet)
+	mux.HandleFunc("GET /api/sync/fofa/quota", s.fofaQuota)
+	mux.HandleFunc("POST /api/sync/fofa/preview", s.fofaPreview)
+	mux.HandleFunc("POST /api/sync/fofa/import", s.fofaImport)
 	// Skill CRUD (文件系统)
 	mux.HandleFunc("GET /api/skills", s.fsListSkills)
 	mux.HandleFunc("POST /api/skills", s.fsCreateSkill)

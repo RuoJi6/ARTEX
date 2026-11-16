@@ -401,6 +401,27 @@ RETURNING id`, req.IP, csegVal, boundDomains, openPortsJSON, companyID, taskIDs)
 	return id, err
 }
 
+// SetIPCompany explicitly attributes a batch of IP assets to a company.
+// Never overrides an existing explicit attribution (mirror of UpsertIP COALESCE
+// semantics); used by FOFA import where the operator picked the company.
+func (s *AssetStore) SetIPCompany(companyID int64, ips []string) error {
+	if companyID == 0 || len(ips) == 0 {
+		return nil
+	}
+	_, err := s.withCompanyScopeMutation(func(scoped *AssetStore) (int64, error) {
+		res, err := scoped.tx.Exec(`
+UPDATE assets SET company_id = $1, company_source = 'explicit', last_seen = now()
+WHERE type = 'ip' AND ip = ANY($2::text[])
+  AND (company_id IS NULL OR company_source <> 'explicit')`, companyID, ips)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		return n, nil
+	})
+	return err
+}
+
 // AppendIPPort appends a {port, service} entry to an existing IP asset's open_ports.
 func (s *AssetStore) AppendIPPort(ipStr string, port int, serviceName string) error {
 	if ipStr == "" || port == 0 {
