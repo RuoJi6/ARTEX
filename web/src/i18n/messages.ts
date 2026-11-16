@@ -137,8 +137,8 @@ export const messages = {
   "account.confirmChange": ["确认修改", "Confirm change"],
   "account.usernameFixed": ["用户名固定为", "The username is"],
   "account.tokenNotice": [
-    "。需先输入当前密码验证；修改后已签发的登录 token 仍有效直至过期。",
-    ". Enter your current password to verify your identity. Existing sign-in tokens remain valid until they expire.",
+    "。需先输入当前密码验证；修改成功后签名密钥会轮换，其他设备的登录立即失效，当前会话保持登录。",
+    ". Enter your current password to verify your identity. A successful change rotates the signing key: other signed-in devices are logged out immediately and this session stays signed in.",
   ],
   "account.changeFailed": ["修改失败：{{message}}", "Could not change password: {{message}}"],
   "auth.backendUnavailable": ["无法连接到后端服务", "Unable to connect to the backend service"],
