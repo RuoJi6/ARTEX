@@ -945,10 +945,14 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		}
 		e.stampFirstRun(t) // 首次真正规划 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
 		e.touch(t.ID)
+		// Tool output is not transport evidence. A bash syntax error
+		// ("unexpected EOF while looking for matching `'"), a target-side
+		// "connection reset", or a scanner's "socks4://..." line says nothing
+		// about the egress proxy, yet every one of them contains a substring the
+		// old classifier matched. Proxy faults are reported where the error still
+		// carries its own structure: the MITM upstream hook
+		// (Traffic.reportUpstreamFailure) and real dial errors.
 		emit := func(r db.Activity) {
-			if r.Kind == "tool_result" && r.IsError && e.proxyFailure != nil && isGlobalProxyDialFailure(errors.New(r.Detail+" "+r.Summary)) {
-				e.proxyFailure(t.ID, errors.New(r.Detail+" "+r.Summary))
-			}
 			e.emitActivity(t, r)
 		}
 		ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false) // cancellable by Pause; 带任务 deadline
@@ -1092,10 +1096,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	hasChatMessage := message != ""
 	e.stampFirstRun(t) // 首次真正执行 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
 	e.touch(t.ID)
+	// See the planner loop's emit comment: tool_result text never proves a proxy
+	// fault, so it must not be fed to the proxy-failure handler.
 	emit := func(r db.Activity) {
-		if r.Kind == "tool_result" && r.IsError && e.proxyFailure != nil && isGlobalProxyDialFailure(errors.New(r.Detail+" "+r.Summary)) {
-			e.proxyFailure(t.ID, errors.New(r.Detail+" "+r.Summary))
-		}
 		e.emitActivity(t, r)
 	}
 	ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false) // cancellable by Pause; 带任务 deadline

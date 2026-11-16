@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,17 @@ const (
 	settingProxyReconnectInterval = "proxy_reconnect_interval_seconds"
 	defaultProxyReconnectMax      = 5
 	defaultProxyReconnectInterval = 30
+
+	// proxyConfirmProbeTimeout bounds the confirmation probe. It runs off the
+	// model path, so a short budget beats exhaustive coverage.
+	proxyConfirmProbeTimeout = 5 * time.Second
+	// proxyProbeResultTTL reuses one confirmation result for a short window: an
+	// error burst used to spawn one probe per error, saturating the very proxy
+	// whose health it was measuring.
+	proxyProbeResultTTL = 3 * time.Second
+	// proxyPauseCooldown is the minimum gap between two proxy-pause batches, so
+	// one outage cannot re-pause every task over and over.
+	proxyPauseCooldown = 60 * time.Second
 )
 
 // isProxyFailure is used for LLM/planner errors, where the error has no trusted
@@ -36,21 +49,73 @@ func isProxyFailure(err error) bool {
 	return false
 }
 
-// isGlobalProxyDialFailure is only used by the MITM upstream callback. That
-// callback is on the actual configured global-proxy path; the saved proxy is
-// still probed before any task is paused, so a target-side RequestError cannot
-// pause tasks while the proxy itself remains healthy.
-func isGlobalProxyDialFailure(err error) bool {
+// proxyUnreachable reports whether err proves the CONFIGURED upstream proxy
+// itself could not be reached (or rejected our credentials).
+//
+// It deliberately excludes target-side failures. A SOCKS5 reply such as
+// "connection refused" / "host unreachable" is emitted BY the proxy about the
+// TARGET: it proves the proxy is alive and forwarding. Reading those as a proxy
+// fault is what paused every task whenever a target merely closed a connection.
+//
+// The decision walks the error chain instead of matching arbitrary text because
+// tool output ("bash: unexpected EOF", a scanner's "socks4://..." line) used to
+// satisfy the old substring list and trigger a global pause.
+func proxyUnreachable(err error, proxyRaw string) bool {
 	if err == nil {
 		return false
 	}
-	s := strings.ToLower(err.Error())
-	for _, part := range []string{"proxyconnect", "proxy connection", "proxy error", "proxy handshake", "socks", "connect to proxy", "upstream proxy", "connection refused", "connection reset", "network is unreachable", "broken pipe", "unexpected eof", "eof"} {
-		if strings.Contains(s, part) {
-			return true
+	proxyAddr := proxyHostPort(proxyRaw)
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		opErr, ok := e.(*net.OpError)
+		if !ok {
+			continue
+		}
+		switch {
+		case opErr.Op == "dial":
+			// A plain TCP dial to the proxy endpoint itself failed.
+			if sameHostPort(opErr.Addr, proxyAddr) {
+				return true
+			}
+		case strings.HasPrefix(opErr.Op, "socks"):
+			// x/net's SOCKS5 dialer wraps BOTH "could not reach the proxy" and
+			// "the proxy answered with a failure code" in the same Op. Only the
+			// inner dial to the proxy address is evidence of a proxy fault; a
+			// reply code is evidence of the opposite.
+			var inner *net.OpError
+			if errors.As(opErr.Err, &inner) && inner.Op == "dial" && sameHostPort(inner.Addr, proxyAddr) {
+				return true
+			}
 		}
 	}
-	return false
+	msg := strings.ToLower(err.Error())
+	// net/http emits "proxyconnect tcp:" only when a CONNECT through a proxy
+	// failed, so the marker itself is proxy-specific evidence.
+	if strings.Contains(msg, "proxyconnect") {
+		return true
+	}
+	// 407 means the proxy answered and rejected us: proxy-side, not target-side.
+	return strings.Contains(msg, "proxy authentication required")
+}
+
+// proxyHostPort extracts host:port from a proxy URL ("" when unparseable).
+func proxyHostPort(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Host
+}
+
+// sameHostPort compares a dialed address with the configured proxy endpoint.
+func sameHostPort(addr net.Addr, hostPort string) bool {
+	if addr == nil || hostPort == "" {
+		return false
+	}
+	return strings.EqualFold(addr.String(), hostPort)
 }
 
 type proxyReconnectSupervisor struct {
@@ -138,14 +203,90 @@ func (s *Server) runProxyProbe(ctx context.Context, proxyRaw, caPEMPath string, 
 	return probeEgress(ctx, proxyRaw, caPEMPath, probes, timeout)
 }
 
+// confirmProxyUnavailable probes the saved global proxy, coalescing bursts.
+//
+// Exactly one probe runs at a time and its result is shared with every caller
+// that arrives meanwhile (and reused for proxyProbeResultTTL afterwards). Before
+// this gate every upstream error started its own 10s probe, so a burst saturated
+// the very proxy whose health it was measuring and then read the saturation as
+// an outage.
+func (s *Server) confirmProxyUnavailable(proxyRaw string) egressProbeResult {
+	if s == nil || s.m == nil {
+		return egressProbeResult{OK: true}
+	}
+	s.proxyGateMu.Lock()
+	if ch := s.proxyGateWait; ch != nil {
+		s.proxyGateMu.Unlock()
+		<-ch
+		s.proxyGateMu.Lock()
+		res := s.proxyGateResult
+		s.proxyGateMu.Unlock()
+		return res
+	}
+	if s.proxyGateFor == proxyRaw && !s.proxyGateAt.IsZero() && time.Since(s.proxyGateAt) < proxyProbeResultTTL {
+		res := s.proxyGateResult
+		s.proxyGateMu.Unlock()
+		return res
+	}
+	ch := make(chan struct{})
+	s.proxyGateWait = ch
+	s.proxyGateMu.Unlock()
+
+	var res egressProbeResult
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// A probe panic must never be read as "proxy is down": that
+				// would pause every task on a bug in the probe itself.
+				res = egressProbeResult{OK: true, Error: fmt.Sprint("probe panic: ", r)}
+			}
+			s.proxyGateMu.Lock()
+			s.proxyGateResult = res
+			s.proxyGateFor = proxyRaw
+			s.proxyGateAt = time.Now()
+			s.proxyGateWait = nil
+			close(ch)
+			s.proxyGateMu.Unlock()
+		}()
+		res = s.runProxyProbe(s.ctx, proxyRaw, "", s.m.egressProbes(), proxyConfirmProbeTimeout)
+	}()
+	return res
+}
+
+// allowProxyPause applies a global cooldown so a single outage cannot pause
+// every task again every few seconds.
+func (s *Server) allowProxyPause() bool {
+	if s == nil {
+		return false
+	}
+	s.proxyPauseMu.Lock()
+	defer s.proxyPauseMu.Unlock()
+	now := time.Now()
+	if !s.proxyPauseLastAt.IsZero() && now.Sub(s.proxyPauseLastAt) < proxyPauseCooldown {
+		return false
+	}
+	s.proxyPauseLastAt = now
+	return true
+}
+
 func (s *Server) handleProxyFailure(taskID string, cause error) {
-	if strings.TrimSpace(s.m.GlobalProxy()) == "" {
+	proxyRaw := strings.TrimSpace(s.m.GlobalProxy())
+	if proxyRaw == "" {
 		return
 	}
 	if s.handleProxyPoolFailure(cause) {
 		return
 	}
-	if probe := s.runProxyProbe(s.ctx, s.m.GlobalProxy(), "", s.m.egressProbes(), 10*time.Second); probe.OK {
+	// isProxyFailure is the narrow LLM-error marker; proxyUnreachable is the
+	// structural check for real dial/CONNECT failures.
+	if !isProxyFailure(cause) && !proxyUnreachable(cause, proxyRaw) {
+		return
+	}
+	if res := s.confirmProxyUnavailable(proxyRaw); res.OK {
+		return
+	}
+	if !s.allowProxyPause() {
+		log.Printf("[proxy] pause suppressed by cooldown")
 		return
 	}
 	s.pauseProxyTask(taskID, cause)
@@ -186,21 +327,30 @@ func (s *Server) pauseProxyTask(taskID string, cause error) {
 		// reconnect state exactly as-is.
 		return
 	}
-	s.cancelTaskChat(taskID, agent.AbortChatPausedWithTask)
+	// A proxy pause stops the planner/workers but deliberately leaves the Main
+	// Agent conversation alive: it is the human operator's interface, and most of
+	// its tools (graph_overview / list_facts / file reads) never touch the egress
+	// proxy. Killing the turn here was what made a proxy blip look like "the
+	// session stopped working" (the turn is never replayed on resume).
 	s.ensureProxySupervisor()
 	s.signalProxySupervisor()
 }
 
 func (s *Server) handleProxyTrafficFailure(cause error) {
+	proxyRaw := strings.TrimSpace(s.m.GlobalProxy())
 	if s.handleProxyPoolFailure(cause) {
 		return
 	}
-	if !isGlobalProxyDialFailure(cause) || strings.TrimSpace(s.m.GlobalProxy()) == "" {
+	if proxyRaw == "" || !proxyUnreachable(cause, proxyRaw) {
 		return
 	}
 	// Confirm the saved global proxy itself before pausing. MITM RequestError can
 	// also represent a target-side failure, and those must not pause a task.
-	if probe := probeEgress(context.Background(), s.m.GlobalProxy(), "", s.m.egressProbes(), 10*time.Second); probe.OK {
+	if res := s.confirmProxyUnavailable(proxyRaw); res.OK {
+		return
+	}
+	if !s.allowProxyPause() {
+		log.Printf("[proxy] pause suppressed by cooldown")
 		return
 	}
 	for _, t := range s.m.List() {
@@ -213,18 +363,25 @@ func (s *Server) handleProxyTrafficFailure(cause error) {
 }
 
 func (s *Server) handleProxyToolFailure(ctx context.Context, cause error) {
+	proxyRaw := strings.TrimSpace(s.m.GlobalProxy())
 	if s.handleProxyPoolFailure(cause) {
 		return
 	}
-	if !isGlobalProxyDialFailure(cause) || strings.TrimSpace(s.m.GlobalProxy()) == "" {
+	if proxyRaw == "" || !proxyUnreachable(cause, proxyRaw) {
 		return
 	}
-	if probe := probeEgress(context.Background(), s.m.GlobalProxy(), "", s.m.egressProbes(), 10*time.Second); probe.OK {
+	info := agent.RunInfoFrom(ctx)
+	if info.TaskID <= 0 {
 		return
 	}
-	if info := agent.RunInfoFrom(ctx); info.TaskID > 0 {
-		s.pauseProxyTask(fmt.Sprint(info.TaskID), cause)
+	if res := s.confirmProxyUnavailable(proxyRaw); res.OK {
+		return
 	}
+	if !s.allowProxyPause() {
+		log.Printf("[proxy] pause suppressed by cooldown")
+		return
+	}
+	s.pauseProxyTask(fmt.Sprint(info.TaskID), cause)
 }
 
 func truncateProxyError(err error) string {

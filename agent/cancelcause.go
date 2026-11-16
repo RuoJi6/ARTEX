@@ -60,7 +60,7 @@ var (
 	AbortChatStoppedByUser = cause("chat_stopped_by_user", "用户停止了本轮对话",
 		"用户点击了停止，主动中止本轮主 Agent 或会话 Agent 运行。已经产生的活动记录会保留，可以继续发送下一条消息")
 	AbortChatPausedWithTask = cause("chat_paused_with_task", "任务暂停并中止了主 Agent 对话",
-		"用户暂停任务时，正在运行的主 Agent 对话也被同步取消。已经产生的活动记录会保留；恢复任务后不会自动重放本轮消息")
+		"任务被暂停时（用户手动、计划窗口结束或编排 Agent 动作），正在运行的主 Agent 对话也被同步取消。已经产生的活动记录会保留；恢复任务后不会自动重放本轮消息")
 	AbortChatTurnFinished = cause("chat_turn_finished", "本轮对话已正常结束并释放 context",
 		"本轮对话已正常结束，服务端正在释放该轮 context 资源。这不是运行中断；若它出现在中断消息中，说明取消与收场事件发生了竞态")
 
