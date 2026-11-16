@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { localizedError } from "@/i18n/errors";
 import { api } from "@/lib/api";
+import { auth } from "@/lib/auth";
 
 export function ChangePasswordDialog({
   open,
@@ -54,7 +55,10 @@ export function ChangePasswordDialog({
     setSaving(true);
     api
       .changePassword(oldPassword, newPassword)
-      .then(() => {
+      .then((res) => {
+        // 服务端在改密后轮换了签名密钥：用回传的新 token 保住当前会话，
+        // 其他设备上的旧 token 立即全部失效。
+        if (res.token) auth.setToken(res.token);
         toast.success(t("account.passwordChanged"));
         onOpenChange(false);
       })

@@ -10,6 +10,66 @@ import { settingsRuntimeMessages } from "./settings-runtime-messages";
 import { taskMessages } from "./task-messages";
 import { termsMessages } from "./terms";
 
+// FOFA 资产同步页（新增数据源；与 ScopeSentry 同步并列）
+export const fofaMessages = {
+  "nav.fofa": ["FOFA 资产同步", "FOFA asset sync"],
+  "fofa.title": ["FOFA 资产同步", "FOFA asset sync"],
+  "fofa.subtitle": [
+    "按 FOFA 查询语句把被动索引到的资产导入资产库（不向目标发送流量）",
+    "Import assets from the FOFA passive index into the asset inventory (no traffic is sent to targets)",
+  ],
+  "fofa.datasource": ["FOFA 数据源", "FOFA data source"],
+  "fofa.checking": ["检测中…", "Checking…"],
+  "fofa.configured": ["已配置", "Configured"],
+  "fofa.notConfigured": ["未配置", "Not configured"],
+  "fofa.refresh": ["刷新", "Refresh"],
+  "fofa.endpoint": ["接口端点", "Endpoint"],
+  "fofa.baseUrl": ["Base URL（官方兼容代理地址）", "Base URL (official-compatible proxy)"],
+  "fofa.email": ["账号 Email（官方接口需要）", "Account email (required by the official API)"],
+  "fofa.apiKey": ["API Key", "API key"],
+  "fofa.apiKeySet": ["API Key（已设置，留空保留原值）", "API key (already set, leave blank to keep)"],
+  "fofa.save": ["保存配置", "Save configuration"],
+  "fofa.saved": ["已保存并生效", "Saved and active"],
+  "fofa.savedIncomplete": ["已保存（配置尚不完整）", "Saved (configuration still incomplete)"],
+  "fofa.saveFailed": ["保存失败：{{message}}", "Could not save: {{message}}"],
+  "fofa.loadFailed": ["读取 FOFA 配置失败：{{message}}", "Could not load the FOFA configuration: {{message}}"],
+  "fofa.quota": ["查询余额（免费）", "Check quota (free)"],
+  "fofa.quotaFailed": ["查询余额失败：{{message}}", "Could not check the quota: {{message}}"],
+  "fofa.quotaAbnormal": ["接口返回异常", "The API returned an unexpected response"],
+  "fofa.quotaQueryLeft": ["今日剩余查询 {{count}} 次", "{{count}} searches left today"],
+  "fofa.quotaDataLeft": ["剩余条数 {{count}}", "{{count}} result rows left"],
+  "fofa.quotaExpiration": ["到期 {{value}}", "Expires {{value}}"],
+  "fofa.billing": [
+    "查询走 FOFA 历史索引，全程不向目标发送流量。第三方代理按「1 次查询 + 返回条数」计费，预览（size=1）几乎不耗条数。",
+    "Queries hit the FOFA historical index; no traffic is sent to targets. Third-party proxies bill per query plus per returned row; preview (size=1) consumes almost no rows.",
+  ],
+  "fofa.needConfig": [
+    "配置端点与 Key 后即可按 FOFA 查询语句导入资产（全程被动，不向目标发送流量）。",
+    "Configure an endpoint and key to import assets by FOFA query (fully passive, no traffic to targets).",
+  ],
+  "fofa.workbench": ["FOFA 查询导入", "Import by FOFA query"],
+  "fofa.query": ["FOFA 查询语句", "FOFA query"],
+  "fofa.queryRequired": ["请填写 FOFA 查询语句", "Enter a FOFA query"],
+  "fofa.sizeLimit": ["条数上限", "Result limit"],
+  "fofa.company": ["归属企业（空 = 从 domain 提取）", "Company (blank = derive from domain)"],
+  "fofa.companyPlaceholder": ["如：示例集团", "e.g. Example Group"],
+  "fofa.createCompany": ["企业不存在时创建并写入资产范围", "Create the company and add the asset scope when missing"],
+  "fofa.preview": ["预览命中（几乎不耗配额）", "Preview matches (almost no quota)"],
+  "fofa.previewOk": ["命中 {{count}} 条", "{{count}} matches"],
+  "fofa.previewFailed": ["预览失败：{{message}}", "Preview failed: {{message}}"],
+  "fofa.import": ["导入资产", "Import assets"],
+  "fofa.imported": ["导入完成：{{ip}} 个 IP / {{port}} 个端口", "Imported {{ip}} IPs / {{port}} ports"],
+  "fofa.importFailed": ["导入失败：{{message}}", "Import failed: {{message}}"],
+  "fofa.matchTotal": ["命中总数", "Total matches"],
+  "fofa.truncated": [
+    "（超过条数上限，导入将截断前 {{size}} 条）",
+    " (exceeds the limit; the import is truncated to the first {{size}} rows)",
+  ],
+  "fofa.companies": ["新建/更新企业：", "Companies created/updated: "],
+  "fofa.ip": ["IP", "IP"],
+  "fofa.port": ["端口", "Port"],
+} as const;
+
 // Keep both languages together so each product message has an explicit translation.
 export const messages = {
   ...(screenCatalog as unknown as Record<string, readonly [string, string]>),
@@ -23,6 +83,7 @@ export const messages = {
   ...overviewMessages,
   ...settingsMessages,
   ...settingsRuntimeMessages,
+  ...fofaMessages,
   "common.cancel": ["取消", "Cancel"],
   "common.retry": ["重试", "Retry"],
   "common.close": ["关闭", "Close"],
@@ -76,8 +137,8 @@ export const messages = {
   "account.confirmChange": ["确认修改", "Confirm change"],
   "account.usernameFixed": ["用户名固定为", "The username is"],
   "account.tokenNotice": [
-    "。需先输入当前密码验证；修改后已签发的登录 token 仍有效直至过期。",
-    ". Enter your current password to verify your identity. Existing sign-in tokens remain valid until they expire.",
+    "。需先输入当前密码验证；修改成功后签名密钥会轮换，其他设备的登录立即失效，当前会话保持登录。",
+    ". Enter your current password to verify your identity. A successful change rotates the signing key: other signed-in devices are logged out immediately and this session stays signed in.",
   ],
   "account.changeFailed": ["修改失败：{{message}}", "Could not change password: {{message}}"],
   "auth.backendUnavailable": ["无法连接到后端服务", "Unable to connect to the backend service"],

@@ -421,7 +421,10 @@ export const api = {
   login: (username: string, password: string) => post<{ token: string }>("/auth/login", { username, password }),
   initPassword: (password: string) => post<{ token: string }>("/auth/init", { password }),
   changePassword: (oldPassword: string, newPassword: string) =>
-    post<{ ok: boolean }>("/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
+    post<{ ok: boolean; token?: string }>("/auth/change-password", {
+      old_password: oldPassword,
+      new_password: newPassword,
+    }),
 
   // ---- tasks ----
   tasks: () =>
@@ -1527,6 +1530,40 @@ export const api = {
       warnings: string[] | null;
       errors: string[] | null;
     }>("/sync/scopesentry/sync", body),
+
+  // ---- 资产同步 (FOFA 数据源) ----
+  fofaConfig: () =>
+    get<{
+      endpoint: string;
+      base_url: string;
+      email: string;
+      key_set: boolean;
+      valid: boolean;
+      presets: { id: string; label: string; base_url: string; email: boolean }[];
+    }>("/sync/fofa/config"),
+  fofaSaveConfig: (body: { endpoint: string; base_url?: string; email?: string; api_key?: string }) =>
+    post<{ ok: boolean; valid: boolean }>("/sync/fofa/config", body),
+  fofaQuota: () =>
+    get<{
+      info: {
+        error?: boolean;
+        message?: string;
+        username?: string;
+        isvip?: boolean;
+        vip_level?: string | number;
+        remain_api_query?: number;
+        remain_api_data?: number;
+        expiration?: string;
+      } | null;
+    }>("/sync/fofa/quota"),
+  fofaPreview: (query: string) => post<{ match_size: number; sample: string[][] }>("/sync/fofa/preview", { query }),
+  fofaImport: (body: { query: string; size?: number; company_name?: string; create_company?: boolean }) =>
+    post<{
+      synced: Record<string, number>;
+      companies: string[] | null;
+      warnings: string[] | null;
+      errors: string[] | null;
+    }>("/sync/fofa/import", body),
 
   // ---- skills (文件系统) ----
   skills: () => get<{ skills: SkillItem[] }>("/skills").then((r) => arr(r.skills)),
