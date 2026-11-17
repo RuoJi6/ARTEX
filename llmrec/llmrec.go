@@ -60,6 +60,15 @@ func workerFrom(ctx context.Context) string {
 	return strings.TrimSpace(worker)
 }
 
+// WireAdjuster is implemented by providers that rewrite a request before it
+// reaches the wire (e.g. agent's Claude compat layer dropping fields newer
+// models reject). The Recorder records the adjusted values so the ledger matches
+// what was actually sent.
+type WireAdjuster interface {
+	WireRequest(llm.CompletionRequest) llm.CompletionRequest
+	WireThinkingType(profile string) string
+}
+
 // Recorder wraps an llm.Provider and records every completion call.
 type Recorder struct {
 	inner llm.Provider
@@ -79,6 +88,9 @@ type Recorder struct {
 // reasoningEffort are the config-level thinking params actually sent to the API
 // (empty = not sent). A nil enabled predicate records unconditionally.
 func Wrap(inner llm.Provider, pg *db.DB, model, profName, thinkingType, reasoningEffort string, enabled func() bool) *Recorder {
+	if adj, ok := inner.(WireAdjuster); ok {
+		thinkingType = adj.WireThinkingType(thinkingType)
+	}
 	return &Recorder{
 		inner: inner, pg: pg, model: model, prof: profName,
 		thinkingType: thinkingType, reasoningEffort: reasoningEffort, enabled: enabled,
@@ -353,6 +365,9 @@ func (r *Recorder) record(req llm.CompletionRequest, session, taskID, worker, re
 
 // serializeRequest builds a JSON representation of the completion request.
 func (r *Recorder) serializeRequest(req llm.CompletionRequest) string {
+	if adj, ok := r.inner.(WireAdjuster); ok {
+		req = adj.WireRequest(req)
+	}
 	m := map[string]any{
 		"system":     req.System,
 		"messages":   req.Messages,
