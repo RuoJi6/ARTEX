@@ -307,9 +307,20 @@ func (c Config) newProvider(client *http.Client, limiter *RequestLimiter) (llm.P
 	lc.RetryInterval = c.Retry.ConnectInterval
 	lc.EmptyResponseRetries = c.Retry.EmptyAttempts
 	lc.EmptyResponseInterval = c.Retry.EmptyInterval
+	// Newer Claude models reject thinking "disabled" and sampling parameters;
+	// strip them for those models only (see claude_compat.go). A profile-level
+	// "disabled" is dropped too, or every request would inherit it.
+	compat := claudeCompatFor(c.Model, c.ReasoningEffort)
+	if compat.dropDisabledThinking && strings.EqualFold(strings.TrimSpace(lc.ThinkingType), "disabled") {
+		lc.ThinkingType = ""
+	}
 	// Norma's limiter allows a full-window burst and excludes establishment
 	// retries. Enforce limits on HTTP attempts instead; do not also enable it.
-	return llm.NewProvider(lc)
+	prov, err := llm.NewProvider(lc)
+	if err != nil {
+		return nil, err
+	}
+	return withClaudeCompat(prov, compat), nil
 }
 
 // IsQuotaExhaustedMessage deliberately recognizes only explicit balance,
