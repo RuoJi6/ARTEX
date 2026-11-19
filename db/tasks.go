@@ -49,6 +49,9 @@ type Task struct {
 	NoResultBaseSeconds int64      `json:"no_result_base_seconds"`
 	NoResultCheckedAt   *time.Time `json:"no_result_checked_at,omitempty"`
 	StopReason          string     `json:"stop_reason"`
+	// OutputLanguage is the language the task's LLM agents write in ("zh" or "en").
+	// Existing rows default to "zh", so tasks created before this column keep their output.
+	OutputLanguage string `json:"output_language"`
 	// 任务级绝对墙钟超时。
 	TimeoutSeconds      int        `json:"timeout_seconds"`        // 0=不限时
 	FirstRunAt          *time.Time `json:"first_run_at,omitempty"` // 首次真正开始运行的时刻(非 created_at);nil=尚未运行
@@ -195,6 +198,8 @@ type TaskCreateOptions struct {
 	NoResultMinFindings  int
 	NoResultMinSeverity  string
 	PlanHeartbeatSeconds int
+	// OutputLanguage is "zh" (default) or "en"; anything else normalizes to "zh".
+	OutputLanguage string
 	// CoverageEnabled 是「资产覆盖度功能」开关;nil=默认开(true)，让不关心该开关的创建
 	// 路径(编排 spawn、老 API)沿用原行为。仅 web 创建任务时可显式传 false 关闭。
 	CoverageEnabled *bool
@@ -287,10 +292,11 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		TimeoutSeconds: opts.TimeoutSeconds, PlanHeartbeatSeconds: opts.PlanHeartbeatSeconds,
 		CoverageEnabled: coverageEnabled, ShareGlobalAssets: opts.ShareGlobalAssets, WorkerCount: opts.WorkerCount, Remark: opts.Remark,
 	}
+	outputLang := NormalizeOutputLanguage(opts.OutputLanguage)
 	if err := tx.QueryRow(`
-INSERT INTO tasks(name, remark, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, worker_count, share_global_assets, no_result_seconds, no_result_min_findings, no_result_min_severity)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-RETURNING id, status, paused, created_at`, opts.Name, opts.Remark, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, opts.WorkerCount, opts.ShareGlobalAssets, opts.NoResultSeconds, opts.NoResultMinFindings, opts.NoResultMinSeverity).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
+INSERT INTO tasks(name, remark, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, worker_count, share_global_assets, no_result_seconds, no_result_min_findings, no_result_min_severity, output_language)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+RETURNING id, status, paused, created_at`, opts.Name, opts.Remark, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, opts.WorkerCount, opts.ShareGlobalAssets, opts.NoResultSeconds, opts.NoResultMinFindings, opts.NoResultMinSeverity, outputLang).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
 		return nil, err
 	}
 	if err := insertTaskRelations(tx, t.ID, opts.SourceTaskIDs); err != nil {
@@ -427,11 +433,11 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 
 const taskCols = `id, COALESCE(name,''), remark, category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
-description, goal, exploration_id, status, paused, COALESCE(pause_reason,''), queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), share_global_assets, COALESCE(worker_count,0), first_run_at, deadline_at, COALESCE(active_run_seconds,0), run_segment_started_at, no_result_seconds, no_result_min_findings, no_result_min_severity, no_result_base_seconds, no_result_checked_at, stop_reason`
+description, goal, exploration_id, status, paused, COALESCE(pause_reason,''), queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), share_global_assets, COALESCE(worker_count,0), first_run_at, deadline_at, COALESCE(active_run_seconds,0), run_segment_started_at, no_result_seconds, no_result_min_findings, no_result_min_severity, no_result_base_seconds, no_result_checked_at, stop_reason, COALESCE(output_language,'zh')`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
-	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.PauseReason, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.ShareGlobalAssets, &t.WorkerCount, &t.FirstRunAt, &t.DeadlineAt, &t.ActiveRunSeconds, &t.RunSegmentStartedAt, &t.NoResultSeconds, &t.NoResultMinFindings, &t.NoResultMinSeverity, &t.NoResultBaseSeconds, &t.NoResultCheckedAt, &t.StopReason); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.PauseReason, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.ShareGlobalAssets, &t.WorkerCount, &t.FirstRunAt, &t.DeadlineAt, &t.ActiveRunSeconds, &t.RunSegmentStartedAt, &t.NoResultSeconds, &t.NoResultMinFindings, &t.NoResultMinSeverity, &t.NoResultBaseSeconds, &t.NoResultCheckedAt, &t.StopReason, &t.OutputLanguage); err != nil {
 		return nil, err
 	}
 	t.Pinned = t.PinnedAt != nil
@@ -852,4 +858,14 @@ DELETE FROM assets a USING deletable d WHERE a.id=d.id`, id, expID)
 		return result, err
 	}
 	return result, tx.Commit()
+}
+
+// NormalizeOutputLanguage maps a requested LLM output language to a supported
+// code. Only "en" selects English; everything else (including empty) is "zh", the
+// historical behaviour, so existing and unspecified tasks are unchanged.
+func NormalizeOutputLanguage(lang string) string {
+	if strings.EqualFold(strings.TrimSpace(lang), "en") {
+		return "en"
+	}
+	return "zh"
 }

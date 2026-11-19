@@ -1749,6 +1749,9 @@ type createTaskReq struct {
 	WorkerCount          int              `json:"worker_count,omitempty"`     // 本任务 Worker 数;0/省略=用全局默认;上限50
 	// InterceptRules 任务级资产拦截/允许规则(创建时录入,存 task_intercept_rules,不进全局表)。
 	InterceptRules []taskInterceptRuleReq `json:"intercept_rules,omitempty"`
+	// OutputLanguage ("zh"|"en") is the language the task's LLM agents write in. Empty
+	// falls back to the X-Artex-Locale request header, then to "zh".
+	OutputLanguage string `json:"output_language,omitempty"`
 }
 
 // taskCreateError is a rejected task creation: an HTTP-style status plus a
@@ -1763,6 +1766,9 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, "bad json: "+err.Error())
 		return
+	}
+	if strings.TrimSpace(req.OutputLanguage) == "" {
+		req.OutputLanguage = outputLanguageForLocale(r.Header.Get(localeHeader))
 	}
 	t, cerr := s.createTaskFromRequest(req)
 	if cerr != nil {
@@ -1840,6 +1846,7 @@ func (s *Server) createTaskFromRequest(req createTaskReq) (*Task, *taskCreateErr
 		Name:     strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
 		NoResultSeconds: req.NoResultSeconds, NoResultMinFindings: req.NoResultMinFindings, NoResultMinSeverity: req.NoResultMinSeverity,
+		OutputLanguage: req.OutputLanguage,
 		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
 		CoverageEnabled:   req.CoverageEnabled,
 		ShareGlobalAssets: req.ShareGlobalAssets,

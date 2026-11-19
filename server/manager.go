@@ -68,6 +68,7 @@ type Task struct {
 	NoResultSeconds      int                    `json:"no_result_seconds"`
 	NoResultMinFindings  int                    `json:"no_result_min_findings"`
 	NoResultMinSeverity  string                 `json:"no_result_min_severity"`
+	OutputLanguage       string                 `json:"output_language"`
 	NoResultBaseSeconds  int64                  `json:"no_result_base_seconds"`
 	NoResultCheckedAt    int64                  `json:"no_result_checked_at,omitempty"`
 	StopReason           string                 `json:"stop_reason"`
@@ -1169,7 +1170,7 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 		LLMFailoverState: pt.LLMFailoverState, LLMFailoverReason: pt.LLMFailoverReason,
 		SourceTaskIDs:   append([]int64(nil), pt.SourceTaskIDs...),
 		CompanyIDs:      append([]int64(nil), pt.CompanyIDs...),
-		NoResultSeconds: pt.NoResultSeconds, NoResultMinFindings: pt.NoResultMinFindings, NoResultMinSeverity: pt.NoResultMinSeverity,
+		NoResultSeconds: pt.NoResultSeconds, NoResultMinFindings: pt.NoResultMinFindings, NoResultMinSeverity: pt.NoResultMinSeverity, OutputLanguage: pt.OutputLanguage,
 		NoResultBaseSeconds: pt.NoResultBaseSeconds, NoResultCheckedAt: unixOrZero(pt.NoResultCheckedAt), StopReason: pt.StopReason,
 		TimeoutSeconds: pt.TimeoutSeconds, PlanHeartbeatSeconds: pt.PlanHeartbeatSeconds,
 		CoverageEnabled: pt.CoverageEnabled, ShareGlobalAssets: pt.ShareGlobalAssets, WorkerCount: pt.WorkerCount,

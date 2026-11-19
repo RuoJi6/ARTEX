@@ -18,6 +18,7 @@ import (
 // (→planner) or direct high-priority intents (→frontier). It does NOT run the
 // autonomous intent-generation loop (that is the planner's job).
 type MainAgent struct {
+	outputLang      string // see OutputLangDirective ("zh" or "en")
 	findingRecorder FindingRecorder
 	prov            llm.Provider
 	model           string
@@ -133,7 +134,7 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	mainDir := ensureRunDir(m.workDir, taskID, 0)
 	ctx = intercept.WithReviewWorkingDirectory(ctx, mainDir)
-	system, boundary := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir), def)
+	system, boundary := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir)+OutputLangDirective(m.outputLang), def)
 	proxyAddr := m.proxyAddr
 	if m.proxyAddrFn != nil {
 		proxyAddr = m.proxyAddrFn()
@@ -203,3 +204,6 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	})
 	return text, err
 }
+
+// SetOutputLang sets the language this agent writes in ("zh" or "en").
+func (a *MainAgent) SetOutputLang(lang string) { a.outputLang = NormalizeOutputLang(lang) }
