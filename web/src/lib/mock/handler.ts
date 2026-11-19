@@ -2470,6 +2470,9 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     throw Object.assign(new Error("演示模式不支持修改 HTTP Basic Auth，请在实际部署中配置"), {
       code: "demo_basic_auth_disabled",
     });
+  if (path === "/system/backup/status") return { pending: false, last_restore: null };
+  if (path === "/system/backup/restore")
+    throw Object.assign(new Error("演示模式不支持备份与恢复，请在实际部署中使用"), { code: "demo_backup_disabled" });
   if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };
   if (path === "/settings/proxy/test")
     return {
