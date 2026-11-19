@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 新增与改进
+
+- 支持热更新运行中任务的 Worker 并发：任务详情可设置 0（跟随全局）或 1–50；全局工作并发与 Worker 池变更会同步至跟随全局的任务。增容立即补起 Worker，缩容等待当前意图完成后退出，不中断正在执行的工作；详情展示实际存活 Worker 数与目标数。配置持久化，重启恢复时沿用。
+- `PATCH /api/tasks/{id}` 新增 `worker_count`；任务接口返回 `worker_actual_count`（存活池循环，含缩容等待中的 Worker）与 `worker_target_count`（有效目标数），与 `in_flight`（执行中意图数）区分。
+
 ## [0.3.30] - 2026-11-14
 
 ### 新增与改进

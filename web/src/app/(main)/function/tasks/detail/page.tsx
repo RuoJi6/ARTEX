@@ -24,6 +24,8 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Popover,
   PopoverContent,
@@ -40,6 +42,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { LLMProfile, Task } from "@/lib/types";
+import { MAX_TASK_WORKER_COUNT, parseWorkerCountInput } from "@/lib/types";
 
 import { AssetsTab } from "./_tabs/assets-tab";
 import { BroadcastTab } from "./_tabs/broadcast-tab";
@@ -209,6 +212,87 @@ function TaskLLMControl({ task, profiles, onUpdated }: { task: Task; profiles: L
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function TaskWorkerControl({ task, onUpdated }: { task: Task; onUpdated: (task: Task) => void }) {
+  const { ui } = useUITranslation();
+  const [open, setOpen] = React.useState(false);
+  const [draft, setDraft] = React.useState(String(task.worker_count ?? 0));
+  const [saving, setSaving] = React.useState(false);
+  const actual = task.worker_actual_count;
+  const target = task.worker_target_count;
+  const draining = actual !== undefined && target !== undefined && actual > target;
+
+  const save = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const count = parseWorkerCountInput(draft);
+    if (count === null) {
+      toast.error(ui("taskUI.invalidWorkers", { max: MAX_TASK_WORKER_COUNT }));
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await api.updateTask(task.id, { worker_count: count });
+      onUpdated(updated);
+      setOpen(false);
+      toast.success(ui("taskWorkers.saved"));
+    } catch (error) {
+      toast.error(ui("taskWorkers.saveFailed", { message: (error as Error).message }));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <span className="tabular-nums">{ui("taskWorkers.counts", { actual: actual ?? "—", target: target ?? "—" })}</span>
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (next) setDraft(String(task.worker_count ?? 0));
+        }}
+      >
+        <PopoverTrigger asChild>
+          <Button size="sm" variant="outline" className="h-7 text-xs">
+            {ui("taskWorkers.edit")}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-[min(25rem,calc(100vw-2rem))] gap-4 p-4">
+          <PopoverHeader>
+            <PopoverTitle>{ui("taskWorkers.edit")}</PopoverTitle>
+            <PopoverDescription>{ui("taskWorkers.help")}</PopoverDescription>
+          </PopoverHeader>
+          <form onSubmit={save} className="space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor="task-worker-count">{ui("taskWorkers.label")}</Label>
+              <Input
+                id="task-worker-count"
+                type="number"
+                min={0}
+                max={MAX_TASK_WORKER_COUNT}
+                step={1}
+                value={draft}
+                disabled={saving}
+                onChange={(event) => setDraft(event.target.value)}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">{ui("taskWorkers.transitionHelp")}</p>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setOpen(false)} disabled={saving}>
+                {ui("screen.3fd47edce45b36")}
+              </Button>
+              <Button type="submit" size="sm" disabled={saving}>
+                {saving && <Spinner data-icon="inline-start" />}
+                {ui(saving ? "screen.a1a1720d3eb58a" : "screen.a3030bf8f16dc6")}
+              </Button>
+            </div>
+          </form>
+        </PopoverContent>
+      </Popover>
+      {draining && <span className="text-amber-600">{ui("taskWorkers.draining")}</span>}
+    </div>
   );
 }
 
@@ -437,6 +521,14 @@ function TaskDetailInner() {
           </Button>
         </div>
         <p className="truncate text-xs text-muted-foreground">{task.goal}</p>
+        <TaskWorkerControl
+          key={task.id}
+          task={task}
+          onUpdated={(updated) => {
+            setTask(updated);
+            load();
+          }}
+        />
         {task.paused && task.pause_reason && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-amber-600">
             <span>

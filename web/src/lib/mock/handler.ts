@@ -48,6 +48,7 @@ const mockInterceptHistory = structuredClone(D.interceptHistory);
 const mockInterceptPending = structuredClone(D.interceptPending);
 const mockInterceptDetails = structuredClone(D.interceptDetails);
 const mockTasks = structuredClone(D.tasks);
+const mockWorkerDrainUntil = new Map<string, number>();
 const mockFindings = structuredClone(D.findings);
 const mockLLMRecords = structuredClone(D.llmRecords);
 const mockTaskTemplates = structuredClone(D.taskTemplates);
@@ -256,7 +257,33 @@ function mockTaskArchiveBlocker(taskID: string): string | undefined {
   )?.id;
 }
 
+function reconcileMockWorkers(task: Task): void {
+  const target = task.worker_count || D.settings.workers || 3;
+  const previousTarget = task.worker_target_count;
+  task.worker_target_count = target;
+  if (task.status !== "running" && task.status !== "paused") {
+    task.worker_actual_count = 0;
+    mockWorkerDrainUntil.delete(task.id);
+    return;
+  }
+  const actual = task.worker_actual_count ?? target;
+  if (actual <= target) {
+    task.worker_actual_count = target;
+    mockWorkerDrainUntil.delete(task.id);
+  } else {
+    // Demo loops drain independently of in_flight; retain them across polls briefly.
+    if (!mockWorkerDrainUntil.has(task.id) || previousTarget !== target) {
+      mockWorkerDrainUntil.set(task.id, Date.now() + 10_000);
+    }
+    if (Date.now() >= (mockWorkerDrainUntil.get(task.id) ?? 0)) {
+      task.worker_actual_count = target;
+      mockWorkerDrainUntil.delete(task.id);
+    }
+  }
+}
+
 function publicMockTask(task: Task): Task {
+  reconcileMockWorkers(task);
   const item = structuredClone(task);
   item.numeric_id = mockTaskAssetIDs.get(task.id);
   item.share_global_assets = task.share_global_assets ?? false;
@@ -1323,6 +1350,7 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       company_ids: companyIDs,
       share_global_assets: b.share_global_assets === true,
     };
+    reconcileMockWorkers(created);
     // Validate the attached preview schedule before mutating task state.
     const numericTaskID = nextMockTaskAssetID;
     if (b.schedule && typeof b.schedule === "object") {
@@ -1527,8 +1555,10 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     const namePresent = has("name") && b.name !== null;
     const remarkPresent = has("remark") && b.remark !== null;
     const pinnedPresent = has("pinned") && b.pinned !== null;
-    if (!namePresent && !remarkPresent && !pinnedPresent && !sharingPresent)
-      throw new Error("至少需要提供 name、pinned、remark 或 share_global_assets");
+    const workerCountPresent = has("worker_count") && b.worker_count !== null;
+    const nextWorkerCount = workerCountPresent ? mockWorkerCount(b.worker_count) : task.worker_count;
+    if (!namePresent && !remarkPresent && !pinnedPresent && !sharingPresent && !workerCountPresent)
+      throw new Error("至少需要提供 name、pinned、remark、share_global_assets 或 worker_count");
     let nextName = task.name;
     let nextRemark = task.remark;
     let nextPinned = task.pinned;
@@ -1550,8 +1580,9 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     task.remark = nextRemark;
     task.pinned = nextPinned;
     task.pinned_at = nextPinnedAt;
+    task.worker_count = nextWorkerCount;
     sortMockTasks();
-    return structuredClone(task);
+    return publicMockTask(task);
   }
   if (seg[0] === "tasks" && seg.length === 2 && m === "DELETE") {
     const id = seg[1];
@@ -2463,6 +2494,7 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       next.workers = next.worker_pools.reduce((sum, pool) => sum + Number(pool.workers), 0);
     }
     Object.assign(D.settings, next);
+    for (const task of mockTasks) reconcileMockWorkers(task);
     return next;
   }
   if (path === "/settings/basic-auth" && m === "GET") return { enabled: false, username: "", password_set: false };
