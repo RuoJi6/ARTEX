@@ -42,6 +42,7 @@ type WebSearchOpts struct {
 }
 
 type Worker struct {
+	outputLang      string // see OutputLangDirective ("zh" or "en")
 	findingRecorder FindingRecorder
 	prov            llm.Provider
 	model           string
@@ -415,6 +416,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		}
 	}
 	sysBody += "\n\n开始执行上面这条意图：只做它、只产生事实、assets、finding、做完即停。"
+	sysBody += OutputLangDirective(w.outputLang)
 	system, boundary := deferredSystem(sysBody, def)
 	// 任务级 deadline(经 ctx 注入)夹逼本 run 的墙钟预算 + 决定收尾词(见 taskclock.go)。
 	tc := taskClockFrom(ctx)
@@ -527,3 +529,6 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	_, reason, err := captureRunSession(ctx, s, input, emitWrap)
 	return reason, tsx.Writes(), err
 }
+
+// SetOutputLang sets the language this agent writes in ("zh" or "en").
+func (a *Worker) SetOutputLang(lang string) { a.outputLang = NormalizeOutputLang(lang) }

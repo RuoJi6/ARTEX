@@ -4,6 +4,7 @@
 // are passed through and formatted at the call site.
 
 import type { ChatMention } from "@/lib/chat-mentions";
+import { LOCALE_STORAGE_KEY, resolveLocale } from "@/i18n/config";
 import { MOCK } from "@/lib/mock/enabled";
 import { mockHandle, mockTaskFileURL } from "@/lib/mock/handler";
 import type {
@@ -222,6 +223,19 @@ export class ApiError extends Error {
   }
 }
 
+// The UI locale, sent on every API call. The backend uses it to choose the language
+// the task's LLM agents write in (English UI -> English output). Reads are guarded:
+// storage can be unavailable (private windows, blocked site data).
+export function uiLocaleHeader(): Record<string, string> {
+  let stored: string | null = null;
+  try {
+    stored = globalThis.localStorage?.getItem(LOCALE_STORAGE_KEY) ?? null;
+  } catch {
+    stored = null;
+  }
+  return { "X-Artex-Locale": resolveLocale(stored) };
+}
+
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   if (MOCK) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
   const token = getToken();
@@ -229,6 +243,7 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...uiLocaleHeader(),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers as Record<string, string> | undefined),
     },
