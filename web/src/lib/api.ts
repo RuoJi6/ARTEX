@@ -483,7 +483,7 @@ export const api = {
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (
     id: string,
-    input: { name?: string; pinned?: boolean; remark?: string; share_global_assets?: boolean },
+    input: { name?: string; pinned?: boolean; remark?: string; share_global_assets?: boolean; worker_count?: number },
   ) => patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),
   pinTask: (id: string, pinned: boolean) => patch<Task>(`/tasks/${id}`, { pinned }),

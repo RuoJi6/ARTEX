@@ -99,6 +99,7 @@ type Task struct {
 // directly after the task has been published by Manager.
 type taskLifecycleState struct {
 	ShareGlobalAssets   bool
+	WorkerCount         int
 	Name                string
 	Remark              string
 	PinnedAt            int64
@@ -140,6 +141,7 @@ func (t *Task) lifecycleSnapshot() taskLifecycleState {
 func (t *Task) lifecycleSnapshotLocked() taskLifecycleState {
 	return taskLifecycleState{
 		ShareGlobalAssets: t.ShareGlobalAssets,
+		WorkerCount:       t.WorkerCount,
 		Name:              t.Name,
 		Remark:            t.Remark,
 		PinnedAt:          t.PinnedAt,
@@ -171,6 +173,7 @@ func (t *Task) updateLifecycle(update func(*taskLifecycleState)) {
 	state := t.lifecycleSnapshotLocked()
 	update(&state)
 	t.ShareGlobalAssets = state.ShareGlobalAssets
+	t.WorkerCount = state.WorkerCount
 	t.Name = state.Name
 	t.Remark = state.Remark
 	t.PinnedAt = state.PinnedAt
@@ -282,13 +285,14 @@ type Manager struct {
 	// taskStateMu preserves commit order between PostgreSQL lifecycle writes and
 	// their in-memory mirrors. lifecycleMu makes snapshots race-free, but without
 	// this outer write lock an older request could commit first and publish last.
-	taskStateMu sync.Mutex
-	controlMu   *sync.Mutex // Server's admission/task-control mutex, when attached.
-	mu          sync.RWMutex
-	tasks       map[string]*Task
-	active      string
-	trafficOn   bool // 流量捕获开关（默认关；settings.traffic_capture）
-	llmRecOn    bool // LLM 录制开关（默认关；settings.llm_record）
+	taskStateMu         sync.Mutex
+	controlMu           *sync.Mutex // Server's admission/task-control mutex, when attached.
+	mu                  sync.RWMutex
+	tasks               map[string]*Task
+	workerConfigChanged func()
+	active              string
+	trafficOn           bool // 流量捕获开关（默认关；settings.traffic_capture）
+	llmRecOn            bool // LLM 录制开关（默认关；settings.llm_record）
 	// 联网搜索开关与来源（默认关；settings.web_search_*）。brave-free 需要 braveKey；tavily 需要 tavilyKey。
 	// webSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关。
 	webSearchOn      bool
@@ -309,6 +313,23 @@ type Manager struct {
 // SetTaskControlMutex lets lifecycle operations that originate in Manager
 // participate in the Server's admission/task-control critical section.
 func (m *Manager) SetTaskControlMutex(mu *sync.Mutex) { m.controlMu = mu }
+
+// SetWorkerConfigChangedCallback installs the engine's live worker reconciler.
+// Successful worker-setting writes invoke it after releasing Manager locks.
+func (m *Manager) SetWorkerConfigChangedCallback(callback func()) {
+	m.mu.Lock()
+	m.workerConfigChanged = callback
+	m.mu.Unlock()
+}
+
+func (m *Manager) notifyWorkerConfigChanged() {
+	m.mu.RLock()
+	callback := m.workerConfigChanged
+	m.mu.RUnlock()
+	if callback != nil {
+		callback()
+	}
+}
 
 // Settings keys the UI toggles at runtime.
 const (
@@ -433,6 +454,9 @@ func ExpandWorkerSlots(pools []WorkerPool, legacy int) ([]WorkerSlot, error) {
 		if legacy <= 0 {
 			legacy = defaultWorkers
 		}
+		if legacy > pgdb.MaxTaskWorkerCount {
+			legacy = pgdb.MaxTaskWorkerCount
+		}
 		slots := make([]WorkerSlot, legacy)
 		for i := range slots {
 			slots[i] = WorkerSlot{Name: fmt.Sprintf("work#%d", i+1)}
@@ -478,8 +502,8 @@ func (m *Manager) SetConcurrency(enabled bool, limit int) error {
 	return m.pg.SetSetting(settingConcurrencyOn, strconv.FormatBool(enabled))
 }
 
-// Workers returns the configured concurrent work-agent count (default 3). Read
-// per-task at engine.Run, so a change applies to tasks started afterwards.
+// Workers returns the configured concurrent work-agent count (default 3),
+// capped at the supported maximum even for settings saved by older versions.
 func (m *Manager) Workers() int {
 	v, ok, err := m.pg.GetSetting(settingWorkers)
 	if err != nil || !ok {
@@ -488,6 +512,9 @@ func (m *Manager) Workers() int {
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n <= 0 {
 		return defaultWorkers
+	}
+	if n > pgdb.MaxTaskWorkerCount {
+		return pgdb.MaxTaskWorkerCount
 	}
 	return n
 }
@@ -542,23 +569,31 @@ func (m *Manager) SetWorkerPools(pools []WorkerPool, legacyWorkers ...int) error
 			workerCount += pool.Workers
 		}
 	} else if len(legacyWorkers) > 0 {
-		if legacyWorkers[0] <= 0 {
-			return fmt.Errorf("workers 必须 >0")
+		if legacyWorkers[0] <= 0 || legacyWorkers[0] > pgdb.MaxTaskWorkerCount {
+			return fmt.Errorf("workers 必须在 1 到 %d 之间", pgdb.MaxTaskWorkerCount)
 		}
 		workerCount = legacyWorkers[0]
 	}
-	return m.pg.SetSettingsAtomic(context.Background(), map[string]string{
+	if err := m.pg.SetSettingsAtomic(context.Background(), map[string]string{
 		settingWorkerPools: string(b),
 		settingWorkers:     strconv.Itoa(workerCount),
-	})
+	}); err != nil {
+		return err
+	}
+	m.notifyWorkerConfigChanged()
+	return nil
 }
 
-// SetWorkers persists the concurrent work-agent count. Values <=0 are rejected.
+// SetWorkers persists the concurrent work-agent count and reconciles live tasks.
 func (m *Manager) SetWorkers(n int) error {
-	if n <= 0 {
-		return fmt.Errorf("workers 必须 >0")
+	if n <= 0 || n > pgdb.MaxTaskWorkerCount {
+		return fmt.Errorf("workers 必须在 1 到 %d 之间", pgdb.MaxTaskWorkerCount)
 	}
-	return m.pg.SetSetting(settingWorkers, strconv.Itoa(n))
+	if err := m.pg.SetSetting(settingWorkers, strconv.Itoa(n)); err != nil {
+		return err
+	}
+	m.notifyWorkerConfigChanged()
+	return nil
 }
 
 // Enrich returns the asset auto-completion engine (may be nil if init failed).
@@ -1179,8 +1214,8 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 	}
 }
 
-// UpdateTaskMetadata changes task metadata and asset visibility without interrupting any
-// planner, main-agent, or worker call.
+// UpdateTaskMetadata changes task metadata, asset visibility, and worker policy
+// without interrupting any planner, main-agent, or worker call.
 func (m *Manager) UpdateTaskMetadata(taskID string, patch pgdb.TaskPatch) (*Task, error) {
 	m.taskStateMu.Lock()
 	defer m.taskStateMu.Unlock()
@@ -1200,6 +1235,7 @@ func (m *Manager) UpdateTaskMetadata(taskID string, patch pgdb.TaskPatch) (*Task
 	}
 	task.updateLifecycle(func(state *taskLifecycleState) {
 		state.ShareGlobalAssets = updated.ShareGlobalAssets
+		state.WorkerCount = updated.WorkerCount
 		state.Name = updated.Name
 		state.Remark = updated.Remark
 		state.PinnedAt = unixOrZero(updated.PinnedAt)
