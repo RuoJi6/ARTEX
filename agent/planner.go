@@ -21,6 +21,7 @@ import (
 // assets, judges whether the task goal is met, and emits 0..N exploration intents
 // into the frontier. It is the sole intent generator.
 type Planner struct {
+	outputLang        string // see OutputLangDirective ("zh" or "en")
 	findingRecorder   FindingRecorder
 	prov              llm.Provider
 	model             string
@@ -396,6 +397,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	if p.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,框定探索边界
 	}
+	sysBody += OutputLangDirective(p.outputLang)
 	system, boundary := deferredSystem(sysBody, def)
 	// planner 无自身墙钟预算;有 deadline 时把 MaxDuration 夹逼到剩余,让在跑的规划轮在
 	// 任务到点时进收尾(因超时→任务超时词,因步数→per-run 词)。
@@ -474,3 +476,6 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		})
 	return tsx.GoalMet, tsx.Reason, err
 }
+
+// SetOutputLang sets the language this agent writes in ("zh" or "en").
+func (a *Planner) SetOutputLang(lang string) { a.outputLang = NormalizeOutputLang(lang) }

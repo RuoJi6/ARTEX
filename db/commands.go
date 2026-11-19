@@ -181,6 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_llm_records_session ON llm_records(session_id);
 // llmRecordsMigrate adds new columns to existing tables.
 const llmRecordsMigrate = `
 ALTER TABLE llm_records ADD COLUMN IF NOT EXISTS task_id TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS output_language TEXT NOT NULL DEFAULT 'zh';
 ALTER TABLE llm_records ADD COLUMN IF NOT EXISTS worker TEXT;
 ALTER TABLE llm_records ADD COLUMN IF NOT EXISTS profile_name TEXT;
 ALTER TABLE llm_records ADD COLUMN IF NOT EXISTS raw_request TEXT;
