@@ -3,6 +3,20 @@ export const errorMessages = {
     "情报数据响应不完整，请刷新后重试",
     "The intelligence response is incomplete. Refresh to try again.",
   ],
+  "error.backup_busy": ["已有备份或恢复正在进行", "A backup or restore is already in progress"],
+  "error.backup_active_tasks": [
+    "存在未暂停的运行中或排队中任务，请先暂停或等待任务完成后再下载备份",
+    "Active or queued tasks are running. Pause them or wait for them to finish before downloading a backup.",
+  ],
+  "error.backup_update_running": [
+    "更新正在进行中，无法恢复备份",
+    "An update is in progress. The backup cannot be restored now.",
+  ],
+  "error.backup_invalid": ["备份包无效：{{message}}", "Invalid backup package: {{message}}"],
+  "error.demo_backup_disabled": [
+    "演示模式不支持备份与恢复，请在实际部署中使用",
+    "Backup and restore are not available in the demo. Use them in a deployed instance.",
+  ],
   "error.basic_auth_required": ["请先完成 HTTP Basic Auth 验证", "Complete HTTP Basic Auth verification first"],
   "error.auth_session_failed": ["认证会话生成失败", "Unable to create an authentication session"],
   "error.basic_auth_username_invalid": [
