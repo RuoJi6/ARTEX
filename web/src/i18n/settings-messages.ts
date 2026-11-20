@@ -130,8 +130,8 @@ export const settingsMessages = {
   "settings.backup.restoreFailedPrefix": ["恢复失败：", "Restore failed: "],
   "settings.backup.confirmTitle": ["用备份替换当前全部数据？", "Replace all current data with this backup?"],
   "settings.backup.confirmBody": [
-    "当前实例的任务、资产、漏洞、配置、文件和流量都会被「{{name}}」中的内容替换，且无法撤销。上传校验通过后程序会重启，正在运行的任务会被中断。建议先下载一份当前数据的备份。",
-    "Tasks, assets, findings, settings, files and traffic on this instance will be replaced by the contents of “{{name}}”. This cannot be undone. After the upload is verified, ARTEX restarts and running tasks are interrupted. Download a backup of the current data first.",
+    "当前实例的任务、资产、漏洞、配置、文件和流量都会被「{{name}}」中的内容替换，且无法撤销。上传校验通过后程序会重启并停止当前运行中的任务；备份中未结束的任务在恢复后会保持暂停，不会自动继续执行。建议先下载一份当前数据的备份。",
+    "Tasks, assets, findings, settings, files and traffic on this instance will be replaced by the contents of “{{name}}”. This cannot be undone. After the upload is verified, ARTEX restarts and stops tasks currently running here; any unfinished tasks from the backup start paused rather than resuming automatically. Download a backup of the current data first.",
   ],
   "settings.backup.cancel": ["取消", "Cancel"],
   "settings.backup.confirm": ["替换并重启", "Replace and restart"],
@@ -140,8 +140,8 @@ export const settingsMessages = {
     "Backup verified. Restarting to restore data. Please wait; the page will reload automatically…",
   ],
   "settings.backup.restoreTimeout": [
-    "等待服务重启超时。请检查后端日志，或确认 artex 是通过 start.sh / start.bat 启动的。",
-    "Timed out waiting for the service to restart. Check the backend logs and confirm ARTEX was started with start.sh / start.bat.",
+    "等待服务重启超时（大备份的数据库恢复可能仍在进行）。请查看后端日志、稍后刷新页面，或确认 artex 是通过 start.sh / start.bat 启动的。",
+    "Timed out waiting for the service to restart (a large backup may still be restoring on the server). Check the backend logs, refresh later, or confirm ARTEX was started with start.sh / start.bat.",
   ],
   "settings.backup.lastRestoreOk": [
     "已于 {{time}} 从备份恢复（备份版本 {{version}}）。",
@@ -153,8 +153,8 @@ export const settingsMessages = {
     "An uploaded backup will be restored at the next restart.",
   ],
   "settings.backup.note": [
-    "恢复需要相同或更新版本的 ARTEX。登录密码、Basic Auth 与 LLM 配置随数据库一起迁移，恢复后请使用原实例的密码登录；新机器上已有的同名 skill 保留本机版本。",
-    "Restoring requires the same or a newer ARTEX version. The sign-in password, Basic Auth and LLM settings move with the database, so sign in with the original instance's password afterwards. Skills that already exist on the new machine keep the local copy.",
+    "下载备份前需先暂停或等待所有运行中、排队中的任务结束。恢复需要相同或更新版本的 ARTEX；登录密码、Basic Auth 与 LLM 配置随数据库一起迁移，恢复后请使用原实例的密码登录；新机器上已有的同名 skill 保留本机版本。",
+    "Pause or finish active and queued tasks before downloading a backup. Restoring requires the same or a newer ARTEX version. The sign-in password, Basic Auth and LLM settings move with the database, so sign in with the original instance's password afterwards. Skills that already exist on the new machine keep the local copy.",
   ],
   "settings.keywords.basicAuth": [
     "基础认证 登录 用户名 密码",

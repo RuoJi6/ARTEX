@@ -90,6 +90,20 @@ func queryTables(ctx context.Context, tx pgx.Tx) ([]BackupTable, error) {
 	return tables, rows.Err()
 }
 
+// CountActiveTasks returns how many non-deleted, non-terminal tasks are not
+// paused (running, created/unpaused, or queued). Exporting while any exist
+// would race with live disk writes and put active tasks into the backup.
+func (d *DB) CountActiveTasks(ctx context.Context) (int, error) {
+	var count int
+	err := d.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM tasks
+WHERE deleted_at IS NULL
+  AND paused = false
+  AND status NOT IN ('done', 'failed', 'timeout')`).Scan(&count)
+	return count, err
+}
+
 // DumpTables exports every application table from a single read-only
 // REPEATABLE READ snapshot, so rows written while the dump runs never produce a
 // backup whose tables disagree with each other. emit is called once per table
@@ -237,6 +251,24 @@ UPDATE task_archives SET archive_path = $2 || replace(substr(archive_path, lengt
 WHERE left(archive_path, length($1)) = $1`, from, to, move.FromSeparator, move.ToSeparator); err != nil {
 				return fmt.Errorf("改写归档包路径: %w", err)
 			}
+		}
+		// Any non-terminal task that was not paused when backed up (for example,
+		// from an older backup) is forced into a manual pause so restoring onto a
+		// new host never resumes scanning targets on its own.
+		if _, err := tx.Exec(ctx, `
+UPDATE tasks
+SET paused = true,
+    pause_reason = CASE WHEN COALESCE(pause_reason, '') = '' THEN 'paused_by_user' ELSE pause_reason END,
+    queued = false,
+    queued_at = NULL,
+    schedule_paused = false,
+    schedule_manual_until = NULL,
+    active_run_seconds = active_run_seconds + CASE WHEN run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
+    run_segment_started_at = NULL
+WHERE deleted_at IS NULL
+  AND paused = false
+  AND status NOT IN ('done', 'failed', 'timeout')`); err != nil {
+			return fmt.Errorf("暂停恢复后的未完成任务: %w", err)
 		}
 		for _, key := range keys {
 			if _, err := tx.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s %s", key.table, ident(key.name), key.definition)); err != nil {

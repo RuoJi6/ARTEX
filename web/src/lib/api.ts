@@ -168,6 +168,7 @@ export interface BackupStatus {
   pending: boolean;
   // 本次启动时执行的恢复结果；未执行恢复时为 null。
   last_restore: {
+    id?: string;
     applied: boolean;
     error?: string;
     at: string;
@@ -439,11 +440,10 @@ export const api = {
       method: "HEAD",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    if (!response.ok)
-      throw new ApiError(
-        `HEAD /system/backup/export: ${response.status}`,
-        response.status === 409 ? "backup_busy" : undefined,
-      );
+    if (!response.ok) {
+      const code = response.headers.get("X-Artex-Error-Code") ?? (response.status === 409 ? "backup_busy" : undefined);
+      throw new ApiError(`HEAD /system/backup/export: ${response.status}`, code);
+    }
     const a = document.createElement("a");
     a.href = "/api/system/backup/export";
     document.body.appendChild(a);
@@ -451,7 +451,7 @@ export const api = {
     a.remove();
   },
   restoreBackup: (file: File) =>
-    http<{ ok: boolean; version: string; created_at: string }>("/system/backup/restore", {
+    http<{ ok: boolean; restore_id: string; version: string; created_at: string }>("/system/backup/restore", {
       method: "POST",
       body: file,
       headers: { "Content-Type": "application/octet-stream" },

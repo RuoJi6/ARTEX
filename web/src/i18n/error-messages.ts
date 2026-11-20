@@ -4,6 +4,10 @@ export const errorMessages = {
     "The intelligence response is incomplete. Refresh to try again.",
   ],
   "error.backup_busy": ["已有备份或恢复正在进行", "A backup or restore is already in progress"],
+  "error.backup_active_tasks": [
+    "存在未暂停的运行中或排队中任务，请先暂停或等待任务完成后再下载备份",
+    "Active or queued tasks are running. Pause them or wait for them to finish before downloading a backup.",
+  ],
   "error.backup_update_running": [
     "更新正在进行中，无法恢复备份",
     "An update is in progress. The backup cannot be restored now.",

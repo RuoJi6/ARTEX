@@ -3,6 +3,8 @@ package server
 import (
 	"archive/tar"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,10 +26,10 @@ import (
 //
 // 备份包是 tar.zst，结构：
 //
-//	db/<table>.copy   PostgreSQL 各表的 COPY 文本数据（同一个快照事务内导出）
+//	db/<table>.copy   PostgreSQL 各表的 COPY 文本数据（大表按分片追加 .000001…）
 //	files/<rel>       数据目录（任务工作区、会话、流量、证据、归档包、MITM CA…）
 //	skills/<name>/…   skill 目录
-//	manifest.json     最后写入：表结构与行数、来源数据目录、顶层条目清单
+//	manifest.json     最后写入：表结构、分片与行数、来源数据目录、顶层条目清单
 //
 // 恢复分两步：上传时只解包到 <data>/.restore-pending 并对照当前 schema 校验，
 // 然后请求重启；真正的替换在下次启动、任何组件打开数据之前由 ApplyPendingRestore
@@ -35,16 +37,21 @@ import (
 // 数据库在一个事务内整体替换，失败则保持原数据不动。
 
 const (
-	backupFormat       = 1
-	backupManifestName = "manifest.json"
-	backupPendingDir   = ".restore-pending"
-	backupUploadPrefix = ".restore-upload-"
-	backupPreviousDir  = ".restore-previous"
-	backupFailedDir    = ".restore-failed"
-	backupDBDoneMarker = ".db-restored"
-	backupMaxFiles     = 20_000_000
-	backupTrafficIndex = "traffic/_index" // live SQLite; exported via SnapshotIndex
+	backupFormat        = 1
+	backupManifestName  = "manifest.json"
+	backupPendingDir    = ".restore-pending"
+	backupUploadPrefix  = ".restore-upload-"
+	backupPreviousDir   = ".restore-previous"
+	backupFailedDir     = ".restore-failed"
+	backupDBDoneMarker  = ".db-restored"
+	backupRestoreIDFile = ".restore-id"
+	backupMaxFiles      = 20_000_000
+	backupTrafficIndex  = "traffic/_index" // live SQLite; exported via SnapshotIndex
 )
+
+// backupCopyChunkBytes bounds each streamed DB COPY tar entry so large tables
+// flush compressed bytes to the client without disk spooling or proxy timeouts.
+var backupCopyChunkBytes = 8 << 20
 
 // backupSkipped lists data-dir paths (slash form, relative) that hold transient
 // staging state rather than data. Top-level dot entries are skipped as well.
@@ -56,13 +63,18 @@ var backupSkipped = map[string]bool{
 	"traffic/_index/.snapshot": true,
 }
 
+type backupTableEntry struct {
+	pgdb.BackupTable
+	Parts int `json:"parts,omitempty"`
+}
+
 type backupManifest struct {
 	Format    int                `json:"format"`
 	Version   string             `json:"version"`
 	CreatedAt time.Time          `json:"created_at"`
 	DataDir   string             `json:"data_dir"`
 	Separator string             `json:"separator"`
-	Tables    []pgdb.BackupTable `json:"tables"`
+	Tables    []backupTableEntry `json:"tables"`
 	Entries   []string           `json:"entries"`
 	Skills    []string           `json:"skills"`
 }
@@ -75,6 +87,7 @@ var backupMu sync.Mutex
 // BackupRestoreResult is the outcome of the boot-time restore, reported to the
 // UI after the restart that applied it.
 type BackupRestoreResult struct {
+	ID      string    `json:"id,omitempty"`
 	Applied bool      `json:"applied"`
 	Error   string    `json:"error,omitempty"`
 	At      time.Time `json:"at"`
@@ -113,10 +126,22 @@ func (s *Server) backupExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !backupMu.TryLock() {
+		w.Header().Set("X-Artex-Error-Code", "backup_busy")
 		writeProductError(w, 409, "backup_busy", "已有备份或恢复正在进行", nil)
 		return
 	}
 	defer backupMu.Unlock()
+	active, err := s.m.pg.CountActiveTasks(r.Context())
+	if err != nil {
+		log.Printf("[backup] 检查运行中任务失败：%v", err)
+		writeProductError(w, 500, "data_unavailable", "检查运行中任务失败", nil)
+		return
+	}
+	if active > 0 {
+		w.Header().Set("X-Artex-Error-Code", "backup_active_tasks")
+		writeProductError(w, 409, "backup_active_tasks", "存在未暂停的运行中或排队中任务，请先暂停或等待任务完成后再下载备份", map[string]any{"count": active})
+		return
+	}
 	name := "artex-backup-" + time.Now().Format("20060102-150405") + ".tar.zst"
 	w.Header().Set("Content-Type", "application/zstd")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -134,45 +159,70 @@ func (s *Server) backupExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeBackup(ctx context.Context, out io.Writer) error {
-	spool, err := os.MkdirTemp(s.m.dir, ".backup-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(spool)
 	encoder, err := zstd.NewWriter(out, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(true))
 	if err != nil {
 		return err
 	}
+	flusher, _ := out.(http.Flusher)
 	tw := tar.NewWriter(encoder)
 	manifest := backupManifest{
 		Format: backupFormat, Version: BuildVersion, CreatedAt: time.Now().UTC(),
 		DataDir: s.m.dir, Separator: string(filepath.Separator), Entries: []string{}, Skills: []string{},
 	}
+	chunkMax := backupCopyChunkBytes
+	if chunkMax <= 0 {
+		chunkMax = 8 << 20
+	}
+	var copyBuf []byte
 	err = s.m.pg.DumpTables(ctx, func(table pgdb.BackupTable, copyTo func(io.Writer) (int64, error)) error {
-		path := filepath.Join(spool, "table.copy")
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, archiveFileMode)
+		cw := copyChunkWriter{
+			tw:       tw,
+			encoder:  encoder,
+			flusher:  flusher,
+			table:    table.Name,
+			modTime:  manifest.CreatedAt,
+			buf:      copyBuf[:0],
+			chunkMax: chunkMax,
+		}
+		rows, copyErr := copyTo(&cw)
+		if copyErr != nil {
+			return copyErr
+		}
+		parts, err := cw.finish()
 		if err != nil {
 			return err
 		}
-		rows, copyErr := copyTo(file)
-		if err := errors.Join(copyErr, file.Close()); err != nil {
-			return err
-		}
+		copyBuf = cw.buf[:0]
 		table.Rows = rows
-		manifest.Tables = append(manifest.Tables, table)
-		return addBackupFile(tw, path, "db/"+table.Name+".copy")
+		entry := backupTableEntry{BackupTable: table}
+		if parts > 1 {
+			entry.Parts = parts
+		}
+		manifest.Tables = append(manifest.Tables, entry)
+		return nil
 	})
 	if err != nil {
 		return err
 	}
 	snapshot := ""
 	if tr := s.m.Traffic(); tr != nil {
+		spool, err := os.MkdirTemp(s.m.dir, ".backup-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(spool)
 		snapshot = filepath.Join(spool, "index.sqlite")
 		if err := tr.SnapshotIndex(snapshot); err != nil {
 			return fmt.Errorf("快照流量索引: %w", err)
 		}
 		if err := addBackupFile(tw, snapshot, "files/"+backupTrafficIndex+"/index.sqlite"); err != nil {
 			return err
+		}
+		if err := encoder.Flush(); err != nil {
+			return err
+		}
+		if flusher != nil {
+			flusher.Flush()
 		}
 	}
 	err = walkBackupTree(s.m.dir, func(relative string, info fs.FileInfo) (bool, error) {
@@ -221,6 +271,84 @@ func (s *Server) writeBackup(ctx context.Context, out io.Writer) error {
 		return err
 	}
 	return encoder.Close()
+}
+
+func backupTableCopyPath(table string, part int) string {
+	if part == 0 {
+		return "db/" + table + ".copy"
+	}
+	return fmt.Sprintf("db/%s.copy.%06d", table, part)
+}
+
+func backupTablesOnly(entries []backupTableEntry) []pgdb.BackupTable {
+	tables := make([]pgdb.BackupTable, len(entries))
+	for i, entry := range entries {
+		tables[i] = entry.BackupTable
+	}
+	return tables
+}
+
+type copyChunkWriter struct {
+	tw       *tar.Writer
+	encoder  *zstd.Encoder
+	flusher  http.Flusher
+	table    string
+	modTime  time.Time
+	buf      []byte
+	chunkMax int
+	parts    int
+}
+
+func (w *copyChunkWriter) Write(p []byte) (int, error) {
+	total := len(p)
+	for len(p) > 0 {
+		space := w.chunkMax - len(w.buf)
+		n := min(space, len(p))
+		w.buf = append(w.buf, p[:n]...)
+		p = p[n:]
+		if len(w.buf) == w.chunkMax {
+			if err := w.flushChunk(); err != nil {
+				return total - len(p), err
+			}
+		}
+	}
+	return total, nil
+}
+
+func (w *copyChunkWriter) finish() (int, error) {
+	if len(w.buf) > 0 || w.parts == 0 {
+		if err := w.flushChunk(); err != nil {
+			return w.parts, err
+		}
+	}
+	return w.parts, nil
+}
+
+func (w *copyChunkWriter) flushChunk() error {
+	header := &tar.Header{
+		Name:     backupTableCopyPath(w.table, w.parts),
+		Mode:     archiveFileMode,
+		Size:     int64(len(w.buf)),
+		ModTime:  w.modTime,
+		Typeflag: tar.TypeReg,
+	}
+	if err := w.tw.WriteHeader(header); err != nil {
+		return err
+	}
+	if len(w.buf) > 0 {
+		if _, err := w.tw.Write(w.buf); err != nil {
+			return err
+		}
+	}
+	w.buf = w.buf[:0]
+	w.parts++
+	if err := w.encoder.Flush(); err != nil {
+		return err
+	}
+	if w.flusher != nil {
+		w.flusher.Flush()
+	}
+	return nil
 }
 
 // walkBackupTree visits root's descendants in lexical order with slash-form
@@ -315,24 +443,32 @@ func (s *Server) backupRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer backupMu.Unlock()
-	manifest, err := s.stageBackupUpload(r.Context(), r.Body)
+	manifest, restoreID, err := s.stageBackupUpload(r.Context(), r.Body)
 	if err != nil {
 		log.Printf("[backup] 恢复包校验失败：%v", err)
 		writeProductError(w, 400, "backup_invalid", "备份包无效："+err.Error(), map[string]any{"message": err.Error()})
 		return
 	}
 	log.Printf("[backup] 已接收备份（版本 %s，创建于 %s），即将重启以完成恢复", manifest.Version, manifest.CreatedAt.Format(time.RFC3339))
-	writeJSON(w, 202, map[string]any{"ok": true, "version": manifest.Version, "created_at": manifest.CreatedAt})
+	writeJSON(w, 202, map[string]any{"ok": true, "restore_id": restoreID, "version": manifest.Version, "created_at": manifest.CreatedAt})
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		requestRestart()
 	}()
 }
 
-func (s *Server) stageBackupUpload(ctx context.Context, body io.Reader) (*backupManifest, error) {
+func newBackupRestoreID() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err == nil {
+		return hex.EncodeToString(raw[:])
+	}
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+func (s *Server) stageBackupUpload(ctx context.Context, body io.Reader) (*backupManifest, string, error) {
 	upload, err := os.MkdirTemp(s.m.dir, backupUploadPrefix)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	staged := false
 	defer func() {
@@ -341,24 +477,41 @@ func (s *Server) stageBackupUpload(ctx context.Context, body io.Reader) (*backup
 		}
 	}()
 	if err := extractTarZst(body, upload, backupMaxFiles); err != nil {
-		return nil, fmt.Errorf("解包失败: %w", err)
+		return nil, "", fmt.Errorf("解包失败: %w", err)
 	}
 	manifest, err := readBackupManifest(upload)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if err := s.m.pg.CheckRestoreTables(ctx, manifest.Tables); err != nil {
-		return nil, err
+	if err := s.m.pg.CheckRestoreTables(ctx, backupTablesOnly(manifest.Tables)); err != nil {
+		return nil, "", err
+	}
+	restoreID := newBackupRestoreID()
+	if err := os.WriteFile(filepath.Join(upload, backupRestoreIDFile), []byte(restoreID), archiveFileMode); err != nil {
+		return nil, "", err
 	}
 	pending := filepath.Join(s.m.dir, backupPendingDir)
-	if err := os.RemoveAll(pending); err != nil {
-		return nil, err
+	oldPending := upload + "-old"
+	hadPending := false
+	if _, err := os.Lstat(pending); err == nil {
+		if err := os.Rename(pending, oldPending); err != nil {
+			return nil, "", err
+		}
+		hadPending = true
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, "", err
 	}
 	if err := os.Rename(upload, pending); err != nil {
-		return nil, err
+		if hadPending {
+			_ = os.Rename(oldPending, pending)
+		}
+		return nil, "", err
 	}
 	staged = true
-	return manifest, nil
+	if hadPending {
+		_ = os.RemoveAll(oldPending)
+	}
+	return manifest, restoreID, nil
 }
 
 // readBackupManifest loads and validates the manifest of an extracted package:
@@ -386,8 +539,14 @@ func readBackupManifest(root string) (*backupManifest, error) {
 		if !singleElement(table.Name) || len(table.Columns) == 0 {
 			return nil, fmt.Errorf("备份表名无效: %q", table.Name)
 		}
-		if _, err := os.Stat(filepath.Join(root, "db", table.Name+".copy")); err != nil {
-			return nil, fmt.Errorf("缺少表 %s 的数据", table.Name)
+		parts := max(table.Parts, 1)
+		if table.Parts < 0 || parts > backupMaxFiles {
+			return nil, fmt.Errorf("备份表 %s 分片数无效: %d", table.Name, table.Parts)
+		}
+		for part := range parts {
+			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(backupTableCopyPath(table.Name, part)))); err != nil {
+				return nil, fmt.Errorf("缺少表 %s 的数据", table.Name)
+			}
 		}
 	}
 	for _, name := range manifest.Entries {
@@ -416,7 +575,7 @@ func singleElement(name string) bool {
 // rename at a time, so a crash at any point is finished by the next boot. A
 // database failure leaves current data untouched and parks the package in
 // .restore-failed for inspection.
-func ApplyPendingRestore(dataDir, skillDir string) *BackupRestoreResult {
+func ApplyPendingRestore(dataDir, skillDir string) (*BackupRestoreResult, error) {
 	if abs, err := filepath.Abs(dataDir); err == nil {
 		dataDir = abs
 	}
@@ -427,10 +586,13 @@ func ApplyPendingRestore(dataDir, skillDir string) *BackupRestoreResult {
 			_ = os.RemoveAll(previous) // leftover of a restore that crashed during cleanup
 		}
 		cleanBackupUploads(dataDir)
-		return nil
+		return nil, nil
 	}
 	cleanBackupUploads(dataDir)
 	result := &BackupRestoreResult{At: time.Now()}
+	if rawID, err := os.ReadFile(filepath.Join(pending, backupRestoreIDFile)); err == nil {
+		result.ID = strings.TrimSpace(string(rawID))
+	}
 	manifest, err := readBackupManifest(pending)
 	if err == nil {
 		result.Source, result.Created = manifest.Version, manifest.CreatedAt
@@ -446,23 +608,26 @@ func ApplyPendingRestore(dataDir, skillDir string) *BackupRestoreResult {
 			log.Printf("[backup] 无法移走失败的恢复包，删除之：%v", renameErr)
 			_ = os.RemoveAll(pending)
 		}
-		return result
+		return result, nil
 	}
 	if err := installBackupFiles(pending, dataDir, skillDir, manifest); err != nil {
-		// The database is already replaced; files are retried on the next boot.
+		// The database is already replaced; do not start the engine on half-installed
+		// files. Returning an error makes main exit non-zero so the supervisor retries.
 		result.Error = "数据库已恢复，但文件替换失败（下次启动会继续）：" + err.Error()
 		log.Printf("[backup] %s", result.Error)
-		return result
+		return result, err
 	}
 	if err := os.RemoveAll(previous); err != nil {
 		log.Printf("[backup] 清理旧数据失败：%v", err)
 	}
 	if err := os.RemoveAll(pending); err != nil {
-		log.Printf("[backup] 清理恢复包失败：%v", err)
+		result.Error = "恢复已完成，但清理暂存目录失败：" + err.Error()
+		log.Printf("[backup] %s", result.Error)
+		return result, err
 	}
 	result.Applied = true
 	log.Printf("[backup] 备份恢复完成")
-	return result
+	return result, nil
 }
 
 func cleanBackupUploads(dataDir string) {
@@ -497,8 +662,11 @@ func restoreBackupDatabase(pending, dataDir string, manifest *backupManifest) er
 	}
 	tables := make([]pgdb.RestoreTable, len(manifest.Tables))
 	for i, table := range manifest.Tables {
-		path := filepath.Join(pending, "db", table.Name+".copy")
-		tables[i] = pgdb.RestoreTable{BackupTable: table, Open: func() (io.ReadCloser, error) { return os.Open(path) }}
+		name, parts := table.Name, max(table.Parts, 1)
+		tables[i] = pgdb.RestoreTable{
+			BackupTable: table.BackupTable,
+			Open:        func() (io.ReadCloser, error) { return openBackupTableParts(pending, name, parts) },
+		}
 	}
 	move := pgdb.PathPrefixMove{From: manifest.DataDir, FromSeparator: manifest.Separator, To: dataDir, ToSeparator: string(filepath.Separator)}
 	if err := pg.RestoreTables(context.Background(), tables, move); err != nil {
@@ -514,6 +682,62 @@ func restoreBackupDatabase(pending, dataDir string, manifest *backupManifest) er
 		}
 	}
 	return writeArchiveJournal(marker, map[string]any{"at": time.Now()})
+}
+
+func openBackupTableParts(pending, table string, parts int) (io.ReadCloser, error) {
+	if parts <= 1 {
+		return os.Open(filepath.Join(pending, filepath.FromSlash(backupTableCopyPath(table, 0))))
+	}
+	paths := make([]string, parts)
+	for i := range parts {
+		paths[i] = filepath.Join(pending, filepath.FromSlash(backupTableCopyPath(table, i)))
+	}
+	return &multiFileReader{paths: paths}, nil
+}
+
+type multiFileReader struct {
+	paths   []string
+	index   int
+	current *os.File
+}
+
+func (r *multiFileReader) Read(p []byte) (int, error) {
+	for {
+		if r.current == nil {
+			if r.index >= len(r.paths) {
+				return 0, io.EOF
+			}
+			f, err := os.Open(r.paths[r.index])
+			if err != nil {
+				return 0, err
+			}
+			r.current = f
+			r.index++
+		}
+		n, err := r.current.Read(p)
+		if n > 0 || (err != nil && !errors.Is(err, io.EOF)) {
+			if errors.Is(err, io.EOF) {
+				_ = r.current.Close()
+				r.current = nil
+				return n, nil
+			}
+			return n, err
+		}
+		if closeErr := r.current.Close(); closeErr != nil {
+			r.current = nil
+			return 0, closeErr
+		}
+		r.current = nil
+	}
+}
+
+func (r *multiFileReader) Close() error {
+	if r.current != nil {
+		err := r.current.Close()
+		r.current = nil
+		return err
+	}
+	return nil
 }
 
 func installBackupFiles(pending, dataDir, skillDir string, manifest *backupManifest) error {

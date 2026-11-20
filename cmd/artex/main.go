@@ -95,7 +95,12 @@ func run() int {
 	if abs, err := filepath.Abs(skillDir); err == nil {
 		skillDir = abs
 	}
-	server.SetBootRestoreResult(server.ApplyPendingRestore(*dataDir, skillDir))
+	restoreResult, err := server.ApplyPendingRestore(*dataDir, skillDir)
+	if err != nil {
+		log.Printf("[backup] 恢复文件替换未完成，终止本次启动等待重试：%v", err)
+		return 1
+	}
+	server.SetBootRestoreResult(restoreResult)
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

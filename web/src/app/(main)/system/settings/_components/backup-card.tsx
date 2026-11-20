@@ -49,9 +49,9 @@ export function BackupCard() {
     }
   };
 
-  // 重启期间接口连不上是预期的；以"出现了晚于本次上传的恢复结果"为准判断新进程已就绪。
+  // 重启期间接口连不上是预期的；以"返回本次上传对应的 restore_id 结果"为准判断新进程已就绪。
   const waitForRestore = React.useCallback(
-    async (since: number) => {
+    async (restoreId: string) => {
       setRestarting(true);
       const deadline = Date.now() + RESTORE_TIMEOUT_MS;
       while (Date.now() < deadline) {
@@ -60,8 +60,7 @@ export function BackupCard() {
         await tick.promise;
         try {
           const next = await api.backupStatus();
-          const at = next.last_restore ? Date.parse(next.last_restore.at) : 0;
-          if (at >= since) {
+          if (next.last_restore?.id === restoreId) {
             window.location.reload();
             return;
           }
@@ -80,11 +79,10 @@ export function BackupCard() {
     const selected = file;
     setFile(null);
     setUploading(true);
-    const since = Date.now() - 60_000; // 容忍浏览器与服务器之间的时钟偏差
     try {
-      await api.restoreBackup(selected);
+      const res = await api.restoreBackup(selected);
       setUploading(false);
-      await waitForRestore(since);
+      await waitForRestore(res.restore_id);
     } catch (e) {
       setUploading(false);
       toast.error(t("settings.backup.restoreFailedPrefix") + localizedError(e, t));
