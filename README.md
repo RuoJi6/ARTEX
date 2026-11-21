@@ -4,6 +4,11 @@
 
 AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 
+<p>
+  <a href="https://wiki.chainreactors.red" target="_blank" rel="noopener noreferrer">
+    <img src="screenshots/chainreactors.png" alt="ChainReactors" height="45" />
+  </a>
+</p>
 
 🌐 **在线 Demo**： [https://artex-demo-ruoji6.vercel.app/](https://artex-demo-ruoji6.vercel.app/)
 
@@ -693,9 +698,15 @@ https://github.com/oritera/Cairn
 
 ### 开源协议
 
-本项目采用 **GNU Affero General Public License v3.0（AGPL-3.0）** 授权，完整条款见仓库根目录的 [LICENSE](LICENSE) 文件。
+本项目在个人学习与教育研究场景下采用 **GNU Affero General Public License v3.0（AGPL-3.0）** 授权，完整条款见仓库根目录的 [LICENSE](LICENSE) 文件。
 
 这意味着任何人都可以自由使用、修改和分发本项目，但**衍生作品必须同样以 AGPL-3.0 开源**；特别地，**若你修改本项目并通过网络（如部署为在线服务）向用户提供，也必须向这些用户公开对应的完整源码**。
+
+**商业使用与合作**：如希望在商业或闭源环境中使用本项目且不受 AGPL-3.0 开源义务限制，请联系 [business@chainreactors.ai](mailto:business@chainreactors.ai) 获取商业授权或洽谈合作。
+
+**贡献声明**：提交 Pull Request 即表示你同意你的贡献可同时在 AGPL-3.0 与本项目的商业许可下使用。
+
+**ARTEX by [ChainReactors](https://wiki.chainreactors.red)**
 
 > ⚠️ **重要提示**：开源协议本身不限制软件的使用用途。以下的「使用限制」与「免责声明」是作者对使用者的额外约定与郑重声明，请务必遵守。
 
