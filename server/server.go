@@ -423,7 +423,7 @@ func (s *Server) saveLLMConfig(cfg agent.Config) error {
 		return db.ErrJevProfileJudgeOnly
 	}
 	// cfg.Provider() returns one of the chat format strings
-	// (anthropic / openai / openai-responses), matching the DB CHECK constraint;
+	// (anthropic / openai / openai-responses / gemini), matching the DB CHECK constraint;
 	// Jev is intentionally handled by the dedicated intercept path.
 	format := cfg.Provider()
 	var id int64

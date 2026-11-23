@@ -214,6 +214,10 @@ export const messages = {
   ],
   "ui.ascending": ["正序", "ascending"],
   "ui.descending": ["倒序", "descending"],
+  "llm.maxTokensFieldHint.gemini": [
+    "仅 openai 格式可选。Gemini 的字段名固定为 maxOutputTokens。",
+    "Only configurable for the openai format. Gemini uses maxOutputTokens.",
+  ],
 } satisfies Record<string, readonly [string, string]>;
 
 const statuses: Record<string, readonly (readonly [string, string, string])[]> = {
