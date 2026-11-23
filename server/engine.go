@@ -111,8 +111,9 @@ type Engine struct {
 	// Every long-lived task goroutine (planner, workers and deadline coordinator)
 	// runs under one task-scoped context. Successful deletion cancels that context,
 	// waits for all goroutines, then releases every task-level Engine reference.
-	runtimeMu sync.Mutex
-	runtimes  map[string]*taskRuntime
+	runtimeMu   sync.Mutex
+	runtimes    map[string]*taskRuntime
+	workerPools sync.Map // taskID -> *taskWorkerPool; each pool serializes claims with resizing
 
 	// per-task execution context: each planner.Plan / worker.Execute runs under it,
 	// so pausing can CANCEL an in-flight run (not just skip the next one). Recreated
@@ -150,7 +151,7 @@ type Engine struct {
 	resolveAuthoritative bool
 	workerResolve        func(t *Task, slot WorkerSlot) (*agent.Worker, error)
 	slotState            sync.Map // task/slot -> slotAvailability
-	slotPlans            sync.Map // task -> map[slot name]profile ID; immutable for a run
+	slotPlans            sync.Map // task -> immutable snapshot of slot name/profile routing
 	// readiness reports whether a global LLM provider is configured — the signal behind
 	// Ready()/the llm_configured indicator. Wired once at startup; nil → not ready.
 	readiness    func() bool
@@ -297,6 +298,7 @@ func (e *Engine) StopTask(taskID string) {
 	e.inflight.Delete(taskID)
 	e.coordStarted.Delete(taskID)
 	e.slotPlans.Delete(taskID)
+	e.workerPools.Delete(taskID)
 	e.slotState.Range(func(key, _ any) bool {
 		keyText, ok := key.(string)
 		if ok && strings.HasPrefix(keyText, taskID+"/") {
@@ -406,10 +408,14 @@ func (e *Engine) ActiveLLMCalls(taskID string) int64 {
 func (e *Engine) touch(taskID string) { e.lastAct.Store(taskID, time.Now().Unix()) }
 
 func NewEngine(m *Manager) *Engine {
-	return &Engine{m: m, debounce: 800 * time.Millisecond, bc: NewBroadcaster(),
+	e := &Engine{m: m, debounce: 800 * time.Millisecond, bc: NewBroadcaster(),
 		execCancel: map[string]context.CancelCauseFunc{}, execCtx: map[string]context.Context{},
 		work: map[int64]*workExecution{}, steerBox: map[int64][]string{},
 		runtimes: map[string]*taskRuntime{}}
+	if m != nil {
+		m.SetWorkerConfigChangedCallback(e.ReconcileDefaultWorkers)
+	}
+	return e
 }
 
 // registerWork records the cancel for the work currently running intentID.
@@ -796,11 +802,6 @@ func (e *Engine) ReadyFor(t *Task) bool {
 // but no-op until an LLM is configured (so a task created while idle picks up
 // automatically once LLM is set from the UI).
 func (e *Engine) Run(ctx context.Context, t *Task) {
-	slots, err := workerSlotsForTask(t, e.m.WorkerPools(), e.m.Workers())
-	if err != nil {
-		log.Printf("[engine] task %s worker pool invalid, using legacy workers: %v", t.ID, err)
-		slots, _ = ExpandWorkerSlots(nil, workerCountForTask(t, e.m.Workers()))
-	}
 	e.deleteMu.RLock()
 	if e.IsDeleting(t.ID) {
 		e.deleteMu.RUnlock()
@@ -811,19 +812,13 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 		t.Notify() // already running — just nudge a planning round
 		return
 	}
-	rt := e.registerTaskRoutines(ctx, t.ID, 1+len(slots))
-	plan := make(map[string]int64, len(slots))
-	for _, slot := range slots {
-		plan[slot.Name] = slot.ProfileID
-	}
-	e.slotPlans.Store(t.ID, plan)
+	rt := e.registerTaskRoutines(ctx, t.ID, 1)
+	pool := &taskWorkerPool{runtime: rt, task: t, loops: make(map[string]*workerSlotRuntime)}
+	e.workerPools.Store(t.ID, pool)
 	e.deleteMu.RUnlock()
 	e.touch(t.ID)
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.plannerLoop(loopCtx, t) })
-	for _, slot := range slots {
-		slot := slot
-		runTaskRoutine(rt, func(loopCtx context.Context) { e.workerLoop(loopCtx, t, slot) })
-	}
+	e.ReconcileWorkers(t)
 	e.startDeadlineCoordinator(ctx, t) // 任务级超时定时器(仅 timeout>0;去重)
 	// 仅在「完全没有活动意图(open+running)」时才 kick 首轮规划。带种子意图的任务:种子已
 	// 是 open,或已被上面刚起的 worker 抢先 claim 成 running——两种都算「有活干」,一律跳过
@@ -838,20 +833,20 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 // workerSlotsForTask preserves an explicit task concurrency override. Tasks
 // using the global default inherit its model pools and their pinned profiles.
 func workerSlotsForTask(t *Task, pools []WorkerPool, global int) ([]WorkerSlot, error) {
-	if t != nil && t.WorkerCount > 0 {
+	if t != nil && t.lifecycleSnapshot().WorkerCount > 0 {
 		return ExpandWorkerSlots(nil, workerCountForTask(t, global))
 	}
 	return ExpandWorkerSlots(pools, global)
 }
 
 func workerCountForTask(t *Task, global int) int {
-	if t != nil && t.WorkerCount > 0 {
-		// Direct database edits can bypass validation; cap those values so the
-		// engine never starts more than the supported per-task worker count.
-		if t.WorkerCount > db.MaxTaskWorkerCount {
-			return db.MaxTaskWorkerCount
+	if t != nil {
+		if count := t.lifecycleSnapshot().WorkerCount; count > 0 {
+			if count > db.MaxTaskWorkerCount {
+				return db.MaxTaskWorkerCount
+			}
+			return count
 		}
-		return t.WorkerCount
 	}
 	return global
 }
@@ -1004,11 +999,12 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 	}
 }
 
-func (e *Engine) workerLoop(ctx context.Context, t *Task, slot WorkerSlot) {
+func (e *Engine) workerLoop(ctx context.Context, t *Task, slot WorkerSlot, control *workerSlotRuntime) {
 	name := slot.Name
+	idleCtx := control.idleCtx
 	for {
 		select {
-		case <-ctx.Done():
+		case <-idleCtx.Done():
 			return
 		default:
 		}
@@ -1031,13 +1027,13 @@ func (e *Engine) workerLoop(ctx context.Context, t *Task, slot WorkerSlot) {
 			_, worker = e.snapshotFor(t)
 		}
 		if worker == nil {
-			if sleepCtx(ctx, 1500*time.Millisecond) {
+			if sleepCtx(idleCtx, 1500*time.Millisecond) {
 				return
 			}
 			continue
 		}
 		if e.IsPaused(t.ID) {
-			if sleepCtx(ctx, 1000*time.Millisecond) {
+			if sleepCtx(idleCtx, 1000*time.Millisecond) {
 				return
 			}
 			continue // user-paused: don't claim/execute intents
@@ -1046,13 +1042,13 @@ func (e *Engine) workerLoop(ctx context.Context, t *Task, slot WorkerSlot) {
 			return
 		}
 		if e.isSettling(t.ID) {
-			if sleepCtx(ctx, 1000*time.Millisecond) {
+			if sleepCtx(idleCtx, 1000*time.Millisecond) {
 				return
 			}
 			continue // 任务超时收尾中:不再领新意图(在跑的自行收尾,协调器等其 drain)
 		}
 		if isTerminalStatus(e.m.TaskStatus(t.ID)) {
-			if sleepCtx(ctx, 1000*time.Millisecond) {
+			if sleepCtx(idleCtx, 1000*time.Millisecond) {
 				return
 			}
 			continue // 任务已终态(done/failed/timeout):停止领取遗留意图,别在完成后空跑 frontier
@@ -1060,28 +1056,27 @@ func (e *Engine) workerLoop(ctx context.Context, t *Task, slot WorkerSlot) {
 		if !e.beginTaskOperation(t.ID) {
 			return
 		}
-		claimed := e.runWorkerStep(ctx, t, name, worker)
+		// A resize and the next claim share the pool lock. Once retirement is
+		// requested this loop cannot claim again; execution keeps the task context.
+		control.pool.mu.Lock()
+		var intent *db.Node
+		if idleCtx.Err() == nil {
+			intent = e.claimNext(t, name)
+		}
+		control.pool.mu.Unlock()
+		if intent != nil {
+			log.Printf("[worker %s] task %s 领取意图 #%d", name, t.ID, intent.ID)
+			e.runIntent(ctx, t, name, worker, intent, "", "")
+		}
 		e.decInflight(t.ID)
-		if !claimed && sleepCtx(ctx, 800*time.Millisecond) {
+		if intent == nil && sleepCtx(idleCtx, 800*time.Millisecond) {
 			return
 		}
 	}
 }
 
-// runWorkerStep claims one intent from the frontier and fully settles it via
-// runIntent. Returns false when nothing was claimable. The pool worker loop is its
-// only caller.
-func (e *Engine) runWorkerStep(ctx context.Context, t *Task, name string, worker *agent.Worker) bool {
-	intent := e.claimNext(t, name)
-	if intent == nil {
-		return false
-	}
-	log.Printf("[worker %s] task %s 领取意图 #%d", name, t.ID, intent.ID)
-	return e.runIntent(ctx, t, name, worker, intent, "", "")
-}
-
 // runIntent executes and fully settles one already-claimed (state=running) intent.
-// Both the pool worker loop (via runWorkerStep) and the human-message handler (via
+// Both the pool worker loop and the human-message handler (via
 // runDetachedIntent, a dedicated goroutine outside the worker pool) call it, so the
 // execute/retry/state-write logic lives in exactly one place. A non-empty message
 // is injected as this turn's input through ExecuteWithMessage; requestID keys the

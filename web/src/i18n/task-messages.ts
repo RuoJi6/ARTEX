@@ -1,4 +1,21 @@
 export const taskMessages = {
+  "taskWorkers.edit": ["调整 Worker 并发", "Adjust Worker concurrency"],
+  "taskWorkers.label": ["Worker 数量（0–50）", "Worker count (0–50)"],
+  "taskWorkers.counts": ["Worker 实际 / 目标：{{actual}} / {{target}}", "Workers actual / target: {{actual}} / {{target}}"],
+  "taskWorkers.help": [
+    "0 表示跟随全局 Worker 配置；1–50 为本任务覆盖值，保存后热更新，无需重启任务。",
+    "Use 0 to follow the global Worker configuration, or 1–50 to override it for this task. Saving applies changes live without restarting the task.",
+  ],
+  "taskWorkers.transitionHelp": [
+    "实际数量是存活的 Worker loops（含缩容退出中的 loops），不是正在执行的意图数。增容会启动新 loops；缩容等待正在执行的意图完成后退出，不会强杀意图，因此实际数量可能暂时高于目标。",
+    "Actual counts live Worker loops, including draining loops, not in-flight intents. Scaling up starts new loops. Scaling down lets running intents finish before loops exit, without force-cancelling them, so actual may temporarily exceed target.",
+  ],
+  "taskWorkers.draining": [
+    "缩容过渡中：等待在跑意图完成，不会强杀。",
+    "Scaling down: waiting for running intents to finish; they will not be force-cancelled.",
+  ],
+  "taskWorkers.saved": ["Worker 并发已更新", "Worker concurrency updated"],
+  "taskWorkers.saveFailed": ["Worker 并发更新失败：{{message}}", "Could not update Worker concurrency: {{message}}"],
   "taskFiles.tab": ["文件", "Files"],
   "taskFiles.tree": ["目录树", "Directory tree"],
   "taskFiles.recent": ["最近文件", "Recent files"],
