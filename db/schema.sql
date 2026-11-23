@@ -529,6 +529,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     no_result_base_seconds BIGINT NOT NULL DEFAULT 0,
     no_result_checked_at TIMESTAMPTZ,
     stop_reason TEXT NOT NULL DEFAULT '',
+    output_language TEXT NOT NULL DEFAULT 'zh',
     plan_heartbeat_seconds INTEGER NOT NULL DEFAULT 300,
     coverage_enabled BOOLEAN NOT NULL DEFAULT true,
     worker_count   INTEGER NOT NULL DEFAULT 0, -- 0=用全局默认 workers
@@ -583,6 +584,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS active_run_seconds BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS run_segment_started_at TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pause_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS output_language TEXT NOT NULL DEFAULT 'zh';
 CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category_id, created_at DESC)
     WHERE deleted_at IS NULL AND category_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_pinned ON tasks(pinned_at DESC)

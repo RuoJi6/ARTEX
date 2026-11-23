@@ -296,6 +296,9 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		CoverageEnabled: coverageEnabled, ShareGlobalAssets: opts.ShareGlobalAssets, WorkerCount: opts.WorkerCount, Remark: opts.Remark,
 	}
 	outputLang := NormalizeOutputLanguage(opts.OutputLanguage)
+	// The manager caches and launches this struct directly, so it must carry the
+	// stored language; otherwise an "en" task runs as "zh" until reloaded from PG.
+	t.OutputLanguage = outputLang
 	if err := tx.QueryRow(`
 INSERT INTO tasks(name, remark, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, worker_count, share_global_assets, no_result_seconds, no_result_min_findings, no_result_min_severity, output_language)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)

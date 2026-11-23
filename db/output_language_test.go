@@ -10,3 +10,31 @@ func TestNormalizeOutputLanguage(t *testing.T) {
 		}
 	}
 }
+
+// CreateTaskWithOptions must return the stored language on the *Task itself: the
+// manager caches and launches that struct without re-reading Postgres. Opening via
+// Open() alone (no EnsureLLMRecordsTable) also proves the column comes from
+// schema.sql.
+func TestCreateTaskWithOptionsReturnsOutputLanguage(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	for in, want := range map[string]string{"en": "en", "": "zh", "fr": "zh"} {
+		task, err := d.CreateTaskWithOptions("output language "+want, "goal", TaskCreateOptions{OutputLanguage: in})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.OutputLanguage != want {
+			t.Errorf("CreateTaskWithOptions(%q).OutputLanguage = %q, want %q", in, task.OutputLanguage, want)
+		}
+		stored, err := d.GetTask(task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.OutputLanguage != want {
+			t.Errorf("stored OutputLanguage for %q = %q, want %q", in, stored.OutputLanguage, want)
+		}
+	}
+}
