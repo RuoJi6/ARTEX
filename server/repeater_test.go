@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -438,5 +439,145 @@ func TestRepeaterExplicitHTTP2Cleartext(t *testing.T) {
 	code, out, raw := repeaterTestSend(t, &Server{}, map[string]any{"method": "GET", "url": srv.URL, "http_version": "HTTP/2.0", "use_recording_proxy": false})
 	if code != http.StatusOK || out.Error != "" || out.Body != "HTTP/2.0" {
 		t.Fatalf("status=%d response=%s", code, raw)
+	}
+}
+
+func startRawWireCaptureServer(t *testing.T) (string, <-chan string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	lines := make(chan string, 16)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				line, err := r.ReadString('\n')
+				if err != nil {
+					return
+				}
+				for {
+					h, err := r.ReadString('\n')
+					if err != nil || h == "\r\n" || h == "\n" {
+						break
+					}
+				}
+				lines <- strings.TrimRight(line, "\r\n")
+				_, _ = c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"))
+			}(conn)
+		}
+	}()
+	return ln.Addr().String(), lines
+}
+
+func TestRepeaterPreservesRawRequestTarget(t *testing.T) {
+	t.Setenv(repeaterAllowLocalEnv, "1")
+	addr, wireLines := startRawWireCaptureServer(t)
+
+	cases := []string{
+		"/item?id=1'",
+		"/item?id=1'\"><`{}|\\",
+		"/a/../b/./c?id=1'",
+		"/a/%2e%2e/b?x='",
+		"//a//b?c=1'",
+		"/a\\b?id=1'",
+		"/a\"b?id=1'",
+		"/a%zz/b?id=1'",
+	}
+	for _, target := range cases {
+		t.Run("h1-direct/"+target, func(t *testing.T) {
+			rawURL := "http://" + addr + target
+			code, out, body := repeaterTestSend(t, &Server{}, map[string]any{
+				"method": "GET", "url": rawURL, "use_recording_proxy": false,
+			})
+			if code != http.StatusOK || out.Error != "" || out.Status != http.StatusOK {
+				t.Fatalf("status=%d out=%+v body=%s", code, out, body)
+			}
+			if out.URL != rawURL {
+				t.Fatalf("response url=%q want %q", out.URL, rawURL)
+			}
+			select {
+			case got := <-wireLines:
+				want := "GET " + target + " HTTP/1.1"
+				if got != want {
+					t.Fatalf("wire request line=%q want %q", got, want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for wire request line")
+			}
+		})
+	}
+
+	// Plain HTTP through an HTTP proxy must retain proxy-form absolute URI for both normal and opaque raw paths.
+	proxyAddr, proxyLines := startRawWireCaptureServer(t)
+	proxiedServer := &Server{m: &Manager{globalProxy: "http://" + proxyAddr}}
+	for _, target := range []string{"/item?id=1'", "/a\\b?id=1'"} {
+		t.Run("h1-proxy/"+target, func(t *testing.T) {
+			rawURL := "http://target.example" + target
+			code, out, body := repeaterTestSend(t, proxiedServer, map[string]any{
+				"method": "GET", "url": rawURL, "use_recording_proxy": false,
+			})
+			if code != http.StatusOK || out.Error != "" || out.Status != http.StatusOK {
+				t.Fatalf("status=%d out=%+v body=%s", code, out, body)
+			}
+			select {
+			case got := <-proxyLines:
+				want := "GET " + rawURL + " HTTP/1.1"
+				if got != want {
+					t.Fatalf("proxy request line=%q want %q", got, want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for proxy request line")
+			}
+		})
+	}
+
+	// HTTP/2 must also preserve raw query and path targets verbatim.
+	h2srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.RequestURI)
+	}))
+	h2srv.EnableHTTP2 = true
+	h2srv.TLS = &tls.Config{NextProtos: []string{"h2"}}
+	h2srv.StartTLS()
+	defer h2srv.Close()
+	for _, target := range []string{"/item?id=1'", "/a/../b?x='", "/a\\b?id=1'"} {
+		t.Run("h2-direct/"+target, func(t *testing.T) {
+			rawURL := h2srv.URL + target
+			code, out, body := repeaterTestSend(t, &Server{}, map[string]any{
+				"method": "GET", "url": rawURL, "http_version": "HTTP/2.0",
+				"insecure_skip_verify": true, "use_recording_proxy": false,
+			})
+			if code != http.StatusOK || out.Error != "" || out.Body != target {
+				t.Fatalf("h2 status=%d body=%q raw=%s", code, out.Body, body)
+			}
+		})
+	}
+}
+
+func TestRepeaterRawURLValidationAndSSRFGuard(t *testing.T) {
+	t.Setenv(repeaterAllowLocalEnv, "")
+	s := &Server{}
+	for _, bad := range []string{
+		"http://example.test\\evil/path",
+		"http://example.test/a\nb",
+		"http://example.test:abc/path",
+	} {
+		code, _, body := repeaterTestSend(t, s, map[string]any{"url": bad, "use_recording_proxy": false})
+		if code != http.StatusBadRequest {
+			t.Fatalf("url=%q status=%d want 400 body=%s", bad, code, body)
+		}
+	}
+	code, _, body := repeaterTestSend(t, s, map[string]any{
+		"url": "http://127.0.0.1/a\\b?id=1'", "use_recording_proxy": false,
+	})
+	if code != http.StatusBadRequest || !strings.Contains(body, "拒绝") {
+		t.Fatalf("opaque loopback status=%d body=%s", code, body)
 	}
 }

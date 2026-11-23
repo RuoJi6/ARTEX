@@ -165,6 +165,9 @@ func normalizeWorkerCount(n int) int {
 }
 
 func validateWorkerCount(n int) error {
+	if n < 0 {
+		return fmt.Errorf("Worker 运行数量不能为负数")
+	}
 	if n > MaxTaskWorkerCount {
 		return fmt.Errorf("Worker 运行数量最多 %d", MaxTaskWorkerCount)
 	}
@@ -471,17 +474,23 @@ ORDER BY (pinned_at IS NOT NULL) DESC, pinned_at DESC NULLS LAST, id DESC`)
 	return out, nil
 }
 
-// TaskPatch updates editable metadata and global asset visibility.
+// TaskPatch updates editable metadata, asset visibility, and worker concurrency.
 type TaskPatch struct {
 	Name              *string
 	Remark            *string
 	Pinned            *bool
 	ShareGlobalAssets *bool
+	WorkerCount       *int
 }
 
-// UpdateTask applies a partial metadata/visibility mutation and returns the updated row.
+// UpdateTask applies a partial metadata/runtime-policy mutation and returns the updated row.
 // Re-pinning an already pinned task preserves its original position.
 func (d *DB) UpdateTask(id int64, patch TaskPatch) (*Task, error) {
+	if patch.WorkerCount != nil {
+		if err := validateWorkerCount(*patch.WorkerCount); err != nil {
+			return nil, err
+		}
+	}
 	task, err := scanTask(d.QueryRow(`UPDATE tasks SET
 	name = CASE WHEN $2::boolean THEN $3 ELSE name END,
 	remark = CASE WHEN $5::boolean THEN $6 ELSE remark END,
@@ -490,9 +499,10 @@ func (d *DB) UpdateTask(id int64, patch TaskPatch) (*Task, error) {
 		WHEN $4::boolean THEN COALESCE(pinned_at, now())
 		ELSE NULL
 	END,
-	share_global_assets = COALESCE($7::boolean, share_global_assets)
+	share_global_assets = COALESCE($7::boolean, share_global_assets),
+	worker_count = COALESCE($8::integer, worker_count)
 WHERE id=$1 AND deleted_at IS NULL
-RETURNING `+taskCols, id, patch.Name != nil, patch.Name, patch.Pinned, patch.Remark != nil, patch.Remark, patch.ShareGlobalAssets))
+RETURNING `+taskCols, id, patch.Name != nil, patch.Name, patch.Pinned, patch.Remark != nil, patch.Remark, patch.ShareGlobalAssets, patch.WorkerCount))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

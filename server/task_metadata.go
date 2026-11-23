@@ -15,7 +15,7 @@ const (
 	maxTaskMetadataRequestSize = 16 << 10
 )
 
-// updateTaskMetadata updates editable metadata and the live asset-sharing policy.
+// updateTaskMetadata updates editable metadata and live task policies.
 func (s *Server) updateTaskMetadata(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("id")
 	if _, ok := s.m.Task(taskID); !ok {
@@ -28,6 +28,7 @@ func (s *Server) updateTaskMetadata(w http.ResponseWriter, r *http.Request) {
 		Remark            *string `json:"remark"`
 		Pinned            *bool   `json:"pinned"`
 		ShareGlobalAssets *bool   `json:"share_global_assets"`
+		WorkerCount       *int    `json:"worker_count"`
 	}
 	if err := decode(r, &request); err != nil {
 		var tooLarge *http.MaxBytesError
@@ -38,8 +39,12 @@ func (s *Server) updateTaskMetadata(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if request.Name == nil && request.Pinned == nil && request.Remark == nil && request.ShareGlobalAssets == nil {
-		writeErr(w, http.StatusBadRequest, "至少需要提供 name、pinned、remark 或 share_global_assets")
+	if request.Name == nil && request.Pinned == nil && request.Remark == nil && request.ShareGlobalAssets == nil && request.WorkerCount == nil {
+		writeErr(w, http.StatusBadRequest, "至少需要提供 name、pinned、remark、share_global_assets 或 worker_count")
+		return
+	}
+	if request.WorkerCount != nil && (*request.WorkerCount < 0 || *request.WorkerCount > db.MaxTaskWorkerCount) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("worker_count 必须在 0 到 %d 之间", db.MaxTaskWorkerCount))
 		return
 	}
 	if request.Name != nil {
@@ -63,7 +68,7 @@ func (s *Server) updateTaskMetadata(w http.ResponseWriter, r *http.Request) {
 		}
 		request.Remark = &remark
 	}
-	task, err := s.m.UpdateTaskMetadata(taskID, db.TaskPatch{Name: request.Name, Pinned: request.Pinned, Remark: request.Remark, ShareGlobalAssets: request.ShareGlobalAssets})
+	task, err := s.m.UpdateTaskMetadata(taskID, db.TaskPatch{Name: request.Name, Pinned: request.Pinned, Remark: request.Remark, ShareGlobalAssets: request.ShareGlobalAssets, WorkerCount: request.WorkerCount})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -72,5 +77,10 @@ func (s *Server) updateTaskMetadata(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "task not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, taskDTO(task, s.resolvedTaskStatus(task)))
+	if request.WorkerCount != nil {
+		s.engine.ReconcileWorkers(task)
+	}
+	dto := taskDTO(task, s.resolvedTaskStatus(task))
+	dto.WorkerActualCount, dto.WorkerTargetCount = s.engine.WorkerCounts(task)
+	writeJSON(w, http.StatusOK, dto)
 }

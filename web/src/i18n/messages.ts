@@ -214,6 +214,25 @@ export const messages = {
   ],
   "ui.ascending": ["正序", "ascending"],
   "ui.descending": ["倒序", "descending"],
+  "llm.maxTokensFieldHint.gemini": [
+    "仅 openai 格式可选。Gemini 的字段名固定为 maxOutputTokens。",
+    "Only configurable for the openai format. Gemini uses maxOutputTokens.",
+  ],
+  "findingsCleanup.button": ["一键清理", "One-click cleanup"],
+  "findingsCleanup.title": ["一键清理历史漏洞", "Clean up historical findings"],
+  "findingsCleanup.description": [
+    "永久删除所选范围内的漏洞发现记录及其来源探索节点、复测记录和归并成员关系，删除后无法恢复。",
+    "Permanently delete matching findings along with their originating exploration nodes, retest records, and case memberships. This action cannot be undone.",
+  ],
+  "findingsCleanup.scopeLabel": ["清理范围", "Cleanup scope"],
+  "findingsCleanup.scopeFiltered": ["当前筛选结果（{{count}} 条）", "Current filter results ({{count}})"],
+  "findingsCleanup.scopeSelected": ["已勾选漏洞（{{count}} 条）", "Selected findings ({{count}})"],
+  "findingsCleanup.scopeAll": ["全部历史漏洞", "All historical findings"],
+  "findingsCleanup.confirm": ["确认清理", "Confirm cleanup"],
+  "findingsCleanup.cleaning": ["清理中…", "Cleaning up…"],
+  "findingsCleanup.success": ["已清理 {{count}} 条漏洞", "Deleted {{count}} finding(s)"],
+  "findingsCleanup.empty": ["没有符合条件的漏洞可清理", "No matching findings to delete"],
+  "findingsCleanup.failed": ["清理失败：{{message}}", "Cleanup failed: {{message}}"],
 } satisfies Record<string, readonly [string, string]>;
 
 const statuses: Record<string, readonly (readonly [string, string, string])[]> = {

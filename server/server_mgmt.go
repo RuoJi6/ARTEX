@@ -1830,7 +1830,7 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	p.APIKey = body.APIKey
 	p.Streaming = body.Streaming == nil || *body.Streaming
 	// 输出上限:负数无意义,归零(= 不发送该字段)。字段名开关只有 Chat Completions
-	// 用得上——anthropic 与 openai-responses 各自定死了字段名,存下来只会误导后续读者,
+	// 用得上——anthropic、openai-responses 与 gemini 各自定死了字段名,存下来只会误导后续读者,
 	// 故非 openai 格式一律清空。未知取值同样清空,避免把 DB CHECK 的报错甩给用户。
 	if p.MaxTokens < 0 {
 		p.MaxTokens = 0
@@ -2005,12 +2005,13 @@ func (s *Server) pgLLMPoolReset(w http.ResponseWriter, r *http.Request) {
 }
 
 // pgListModels fetches available models from the provider's API endpoint.
-// Supports OpenAI-format (GET /models) and Anthropic-format (GET /v1/models); for
-// Anthropic-compatible third parties (e.g. DeepSeek) whose model list lives only on
-// the OpenAI path, it falls back to the OpenAI endpoint at the stripped root.
+// Supports OpenAI-format (GET /models), Anthropic-format (GET /v1/models), and
+// Gemini-format (GET /{version}/models); for Anthropic-compatible third parties
+// (e.g. DeepSeek) whose model list lives only on the OpenAI path, it falls back
+// to the OpenAI endpoint at the stripped root.
 func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Provider  string `json:"provider"` // "openai" | "anthropic"
+		Provider  string `json:"provider"` // "openai" | "anthropic" | "openai-responses" | "gemini" | "jev"
 		BaseURL   string `json:"base_url"`
 		APIKey    string `json:"api_key"`
 		Proxy     string `json:"proxy"`
@@ -2075,6 +2076,11 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 		h.Set("anthropic-version", "2023-06-01")
 		return h
 	}
+	geminiHdr := func() http.Header {
+		h := http.Header{}
+		h.Set("x-goog-api-key", apiKey)
+		return h
+	}
 
 	var candidates []candidate
 	switch provider {
@@ -2086,6 +2092,9 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 		}
 		b := strings.TrimRight(strings.TrimSuffix(strings.TrimSuffix(baseURL, "/chat/completions"), "/responses"), "/")
 		candidates = append(candidates, candidate{b + "/models", bearerHdr()})
+	case "gemini":
+		b := agent.GeminiBaseWithVersion(baseURL)
+		candidates = append(candidates, candidate{b + "/models?pageSize=1000", geminiHdr()})
 	default: // anthropic
 		if baseURL == "" {
 			baseURL = "https://api.anthropic.com"
@@ -2131,20 +2140,36 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 			lastErr = fmt.Sprintf("API 返回 %d: %s", resp.StatusCode, string(body[:min(len(body), 512)]))
 			continue
 		}
-		// Both OpenAI and Anthropic return {"data": [{"id": "..."},...]}.
+		// OpenAI and Anthropic return {"data": [{"id": "..."},...]};
+		// Gemini returns {"models": [{"name": "models/...", "supportedGenerationMethods": [...]}, ...]}.
 		var parsed struct {
 			Data []struct {
 				ID string `json:"id"`
 			} `json:"data"`
+			Models []struct {
+				Name                       string   `json:"name"`
+				SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+			} `json:"models"`
 		}
 		if err := json.Unmarshal(body, &parsed); err != nil {
 			lastErr = "解析响应失败: " + err.Error()
 			continue
 		}
-		models := make([]string, 0, len(parsed.Data))
+		models := make([]string, 0, len(parsed.Data)+len(parsed.Models))
 		for _, m := range parsed.Data {
 			if m.ID != "" {
 				models = append(models, m.ID)
+			}
+		}
+		if len(models) == 0 && len(parsed.Models) > 0 {
+			for _, m := range parsed.Models {
+				if len(m.SupportedGenerationMethods) > 0 && !containsString(m.SupportedGenerationMethods, "generateContent") {
+					continue
+				}
+				id := strings.TrimPrefix(strings.TrimSpace(m.Name), "models/")
+				if id != "" {
+					models = append(models, id)
+				}
 			}
 		}
 		if len(models) > 0 {
@@ -2161,6 +2186,15 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 		lastErr = "未获取到模型列表"
 	}
 	writeJSON(w, 200, map[string]any{"ok": false, "error": lastErr})
+}
+
+func containsString(list []string, target string) bool {
+	for _, s := range list {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }
 
 // --- prompt template helpers (Go text/template + catalog 白名单) ---

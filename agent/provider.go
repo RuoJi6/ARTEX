@@ -3,8 +3,8 @@
 // §4.3 (planner) and §4.4 (work agent).
 //
 // Provider configuration is read from the environment so the system runs with
-// any Anthropic- or OpenAI-format endpoint. If no key is configured, FromEnv
-// returns ok=false and the exploration engine stays idle (an LLM is required).
+// any Anthropic-, OpenAI-, or Gemini-format endpoint. If no key is configured,
+// FromEnv returns ok=false and the exploration engine stays idle (an LLM is required).
 package agent
 
 import (
@@ -140,15 +140,19 @@ func compactionConfig(windowTokens int) *compaction.Config {
 
 // FromEnv resolves the LLM provider config:
 //
-//	ARTEX_LLM_PROVIDER = anthropic|openai (default: inferred from keys)
+//	ARTEX_LLM_PROVIDER = anthropic|openai|openai-responses|gemini (default: inferred from keys)
 //	ARTEX_LLM_MODEL    = model id        (default: per provider)
 //	ARTEX_LLM_BASE_URL = endpoint        (optional)
 //	ARTEX_LLM_PROXY    = proxy URL        (optional; http/https/socks5)
-//	ANTHROPIC_API_KEY / OPENAI_API_KEY         = credentials
+//	ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY = credentials
 func FromEnv() (Config, bool) {
 	prov := os.Getenv("ARTEX_LLM_PROVIDER")
 	anthKey := os.Getenv("ANTHROPIC_API_KEY")
 	oaiKey := os.Getenv("OPENAI_API_KEY")
+	geminiKey := os.Getenv("GEMINI_API_KEY")
+	if geminiKey == "" {
+		geminiKey = os.Getenv("GOOGLE_API_KEY")
+	}
 
 	if prov == "" {
 		switch {
@@ -156,6 +160,8 @@ func FromEnv() (Config, bool) {
 			prov = "anthropic"
 		case oaiKey != "":
 			prov = "openai"
+		case geminiKey != "":
+			prov = "gemini"
 		default:
 			return Config{}, false
 		}
@@ -180,6 +186,13 @@ func FromEnv() (Config, bool) {
 		c.APIKey = oaiKey
 		if c.Model == "" {
 			c.Model = "gpt-5"
+		}
+	case "gemini":
+		c.Format = FormatGemini
+		c.BaseURL = NormalizeGeminiBaseURL(c.BaseURL)
+		c.APIKey = geminiKey
+		if c.Model == "" {
+			c.Model = defaultGeminiModel
 		}
 	default:
 		c.Format = llm.FormatAnthropic
@@ -226,6 +239,12 @@ func ConfigFrom(provider, model, baseURL, apiKey, proxy string) Config {
 		if c.Model == "" {
 			c.Model = "gpt-5"
 		}
+	case "gemini":
+		c.Format = FormatGemini
+		c.BaseURL = NormalizeGeminiBaseURL(c.BaseURL)
+		if c.Model == "" {
+			c.Model = defaultGeminiModel
+		}
 	default:
 		c.Format = llm.FormatAnthropic
 		// provider appends "/v1/messages".
@@ -247,7 +266,7 @@ func isFalsy(s string) bool {
 	return false
 }
 
-// Provider returns the short provider name ("anthropic"/"openai").
+// Provider returns the short provider name ("anthropic"/"openai"/"openai-responses"/"gemini"/"jev").
 func (c Config) Provider() string {
 	if c.Jev {
 		return "jev"
@@ -257,6 +276,8 @@ func (c Config) Provider() string {
 		return "openai"
 	case llm.FormatOpenAIResponses:
 		return "openai-responses"
+	case FormatGemini:
+		return "gemini"
 	}
 	return "anthropic"
 }
@@ -288,6 +309,9 @@ func (c Config) newProvider(client *http.Client, limiter *RequestLimiter) (llm.P
 		return nil, err
 	}
 	client.Transport = rateLimitedTransport{base: client.Transport, limiter: limiter}
+	if c.Format == FormatGemini {
+		return newGeminiProvider(c, client)
+	}
 	lc := llm.Config{
 		Format:     c.Format,
 		BaseURL:    c.BaseURL,

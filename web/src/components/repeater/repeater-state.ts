@@ -1,6 +1,6 @@
 import type { RepeaterSendResponse } from "@/lib/types";
 
-import type { RepeaterInitial } from "./repeater-http";
+import { extractHttpHost, type RepeaterInitial } from "./repeater-http";
 
 export const STORAGE_KEY = "artex_repeater_workspace_v1";
 export const MAX_HISTORY = 20;
@@ -99,12 +99,7 @@ export function seedWorkspace(
   opts: TabOptions = {},
 ): RepeaterWorkspace {
   const method = initial.method?.trim().toUpperCase() || "GET";
-  let host = "";
-  try {
-    host = new URL(initial.url ?? "").host;
-  } catch {
-    /* An empty/unfinished URL is a valid draft. */
-  }
+  const host = extractHttpHost(initial.url ?? "");
   return addTab(
     workspace,
     { ...initial, method, source: meta },

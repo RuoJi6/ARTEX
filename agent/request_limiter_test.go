@@ -178,7 +178,7 @@ func TestRequestLimiterDisabledAndCancelled(t *testing.T) {
 // Exercise the actual Norma retry loops for all formats and both completion
 // modes. In-memory HTTP responses let synctest advance a full minute instantly.
 func TestProviderRateLimitCountsHTTPRetries(t *testing.T) {
-	for _, format := range []string{"openai", "anthropic", "openai-responses"} {
+	for _, format := range []string{"openai", "anthropic", "openai-responses", "gemini"} {
 		for _, streaming := range []bool{false, true} {
 			mode := "complete"
 			if streaming {
@@ -392,7 +392,7 @@ func TestRateLimitedTransportCancellationDoesNotSend(t *testing.T) {
 }
 
 func TestProviderRateLimitPublicFactory(t *testing.T) {
-	for _, format := range []string{"openai", "anthropic", "openai-responses"} {
+	for _, format := range []string{"openai", "anthropic", "openai-responses", "gemini"} {
 		for _, streaming := range []bool{false, true} {
 			mode := "complete"
 			if streaming {

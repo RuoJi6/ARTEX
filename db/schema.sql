@@ -362,7 +362,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS llm_profiles (
     id               BIGSERIAL PRIMARY KEY,
     name             TEXT NOT NULL UNIQUE,
-    format           TEXT NOT NULL CHECK (format IN ('openai','anthropic','openai-responses','jev')),
+    format           TEXT NOT NULL CHECK (format IN ('openai','anthropic','openai-responses','gemini','jev')),
     base_url         TEXT,
     proxy            TEXT,
     model            TEXT NOT NULL,
@@ -390,7 +390,7 @@ CREATE TABLE IF NOT EXISTS llm_profiles (
     --   ''                      = max_tokens(默认，兼容绝大多数网关)
     --   'max_completion_tokens' = 新字段；OpenAI 推理模型(o 系列/GPT-5)只认它，
     --                             发 max_tokens 会被 unsupported_parameter 拒绝。
-    -- anthropic(max_tokens 必填)与 openai-responses(max_output_tokens)自带字段名，不受此值影响。
+    -- anthropic(max_tokens 必填)、openai-responses(max_output_tokens)与 gemini(maxOutputTokens)自带字段名，不受此值影响。
     max_tokens_field TEXT NOT NULL DEFAULT '',
     -- 自定义会话头：非空时每次请求带一个该名字的 HTTP 头，头值=当前运行的 session id
     -- (chat 会话/worker 意图)。用于某些按 session-id 头做提示缓存/粘性路由的网关。''=不发送。
@@ -415,11 +415,11 @@ ALTER TABLE llm_profiles ADD COLUMN IF NOT EXISTS priority     INTEGER NOT NULL 
 ALTER TABLE llm_profiles ADD COLUMN IF NOT EXISTS pool_exclude BOOLEAN NOT NULL DEFAULT false;
 -- 流式开关；补旧库。默认 true = 保持既有的流式行为，旧配置无感升级。
 ALTER TABLE llm_profiles ADD COLUMN IF NOT EXISTS streaming    BOOLEAN NOT NULL DEFAULT true;
--- 放开 format 约束以容纳 openai-responses(OpenAI Responses API)和 Jev System One；补旧库。
--- 每次启动执行,幂等:先删旧 CHECK 再建含三值的新 CHECK。
+-- 放开 format 约束以容纳 openai-responses(OpenAI Responses API)、gemini(Google Gemini)和 Jev System One；补旧库。
+-- 每次启动执行,幂等:先删旧 CHECK 再建新 CHECK。
 ALTER TABLE llm_profiles DROP CONSTRAINT IF EXISTS llm_profiles_format_check;
 ALTER TABLE llm_profiles ADD  CONSTRAINT llm_profiles_format_check
-    CHECK (format IN ('openai','anthropic','openai-responses','jev'));
+    CHECK (format IN ('openai','anthropic','openai-responses','gemini','jev'));
 
 -- 输出上限及其字段名；补旧库。默认 0 / '' = 不发送上限、沿用 max_tokens 字段名，
 -- 旧配置行为完全不变。
