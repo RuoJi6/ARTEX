@@ -416,3 +416,156 @@ func TestDeepenAdmissionFailureDiscardsFollowUpIntent(t *testing.T) {
 		t.Fatalf("failed admission left an orphan audit: before=%d after=%d", activitiesBefore, activitiesAfter)
 	}
 }
+
+func TestDeleteFindingsValidation(t *testing.T) {
+	s := &Server{}
+	for _, tc := range []struct {
+		name string
+		url  string
+		body string
+	}{
+		{name: "missing scope", url: "/api/exploration/findings", body: `{}`},
+		{name: "empty body and query", url: "/api/exploration/findings", body: ""},
+		{name: "bad scope", url: "/api/exploration/findings", body: `{"scope":"unknown"}`},
+		{name: "selected without ids", url: "/api/exploration/findings", body: `{"scope":"selected","ids":[]}`},
+		{name: "selected bad string id", url: "/api/exploration/findings", body: `{"scope":"selected","ids":["abc"]}`},
+		{name: "selected zero id", url: "/api/exploration/findings", body: `{"scope":"selected","ids":[0]}`},
+		{name: "selected negative id", url: "/api/exploration/findings", body: `{"scope":"selected","ids":["-5"]}`},
+		{name: "selected query bad id", url: "/api/exploration/findings?scope=selected&ids=1,bad", body: ""},
+		{name: "invalid json", url: "/api/exploration/findings", body: `{`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			var body *strings.Reader
+			if tc.body != "" {
+				body = strings.NewReader(tc.body)
+			}
+			var req *http.Request
+			if body != nil {
+				req = httptest.NewRequest(http.MethodDelete, tc.url, body)
+			} else {
+				req = httptest.NewRequest(http.MethodDelete, tc.url, nil)
+			}
+			s.deleteFindings(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestDeleteFindingsEndpoint(t *testing.T) {
+	m, err := NewManager(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+
+	marker := fmt.Sprintf("__cleanup_endpoint_%d__", time.Now().UnixNano())
+	task, err := m.CreateTask("cleanup endpoint test", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := mustTaskID(t, task.ID)
+	t.Cleanup(func() {
+		_, _ = m.pg.Exec(`DELETE FROM findings WHERE vulnclass=$1`, marker)
+		_, _ = m.pg.Exec(`UPDATE tasks SET deleted_at=NULL WHERE id=$1`, taskID)
+		_ = m.pg.DeleteTask(taskID)
+	})
+
+	f1, err := m.pg.AddFinding(taskID, 0, marker, "first", db.SeverityHigh, "s1", "p1", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := m.pg.AddFinding(taskID, 0, marker, "second", db.SeverityLow, "s2", "p2", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f3, err := m.pg.AddFinding(0, 0, marker, "orphan", db.SeverityMedium, "s3", "p3", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{m: m}
+
+	// Validation errors.
+	for _, tc := range []struct {
+		name string
+		url  string
+		body string
+	}{
+		{name: "missing scope", url: "/api/exploration/findings", body: `{}`},
+		{name: "bad scope", url: "/api/exploration/findings", body: `{"scope":"unknown"}`},
+		{name: "selected without ids", url: "/api/exploration/findings", body: `{"scope":"selected","ids":[]}`},
+		{name: "selected bad id", url: "/api/exploration/findings", body: `{"scope":"selected","ids":["abc"]}`},
+		{name: "invalid json", url: "/api/exploration/findings", body: `{`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodDelete, tc.url, strings.NewReader(tc.body))
+			s.deleteFindings(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	// Selected delete via JSON body (string id).
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/exploration/findings",
+		strings.NewReader(fmt.Sprintf(`{"scope":"selected","ids":["%d"]}`, f1)))
+	s.deleteFindings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("selected delete status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Deleted int64 `json:"deleted"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Deleted != 1 {
+		t.Fatalf("selected delete resp=%s err=%v", rec.Body.String(), err)
+	}
+
+	// Filtered delete via JSON body filters (unassigned only).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodDelete, "/api/exploration/findings",
+		strings.NewReader(fmt.Sprintf(`{"scope":"filtered","filters":{"vulnclass":%q,"task_id":%q}}`, marker, db.FindingUnassignedTask)))
+	s.deleteFindings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filtered delete status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Deleted != 1 {
+		t.Fatalf("filtered delete resp=%s err=%v", rec.Body.String(), err)
+	}
+	if got, _ := m.pg.GetFinding(f3); got != nil {
+		t.Fatalf("f3 should have been deleted")
+	}
+
+	// Archive-state conflict returns 409.
+	if _, err := m.pg.Exec(`UPDATE tasks SET deleted_at=now() WHERE id=$1`, taskID); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodDelete, "/api/exploration/findings",
+		strings.NewReader(fmt.Sprintf(`{"scope":"selected","ids":[%d]}`, f2)))
+	s.deleteFindings(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("archive conflict status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := m.pg.Exec(`UPDATE tasks SET deleted_at=NULL WHERE id=$1`, taskID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query-string fallback for filtered cleanup.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodDelete, "/api/exploration/findings?scope=filtered&vulnclass="+marker, nil)
+	s.deleteFindings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("query filtered delete status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Deleted != 1 {
+		t.Fatalf("query filtered delete resp=%s err=%v", rec.Body.String(), err)
+	}
+	if got, _ := m.pg.GetFinding(f2); got != nil {
+		t.Fatalf("f2 should have been deleted")
+	}
+}

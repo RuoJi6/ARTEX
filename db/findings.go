@@ -787,6 +787,135 @@ func (d *DB) DeleteFinding(id int64) (n int64, err error) {
 	return
 }
 
+// DeleteFindings bulk-removes findings matching either an explicit id list
+// (when ids is non-empty, ignoring f) or a FindingFilter (empty f = all
+// findings). Like DeleteFinding, each deleted finding's originating
+// exploration node (kind='finding') is also removed inside the same evidence
+// transaction so the findings list, per-task 发现 Tab, and exploration graph
+// stay consistent. Returns the number of findings deleted.
+func (d *DB) DeleteFindings(ctx context.Context, f FindingFilter, ids []int64) (deleted int64, err error) {
+	var scoped FindingFilter
+	var uniqueIDs []int64
+	if len(ids) > 0 {
+		seen := make(map[int64]struct{}, len(ids))
+		for _, id := range ids {
+			if id <= 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			uniqueIDs = append(uniqueIDs, id)
+		}
+		if len(uniqueIDs) == 0 {
+			return 0, nil
+		}
+	} else {
+		scoped, err = d.applyAssetScope(f)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	err = d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
+		deleted = 0
+		var (
+			rows *sql.Rows
+			qerr error
+		)
+		if len(uniqueIDs) > 0 {
+			rows, qerr = tx.QueryContext(ctx, `SELECT f.id, f.task_id FROM findings f WHERE f.id = ANY($1::bigint[]) ORDER BY f.id ASC`, uniqueIDs)
+		} else {
+			where, args := scoped.where()
+			rows, qerr = tx.QueryContext(ctx, `SELECT f.id, f.task_id FROM findings f LEFT JOIN tasks t ON f.task_id = t.id`+where+` ORDER BY f.id ASC`, args...)
+		}
+		if qerr != nil {
+			return qerr
+		}
+		var targetIDs []int64
+		taskSet := map[int64]struct{}{}
+		for rows.Next() {
+			var id int64
+			var taskID sql.NullInt64
+			if err := rows.Scan(&id, &taskID); err != nil {
+				rows.Close()
+				return err
+			}
+			targetIDs = append(targetIDs, id)
+			if taskID.Valid && taskID.Int64 > 0 {
+				taskSet[taskID.Int64] = struct{}{}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if len(targetIDs) == 0 {
+			return nil
+		}
+
+		taskIDs := make([]int64, 0, len(taskSet))
+		for tid := range taskSet {
+			taskIDs = append(taskIDs, tid)
+		}
+		sort.Slice(taskIDs, func(i, j int) bool { return taskIDs[i] < taskIDs[j] })
+		for _, tid := range taskIDs {
+			if err := LockTaskEvidenceTx(tx, tid); err != nil {
+				return err
+			}
+		}
+
+		lockRows, err := tx.QueryContext(ctx, `SELECT id FROM findings WHERE id = ANY($1::bigint[]) ORDER BY id ASC FOR UPDATE`, targetIDs)
+		if err != nil {
+			return err
+		}
+		for lockRows.Next() {
+		}
+		if err := lockRows.Err(); err != nil {
+			lockRows.Close()
+			return err
+		}
+		if err := lockRows.Close(); err != nil {
+			return err
+		}
+
+		delRows, err := tx.QueryContext(ctx, `DELETE FROM findings WHERE id = ANY($1::bigint[]) RETURNING node_id`, targetIDs)
+		if err != nil {
+			return err
+		}
+		var nodeIDs []int64
+		for delRows.Next() {
+			var nodeID sql.NullInt64
+			if err := delRows.Scan(&nodeID); err != nil {
+				delRows.Close()
+				return err
+			}
+			deleted++
+			if nodeID.Valid {
+				nodeIDs = append(nodeIDs, nodeID.Int64)
+			}
+		}
+		if err := delRows.Err(); err != nil {
+			delRows.Close()
+			return err
+		}
+		if err := delRows.Close(); err != nil {
+			return err
+		}
+		if len(nodeIDs) > 0 {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM exploration_nodes WHERE id = ANY($1::bigint[]) AND kind='finding'`, nodeIDs); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return
+}
+
 // DeleteFindingsByTask removes all findings rows of a task. The originating
 // exploration finding nodes are cascade-deleted separately when the task's
 // exploration subgraph is dropped. Returns rows deleted.

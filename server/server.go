@@ -933,6 +933,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/exploration/frontier", s.frontier)
 	mux.HandleFunc("GET /api/exploration/findings", s.findings)
+	mux.HandleFunc("DELETE /api/exploration/findings", s.deleteFindings)
 	mux.HandleFunc("GET /api/exploration/findings/groups", s.findingGroups)
 	mux.HandleFunc("GET /api/exploration/finding-cases", s.listFindingCases)
 	mux.HandleFunc("POST /api/exploration/finding-cases", s.mergeFindingCase)
@@ -2726,6 +2727,123 @@ func (s *Server) deleteFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"deleted": true, "id": id})
+}
+
+// deleteFindings bulk-deletes findings according to scope:
+//   - scope="all": delete all findings
+//   - scope="filtered": delete findings matching the shared FindingFilter fields
+//   - scope="selected": delete findings listed in ids (required, positive int64)
+//
+// Accepts a JSON body (preferred for large id lists) or query parameters.
+func (s *Server) deleteFindings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Scope   string            `json:"scope"`
+		IDs     []json.RawMessage `json:"ids"`
+		Filters *struct {
+			Severity   string `json:"severity"`
+			Status     string `json:"status"`
+			VulnClass  string `json:"vulnclass"`
+			TaskID     string `json:"task_id"`
+			Query      string `json:"q"`
+			From       string `json:"from"`
+			To         string `json:"to"`
+			AssetScope string `json:"asset_scope"`
+		} `json:"filters"`
+	}
+	if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, 400, "invalid body")
+			return
+		}
+	}
+
+	q := r.URL.Query()
+	scope := strings.TrimSpace(req.Scope)
+	if scope == "" {
+		scope = strings.TrimSpace(q.Get("scope"))
+	}
+
+	var (
+		ids    []int64
+		filter db.FindingFilter
+	)
+	switch scope {
+	case "selected":
+		if len(req.IDs) > 0 {
+			for _, raw := range req.IDs {
+				var (
+					id  int64
+					str string
+				)
+				if err := json.Unmarshal(raw, &id); err != nil {
+					if err2 := json.Unmarshal(raw, &str); err2 != nil {
+						writeErr(w, 400, "bad finding id")
+						return
+					}
+					parsed, err2 := strconv.ParseInt(strings.TrimSpace(str), 10, 64)
+					if err2 != nil {
+						writeErr(w, 400, "bad finding id: "+str)
+						return
+					}
+					id = parsed
+				}
+				if id <= 0 {
+					writeErr(w, 400, "bad finding id")
+					return
+				}
+				ids = append(ids, id)
+			}
+		} else {
+			for _, part := range strings.Split(q.Get("ids"), ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				id, err := strconv.ParseInt(part, 10, 64)
+				if err != nil || id <= 0 {
+					writeErr(w, 400, "bad finding id: "+part)
+					return
+				}
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			writeErr(w, 400, "no findings selected")
+			return
+		}
+	case "all":
+		// Empty filter deletes every finding in the standalone findings table.
+	case "filtered":
+		if req.Filters != nil {
+			filter = db.FindingFilter{
+				Severity:   normFilter(req.Filters.Severity),
+				Status:     normFilter(req.Filters.Status),
+				VulnClass:  normFilter(req.Filters.VulnClass),
+				TaskID:     normFilter(req.Filters.TaskID),
+				Query:      req.Filters.Query,
+				From:       strings.TrimSpace(req.Filters.From),
+				To:         strings.TrimSpace(req.Filters.To),
+				AssetScope: strings.TrimSpace(req.Filters.AssetScope),
+			}
+		} else {
+			filter = findingFilterFromQuery(q)
+		}
+	default:
+		writeErr(w, 400, "bad scope: "+scope)
+		return
+	}
+
+	n, err := s.m.pg.DeleteFindings(r.Context(), filter, ids)
+	if err != nil {
+		if errors.Is(err, db.ErrTaskArchiveState) {
+			writeErr(w, 409, err.Error())
+			return
+		}
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"deleted": n})
 }
 
 func (s *Server) intents(w http.ResponseWriter, r *http.Request) {
