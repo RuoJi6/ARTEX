@@ -1731,8 +1731,8 @@ export default function SystemSettingsPage() {
                 </CardTitle>
                 <CardDescription>
                   {t("settings.workersHelpStart")}
-                  <b>{t("settings.futureTasksOnly")}</b>
-                  {t("settings.runningTasksUnchanged")}
+                  <b>{t("settings.workersLiveUpdate")}</b>
+                  {t("settings.workersDrainHelp")}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">

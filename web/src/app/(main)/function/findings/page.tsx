@@ -12,6 +12,7 @@ import {
   InfoIcon,
   SearchIcon,
   ShieldAlertIcon,
+  Trash2Icon,
   TriangleAlertIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -285,6 +286,10 @@ export default function FindingsPage() {
   const [includeOriginals, setIncludeOriginals] = React.useState(false);
   const [reviewing, setReviewing] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
+  const [cleanupOpen, setCleanupOpen] = React.useState(false);
+  const [cleanupScope, setCleanupScope] = React.useState<"filtered" | "all" | "selected">("all");
+  const [cleaning, setCleaning] = React.useState(false);
+  const [caseRefreshKey, setCaseRefreshKey] = React.useState(0);
 
   const toggleSelected = React.useCallback((id: string, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -310,6 +315,23 @@ export default function FindingsPage() {
   function openExport() {
     setExportScope(selectedIds.size > 0 ? "selected" : "filtered");
     setExportOpen(true);
+  }
+
+  const hasActiveFilters =
+    severity !== "all" ||
+    status !== "all" ||
+    vulnclass !== "all" ||
+    task !== "all" ||
+    query !== "" ||
+    Boolean(dateRange.from) ||
+    Boolean(dateRange.to) ||
+    (view === "asset" && assetScope !== null);
+
+  function openCleanup() {
+    if (selectedIds.size > 0) setCleanupScope("selected");
+    else if (hasActiveFilters && stats.total > 0) setCleanupScope("filtered");
+    else setCleanupScope("all");
+    setCleanupOpen(true);
   }
 
   async function doExport() {
@@ -791,6 +813,58 @@ export default function FindingsPage() {
     [refreshAfterMutation, refreshStats, setFindings, liveUI],
   );
 
+  async function doCleanup() {
+    if (cleaning) return;
+    setCleaning(true);
+    try {
+      const res = await api.cleanupFindings({
+        scope: cleanupScope,
+        filters: {
+          severity,
+          status,
+          vulnclass,
+          task,
+          query,
+          sort,
+          ...dateRange,
+          assetScope: view === "asset" ? (assetScope ?? undefined) : undefined,
+        },
+        ids: [...selectedIds],
+      });
+      setCleanupOpen(false);
+      setSelectedIds(new Set());
+      setExpanded(null);
+      setEdit(null);
+      setReports({});
+      setPage(1);
+      setFlatPage(1);
+      setExpandedGroups(new Set());
+      setGroupFindings({});
+      if (view === "asset" && cleanupScope === "all") {
+        setAssetScope(null);
+      }
+      setCaseRefreshKey((v) => v + 1);
+      void refreshStats();
+      if (view === "asset") {
+        void loadFlat();
+        void loadAssetTree();
+      } else if (view === "flat") {
+        void loadFlat();
+      } else if (view === "grouped") {
+        void refreshGroups();
+      }
+      if (res.deleted > 0) {
+        toast.success(t("findingsCleanup.success", { count: res.deleted }));
+      } else {
+        toast.info(t("findingsCleanup.empty"));
+      }
+    } catch (e) {
+      toast.error(t("findingsCleanup.failed", { message: (e as Error).message }));
+    } finally {
+      setCleaning(false);
+    }
+  }
+
   const openDeepen = React.useCallback((f: Finding) => {
     setDeepenFinding(f);
     setDeepenDescription("");
@@ -1053,6 +1127,15 @@ export default function FindingsPage() {
             <Button size="sm" variant="outline" onClick={openExport}>
               <DownloadIcon /> {ui("screen.76420433f22d1c")}
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              disabled={cleaning || (statsLoaded && !hasActiveFilters && stats.total === 0 && selectedIds.size === 0)}
+              onClick={openCleanup}
+            >
+              <Trash2Icon /> {t("findingsCleanup.button")}
+            </Button>
           </div>
         </div>
 
@@ -1121,6 +1204,7 @@ export default function FindingsPage() {
             query={{ severity, status, vulnclass, task, query, sort, ...dateRange }}
             selectedIds={selectedIds}
             onSelect={toggleSelected}
+            refreshKey={caseRefreshKey}
           />
         )}
         {view === "grouped" && (
@@ -1390,6 +1474,62 @@ export default function FindingsPage() {
             </Button>
             <Button onClick={doExport} disabled={exporting || (exportScope === "selected" && selectedIds.size === 0)}>
               <DownloadIcon /> {exporting ? ui("screen.dce6e572314e88") : ui("screen.76420433f22d1c")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={cleanupOpen}
+        onOpenChange={(open) => {
+          if (!cleaning) setCleanupOpen(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("findingsCleanup.title")}</DialogTitle>
+            <DialogDescription>{t("findingsCleanup.description")}</DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-2 py-1">
+            <span className="text-muted-foreground text-xs">{t("findingsCleanup.scopeLabel")}</span>
+            <RadioGroup value={cleanupScope} onValueChange={(v) => setCleanupScope(v as typeof cleanupScope)}>
+              <label
+                htmlFor="cleanup-scope-filtered"
+                className={cn("flex items-center gap-2 text-sm", stats.total === 0 && "text-muted-foreground")}
+              >
+                <RadioGroupItem id="cleanup-scope-filtered" value="filtered" disabled={stats.total === 0} />
+                {t("findingsCleanup.scopeFiltered", { count: stats.total })}
+              </label>
+              <label
+                htmlFor="cleanup-scope-selected"
+                className={cn("flex items-center gap-2 text-sm", selectedIds.size === 0 && "text-muted-foreground")}
+              >
+                <RadioGroupItem id="cleanup-scope-selected" value="selected" disabled={selectedIds.size === 0} />
+                {t("findingsCleanup.scopeSelected", { count: selectedIds.size })}
+              </label>
+              <label htmlFor="cleanup-scope-all" className="flex items-center gap-2 text-sm">
+                <RadioGroupItem id="cleanup-scope-all" value="all" />
+                {t("findingsCleanup.scopeAll")}
+              </label>
+            </RadioGroup>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCleanupOpen(false)} disabled={cleaning}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={doCleanup}
+              disabled={
+                cleaning ||
+                (cleanupScope === "selected" && selectedIds.size === 0) ||
+                (cleanupScope === "filtered" && stats.total === 0)
+              }
+            >
+              {cleaning ? <Spinner data-icon="inline-start" /> : <Trash2Icon />}
+              {cleaning ? t("findingsCleanup.cleaning") : t("findingsCleanup.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
