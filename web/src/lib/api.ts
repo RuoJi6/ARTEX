@@ -970,6 +970,30 @@ export const api = {
   ) => patch<Finding>(`/exploration/findings/${id}`, fields),
   // 删除漏洞:移除 findings 记录 + 来源探索节点(从发现列表/任务发现 Tab/探索图一并消失)。
   deleteFinding: (id: string) => del<{ deleted: boolean; id: number }>(`/exploration/findings/${id}`),
+  // 批量一键清理漏洞:按范围(当前筛选/全部/已勾选)移除 findings 记录及来源探索节点。
+  cleanupFindings: (opts: {
+    scope: "filtered" | "all" | "selected";
+    filters?: Omit<FindingQuery, "page" | "pageSize">;
+    ids?: string[];
+  }) => {
+    const body: Record<string, unknown> = { scope: opts.scope };
+    if (opts.scope === "selected") {
+      body.ids = opts.ids ?? [];
+    } else if (opts.scope === "filtered" && opts.filters) {
+      const f = opts.filters;
+      body.filters = {
+        ...(f.severity && f.severity !== "all" ? { severity: f.severity } : {}),
+        ...(f.status && f.status !== "all" ? { status: f.status } : {}),
+        ...(f.vulnclass && f.vulnclass !== "all" ? { vulnclass: f.vulnclass } : {}),
+        ...(f.task && f.task !== "all" ? { task_id: f.task } : {}),
+        ...(f.query?.trim() ? { q: f.query.trim() } : {}),
+        ...(f.from ? { from: f.from } : {}),
+        ...(f.to ? { to: f.to } : {}),
+        ...(f.assetScope ? { asset_scope: f.assetScope } : {}),
+      };
+    }
+    return del<{ deleted: number }>("/exploration/findings", body);
+  },
   findingRetests: (id: string) =>
     get<{ retests: FindingRetest[] }>(`/exploration/findings/${encodeURIComponent(id)}/retests`).then((r) =>
       arr(r.retests),

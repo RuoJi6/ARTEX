@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -515,5 +516,131 @@ func TestAddFindingFollowUpIntent(t *testing.T) {
 	}
 	if _, _, err := store.AddFindingFollowUpIntent(findingID, findingNodeID, "should fail", auditInput); !errors.Is(err, ErrFindingOriginUnavailable) {
 		t.Fatalf("missing source node: want ErrFindingOriginUnavailable, got %v", err)
+	}
+}
+
+// TestDeleteFindings exercises bulk deletion by explicit ids, by FindingFilter,
+// and atomic rollback on task archive state conflicts.
+func TestDeleteFindings(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+
+	marker := fmt.Sprintf("__bulk_delete_%d__", time.Now().UnixNano())
+	tk, err := d.CreateTask("批量清理测试", "目标", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM findings WHERE vulnclass=$1`, marker)
+		_ = d.DeleteTask(tk.ID)
+	})
+
+	es := d.Exploration(tk.ExplorationID)
+	node1, err := es.AddNode(KindFinding, map[string]any{"summary": "f1", "severity": "high"}, 5, "confirmed", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node2, err := es.AddNode(KindFinding, map[string]any{"summary": "f2", "severity": "low"}, 5, "confirmed", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keepNode, err := es.AddNode(KindFinding, map[string]any{"summary": "keep", "severity": "medium"}, 5, "confirmed", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentNode, err := es.AddNode(KindIntent, map[string]any{"summary": "intent"}, 5, "open", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f1, err := d.AddFinding(tk.ID, node1, marker, "f1", SeverityHigh, "sum1", "poc1", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := d.AddFinding(tk.ID, node2, marker, "f2", SeverityLow, "sum2", "poc2", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fKeep, err := d.AddFinding(tk.ID, keepNode, marker, "keep", SeverityMedium, "sum3", "poc3", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fOrphan, err := d.AddFinding(0, 0, marker, "orphan", SeverityLow, "orphan-sum", "poc4", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SetFindingStatus(f2, FindingFalsePositive); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Delete by explicit ids (with duplicate and missing id).
+	n, err := d.DeleteFindings(context.Background(), FindingFilter{}, []int64{f1, f1, 999999999})
+	if err != nil {
+		t.Fatalf("DeleteFindings(ids): %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("DeleteFindings(ids): want 1, got %d", n)
+	}
+	if got, _ := d.GetFinding(f1); got != nil {
+		t.Fatalf("f1 should be deleted")
+	}
+	var cnt int
+	_ = d.QueryRow(`SELECT count(*) FROM exploration_nodes WHERE id=$1`, node1).Scan(&cnt)
+	if cnt != 0 {
+		t.Fatalf("node1 should be deleted, got %d", cnt)
+	}
+	_ = d.QueryRow(`SELECT count(*) FROM exploration_nodes WHERE id=$1`, intentNode).Scan(&cnt)
+	if cnt != 1 {
+		t.Fatalf("intent node should remain, got %d", cnt)
+	}
+
+	// 2. Delete by FindingFilter (status=false_positive + unique marker).
+	n, err = d.DeleteFindings(context.Background(), FindingFilter{VulnClass: marker, Status: FindingFalsePositive}, nil)
+	if err != nil {
+		t.Fatalf("DeleteFindings(filtered): %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("DeleteFindings(filtered): want 1, got %d", n)
+	}
+	if got, _ := d.GetFinding(f2); got != nil {
+		t.Fatalf("f2 should be deleted")
+	}
+	_ = d.QueryRow(`SELECT count(*) FROM exploration_nodes WHERE id=$1`, node2).Scan(&cnt)
+	if cnt != 0 {
+		t.Fatalf("node2 should be deleted, got %d", cnt)
+	}
+
+	// 3. Delete unassigned historical finding via TaskID=FindingUnassignedTask.
+	n, err = d.DeleteFindings(context.Background(), FindingFilter{VulnClass: marker, TaskID: FindingUnassignedTask}, nil)
+	if err != nil {
+		t.Fatalf("DeleteFindings(unassigned): %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("DeleteFindings(unassigned): want 1, got %d", n)
+	}
+	if got, _ := d.GetFinding(fOrphan); got != nil {
+		t.Fatalf("fOrphan should be deleted")
+	}
+
+	// fKeep must remain untouched.
+	if got, _ := d.GetFinding(fKeep); got == nil {
+		t.Fatalf("fKeep should remain")
+	}
+
+	// 4. Task in archive/soft-deleted state must fail atomically with ErrTaskArchiveState.
+	if _, err := d.Exec(`UPDATE tasks SET deleted_at=now() WHERE id=$1`, tk.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.DeleteFindings(context.Background(), FindingFilter{}, []int64{fKeep}); !errors.Is(err, ErrTaskArchiveState) {
+		t.Fatalf("soft-deleted task: want ErrTaskArchiveState, got %v", err)
+	}
+	if got, _ := d.GetFinding(fKeep); got == nil {
+		t.Fatalf("fKeep should survive rolled-back delete")
+	}
+	if _, err := d.Exec(`UPDATE tasks SET deleted_at=NULL WHERE id=$1`, tk.ID); err != nil {
+		t.Fatal(err)
 	}
 }
