@@ -1156,7 +1156,7 @@ export interface NotificationDelivery {
 export interface LLMProfile {
   id: string;
   name: string;
-  format: "openai" | "anthropic" | "openai-responses" | "jev";
+  format: "openai" | "anthropic" | "openai-responses" | "gemini" | "jev";
   base_url?: string;
   proxy?: string;
   model: string;

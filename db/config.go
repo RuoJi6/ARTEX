@@ -52,8 +52,8 @@ type LLMProfile struct {
 	// MaxTokensField picks the request key carrying MaxTokens, for format
 	// "openai" only: "" = max_tokens (default); "max_completion_tokens" = the
 	// newer key, which OpenAI's reasoning models require and whose budget covers
-	// reasoning tokens plus visible output. Ignored by anthropic and
-	// openai-responses, which name the field themselves.
+	// reasoning tokens plus visible output. Ignored by anthropic,
+	// openai-responses, and gemini, which name the field themselves.
 	MaxTokensField string `json:"max_tokens_field"`
 	// SessionHeaderKey, when non-empty, names a custom HTTP header sent on every
 	// request built from this profile; its value is the current run's session id
