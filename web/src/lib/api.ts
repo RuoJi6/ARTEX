@@ -163,6 +163,20 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
   return response;
 }
 
+export interface BackupStatus {
+  // 已上传、等待重启时恢复的备份。
+  pending: boolean;
+  // 本次启动时执行的恢复结果；未执行恢复时为 null。
+  last_restore: {
+    id?: string;
+    applied: boolean;
+    error?: string;
+    at: string;
+    source_version?: string;
+    backup_created_at?: string;
+  } | null;
+}
+
 export type McpServerScope = "read" | "task:create" | "task:control";
 
 export interface McpServerSettings {
@@ -415,6 +429,33 @@ export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   version: () => http<{ version: string }>("/version", { cache: "no-store" }),
   systemMetrics: () => get<SystemMetrics>("/system/metrics"),
+
+  // ---- 一键备份 / 恢复 ----
+  backupStatus: () => get<BackupStatus>("/system/backup/status"),
+  // 备份包可能有数 GB：与任务文件下载一样先 HEAD 校验登录，再交给浏览器直接落盘（cookie 鉴权），不读进内存。
+  downloadBackup: async () => {
+    if (MOCK) throw new ApiError("演示模式不支持备份与恢复", "demo_backup_disabled");
+    const token = getToken();
+    const response = await apiFetch("/api/system/backup/export", {
+      method: "HEAD",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      const code = response.headers.get("X-Artex-Error-Code") ?? (response.status === 409 ? "backup_busy" : undefined);
+      throw new ApiError(`HEAD /system/backup/export: ${response.status}`, code);
+    }
+    const a = document.createElement("a");
+    a.href = "/api/system/backup/export";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+  restoreBackup: (file: File) =>
+    http<{ ok: boolean; restore_id: string; version: string; created_at: string }>("/system/backup/restore", {
+      method: "POST",
+      body: file,
+      headers: { "Content-Type": "application/octet-stream" },
+    }),
 
   // ---- auth ----
   authStatus: () => get<{ initialized: boolean }>("/auth/status"),

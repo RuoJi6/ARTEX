@@ -138,6 +138,7 @@ test("migrated pages reference existing keys and contain no hardcoded Chinese di
     "components/approval-execution-focus.tsx",
     "hooks/use-side-questions.ts",
     "app/(main)/dashboard/page.tsx",
+    "app/(main)/system/settings/_components/backup-card.tsx",
     "app/(main)/system/settings/_components/basic-auth-card.tsx",
     "app/(main)/system/settings/_components/update-card.tsx",
     "app/(main)/_components/egress-ip-banner.tsx",

@@ -194,6 +194,18 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 
 ---
 
+## 一键备份与迁移
+
+在 **系统配置 → 系统与账号** 的 **备份与迁移** 卡片中：
+
+- **下载备份**：生成单个 `artex-backup-<时间>.tar.zst`，浏览器直接落盘。导出前需先暂停或等待所有运行中/排队中的任务完成，避免导出期间文件写入导致不一致。内容包括 PostgreSQL 全部业务表（同一快照事务内分片流式导出，表间一致）、数据目录（任务工作区、会话、证据、任务归档包、MITM CA 证书、流量及其 SQLite 索引快照）和 skills 目录。不含系统运行日志（`server_logs`）和 `jwt.key`。
+- **从备份恢复**：在新机器上先正常安装并启动 ARTEX，登录后上传备份文件。服务端先完整解包并按当前数据库结构校验，通过后重启；重启时、在任何组件打开数据之前替换数据：数据库在一个事务内整体替换（失败则原数据不变，恢复包移到 `data/.restore-failed` 供排查），数据目录逐项替换；若文件替换失败，进程会非零退出由守护脚本重试，直到全部替换完成才启动业务引擎。卡片会显示上次恢复的结果。
+- 恢复会**覆盖当前实例的全部数据**并重启停止当前运行中的任务；备份中未结束的任务在恢复后会保持暂停，需手动恢复，不会在新机器上自动继续向目标发起请求。登录密码、Basic Auth、LLM 与其他配置都随数据库迁移，恢复后用原实例的密码登录。
+- 新机器上已存在的同名 skill 保留本机版本（避免旧备份覆盖新版内置 skill），其余 skill 从备份装入。
+- 只能恢复到**相同或更新版本**的 ARTEX；备份含当前版本不认识的表或列时会拒绝恢复。旧路径（如任务归档包的绝对路径）会自动改写到新数据目录。
+- 恢复依赖 `start.sh` / `start.bat`（Docker 下为镜像 ENTRYPOINT）重启程序，与页面一键更新相同。
+- 恢复期间需在数据目录所在磁盘额外预留约一份**未压缩备份包**大小的临时空间（解包后的数据库文本与文件）；若前面有 Nginx 反向代理，请按下方反代示例为 `/api/system/backup/` 放宽 `client_max_body_size` 并关闭 `proxy_request_buffering`。
+
 ## 更新升级
 
 > 升级只换程序、不动数据：Postgres 数据卷 `pgdata`、`./data`（jwt.key / SQLite 等）、`./skills` 都会保留。**数据库迁移无需手动执行**——`artex` 每次启动会幂等重跑 `schema.sql`（含 `ADD COLUMN` / `CREATE INDEX IF NOT EXISTS`），即“重启即迁移”。升级前仍建议先备份 `./data` 与数据库。
@@ -455,6 +467,22 @@ server {
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 3600s;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    # 一键备份 / 恢复：允许大体积备份流式上传与下载，避免触发默认 1m 限制与请求体缓冲
+    location /api/system/backup/ {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        client_max_body_size 0;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
     }

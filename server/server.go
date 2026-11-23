@@ -825,6 +825,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/update/rollback", s.updateRollback)
 	mux.HandleFunc("GET /api/update/stream", s.updateStream)
 
+	// 一键备份 / 恢复（迁移数据）。恢复会替换全部数据并重启，同样只对已登录管理员开放。
+	mux.HandleFunc("GET /api/system/backup/status", s.backupStatus)
+	mux.HandleFunc("GET /api/system/backup/export", s.backupExport)
+	mux.HandleFunc("POST /api/system/backup/restore", s.backupRestore)
+
 	mux.HandleFunc("GET /api/tasks", s.listTasks)
 	mux.HandleFunc("POST /api/tasks", s.createTask)
 	mux.HandleFunc("GET /api/schedules", s.listSchedules)
