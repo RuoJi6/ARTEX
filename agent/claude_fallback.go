@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/Autumn-27/norma/llm"
 )
 
 // Server-side refusal fallback for first-party Claude models.
@@ -37,10 +39,14 @@ var fallbackModels = map[string]bool{
 	"claude-sonnet-5-5": true,
 }
 
-// serverFallbackEligible reports whether requests for model against baseURL should
-// opt into server-side fallbacks. An empty baseURL means the SDK default, which is
+// serverFallbackEligible reports whether requests in the given wire format for
+// model against baseURL should opt into server-side fallbacks. Only the Anthropic
+// Messages format qualifies. An empty baseURL means the SDK default, which is
 // api.anthropic.com.
-func serverFallbackEligible(model, baseURL string) bool {
+func serverFallbackEligible(format llm.Format, model, baseURL string) bool {
+	if format != llm.FormatAnthropic {
+		return false
+	}
 	if !fallbackModels[strings.ToLower(strings.TrimSpace(model))] {
 		return false
 	}
@@ -86,22 +92,31 @@ func (t claudeFallbackTransport) RoundTrip(req *http.Request) (*http.Response, e
 	out.Body = io.NopCloser(bytes.NewReader(patched))
 	out.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(patched)), nil }
 	out.ContentLength = int64(len(patched))
-	out.Header.Set("anthropic-beta", mergeBetaHeader(out.Header.Get("anthropic-beta"), claudeFallbackBeta))
+	// Merge every anthropic-beta header line: Header.Get would read only the
+	// first one, and Set would then drop the rest.
+	out.Header.Set("anthropic-beta", mergeBetaHeader(strings.Join(out.Header.Values("anthropic-beta"), ","), claudeFallbackBeta))
 	return t.base.RoundTrip(out)
 }
 
 // withServerFallback inserts `"fallbacks":"default"` into a JSON object body. The
 // rest of the bytes are left as they are, so the request is otherwise identical.
-// It returns ok=false when the body is not a JSON object or already sets fallbacks.
+// It returns ok=false when the body is not a JSON object or already sets a
+// top-level fallbacks key. Only top-level keys are checked: message content,
+// tool output or scraped pages that merely contain the text "fallbacks" must not
+// suppress the field.
 func withServerFallback(body []byte) ([]byte, bool) {
-	trimmed := bytes.TrimRight(body, " \t\r\n")
+	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
 		return body, false
 	}
-	if !json.Valid(trimmed) || bytes.Contains(trimmed, []byte(`"fallbacks"`)) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &top); err != nil {
 		return body, false
 	}
-	inner := bytes.TrimRight(trimmed[1:len(trimmed)-1], " \t\r\n")
+	if _, exists := top["fallbacks"]; exists {
+		return body, false
+	}
+	inner := bytes.TrimSpace(trimmed[1 : len(trimmed)-1])
 	sep := ","
 	if len(inner) == 0 {
 		sep = ""

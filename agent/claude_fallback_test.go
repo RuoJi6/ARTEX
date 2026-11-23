@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Autumn-27/norma/llm"
 )
 
 func TestServerFallbackEligible(t *testing.T) {
@@ -35,8 +37,18 @@ func TestServerFallbackEligible(t *testing.T) {
 		{"claude-opus-5-5", "::not a url", false},
 	}
 	for _, tc := range cases {
-		if got := serverFallbackEligible(tc.model, tc.base); got != tc.want {
-			t.Errorf("serverFallbackEligible(%q, %q) = %v, want %v", tc.model, tc.base, got, tc.want)
+		if got := serverFallbackEligible(llm.FormatAnthropic, tc.model, tc.base); got != tc.want {
+			t.Errorf("serverFallbackEligible(anthropic, %q, %q) = %v, want %v", tc.model, tc.base, got, tc.want)
+		}
+	}
+}
+
+// Only the Anthropic Messages format may carry fallbacks, even for an allowlisted
+// model on api.anthropic.com.
+func TestServerFallbackEligibleRequiresAnthropicFormat(t *testing.T) {
+	for _, f := range []llm.Format{llm.FormatOpenAI, llm.FormatOpenAIResponses, ""} {
+		if serverFallbackEligible(f, "claude-opus-5-5", "https://api.anthropic.com") {
+			t.Errorf("format %q: eligible, want not eligible", f)
 		}
 	}
 }
@@ -47,7 +59,14 @@ func TestWithServerFallback(t *testing.T) {
 		ok             bool
 	}{
 		{"adds to populated object", `{"model":"m","max_tokens":5}`, `{"model":"m","max_tokens":5,"fallbacks":"default"}`, true},
-		{"trailing whitespace kept", "{\"a\":1}\n", `{"a":1,"fallbacks":"default"}`, true},
+		{"trailing whitespace trimmed", "{\"a\":1}\n", `{"a":1,"fallbacks":"default"}`, true},
+		{"leading whitespace trimmed", " \n\t{\"a\":1}", `{"a":1,"fallbacks":"default"}`, true},
+		{"inner whitespace", "{ \"a\":1 \n}", `{"a":1,"fallbacks":"default"}`, true},
+		// Regression: the literal "fallbacks" inside message content or a nested
+		// object must not suppress the top-level field.
+		{"fallbacks in message text", `{"messages":[{"role":"user","content":"set \"fallbacks\": none"}]}`, `{"messages":[{"role":"user","content":"set \"fallbacks\": none"}],"fallbacks":"default"}`, true},
+		{"fallbacks as nested key", `{"metadata":{"fallbacks":"x"}}`, `{"metadata":{"fallbacks":"x"},"fallbacks":"default"}`, true},
+		{"already set to other value", `{"a":1,"fallbacks":"none"}`, `{"a":1,"fallbacks":"none"}`, false},
 		{"empty object", `{}`, `{"fallbacks":"default"}`, true},
 		{"already set", `{"fallbacks":"default"}`, `{"fallbacks":"default"}`, false},
 		{"not an object", `[1,2]`, `[1,2]`, false},
@@ -136,5 +155,27 @@ func TestClaudeFallbackTransportPassThrough(t *testing.T) {
 	_ = resp.Body.Close()
 	if string(gotBody) != body || gotBeta != "" {
 		t.Errorf("count_tokens changed: body=%s beta=%q", gotBody, gotBeta)
+	}
+}
+
+// Every anthropic-beta header line must survive, not only the first one.
+func TestClaudeFallbackTransportMergesAllBetaHeaders(t *testing.T) {
+	var gotBeta []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBeta = r.Header.Values("anthropic-beta")
+	}))
+	defer srv.Close()
+	client := &http.Client{Transport: claudeFallbackTransport{base: http.DefaultTransport}}
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/messages", strings.NewReader(`{"model":"claude-opus-5-5"}`))
+	req.Header.Add("anthropic-beta", "prompt-caching-2024-07-31")
+	req.Header.Add("anthropic-beta", "a, b")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	want := "prompt-caching-2024-07-31,a,b," + claudeFallbackBeta
+	if len(gotBeta) != 1 || gotBeta[0] != want {
+		t.Errorf("anthropic-beta = %q, want [%q]", gotBeta, want)
 	}
 }
