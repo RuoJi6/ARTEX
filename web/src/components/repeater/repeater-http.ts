@@ -103,12 +103,7 @@ export function requestFromTraffic(
   if (/…\[truncated\] @blob sha256:[a-f0-9]{64}/.test(request.body)) {
     throw new Error("请求正文为截断预览，请下载完整正文后再导入");
   }
-  let host = exchange.host;
-  try {
-    host = new URL(exchange.url).host || host;
-  } catch {
-    /* Legacy URL uses the indexed host. */
-  }
+  const host = extractHttpHost(exchange.url) || exchange.host;
   const headersText = getHostHeader(request.headersText)
     ? request.headersText
     : setHostHeader(request.headersText, host);
@@ -124,26 +119,63 @@ export function requestFromTraffic(
   };
 }
 
-export function connectionOrigin(url: string): string {
+type SplitHttpUrl = {
+  origin: string;
+  host: string;
+  base: string;
+  rest: string;
+};
+
+// Parse only the scheme+authority via WHATWG URL so the raw request-target
+// (path and query) is never percent-encoded, dot-collapsed, or backslash-rewritten.
+function splitRawHttpUrl(raw: string): SplitHttpUrl | null {
+  const trimmed = raw.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  const schemeEnd = trimmed.indexOf("://") + 3;
+  const restOffset = trimmed.slice(schemeEnd).search(/[/?#]/);
+  const restIndex = restOffset < 0 ? trimmed.length : schemeEnd + restOffset;
+  const authority = trimmed.slice(schemeEnd, restIndex);
+  if (!authority || authority.includes("\\")) return null;
   try {
-    const parsed = new URL(url);
-    return /^https?:$/.test(parsed.protocol) ? parsed.origin : "";
+    const parsed = new URL(trimmed.slice(0, restIndex));
+    if (!/^https?:$/.test(parsed.protocol) || !parsed.host) return null;
+    return {
+      origin: parsed.origin,
+      host: parsed.host,
+      base: parsed.href.replace(/\/$/, ""),
+      rest: trimmed.slice(restIndex),
+    };
   } catch {
-    return "";
+    return null;
   }
+}
+
+function normalizeRequestTarget(rest: string): string {
+  if (!rest) return "/";
+  return rest.startsWith("?") ? `/${rest}` : rest;
+}
+
+export function extractHttpHost(url: string): string {
+  const parsed = splitRawHttpUrl(url);
+  return parsed ? parsed.host : "";
+}
+
+export function rawRequestTarget(url: string): string {
+  const parsed = splitRawHttpUrl(url);
+  if (!parsed) return "";
+  return normalizeRequestTarget(parsed.rest.split("#", 1)[0]);
+}
+
+export function connectionOrigin(url: string): string {
+  const parsed = splitRawHttpUrl(url);
+  return parsed ? parsed.origin : "";
 }
 
 export function buildRawRequest(request: RepeaterInitial): string {
   if (request.rawRequest !== undefined) return request.rawRequest;
-  let target = "/";
-  let host = "";
-  try {
-    const url = new URL(request.url ?? "");
-    target = url.pathname + url.search;
-    host = url.host;
-  } catch {
-    /* New empty draft. */
-  }
+  const parsed = splitRawHttpUrl(request.url ?? "");
+  const target = parsed ? normalizeRequestTarget(parsed.rest.split("#", 1)[0]) : "/";
+  const host = parsed ? parsed.host : "";
   const headersText = request.headersText?.trim() ? request.headersText : `Host: ${host}`;
   return `${request.method ?? "GET"} ${target} HTTP/1.1\n${joinRequestText(headersText, request.body ?? "")}`;
 }
@@ -157,19 +189,24 @@ export function parseRawRequest(
   const match = /^([A-Za-z]+)\s+(\S+)\s+(HTTP\/(?:1\.[01]|2(?:\.0)?))$/.exec(line);
   if (!match) throw new Error("请求首行应为：POST /path HTTP/1.1");
   const parts = splitRequestText(newline < 0 ? "" : text.slice(newline + 1));
-  let url: URL;
-  if (/^https?:\/\//i.test(match[2])) url = new URL(match[2]);
-  else {
-    if (!match[2].startsWith("/")) throw new Error("请求路径必须以 / 开头，或填写完整 http/https URL");
+  const requestTarget = match[2];
+  let url: string;
+  if (/^https?:\/\//i.test(requestTarget)) {
+    const parsed = splitRawHttpUrl(requestTarget);
+    if (!parsed) throw new TypeError(`Invalid URL: ${requestTarget}`);
+    if (parsed.rest.includes("#")) throw new Error("请求路径不能包含 URL 片段，请使用 %23 表示 #");
+    url = `${parsed.base}${normalizeRequestTarget(parsed.rest)}`;
+  } else {
+    if (!requestTarget.startsWith("/")) throw new Error("请求路径必须以 / 开头，或填写完整 http/https URL");
     const origin = connectionOrigin(targetOrigin) || connectionOrigin(`https://${getHostHeader(parts.headersText)}`);
     if (!origin) throw new Error("请填写 Host 请求头或设置发送目标");
-    url = new URL(origin + match[2]);
+    if (requestTarget.includes("#")) throw new Error("请求路径不能包含 URL 片段，请使用 %23 表示 #");
+    url = `${origin}${requestTarget}`;
   }
-  if (url.hash) throw new Error("请求路径不能包含 URL 片段，请使用 %23 表示 #");
   return {
     ...parts,
     method: match[1].toUpperCase(),
-    url: url.href,
+    url,
     httpVersion: match[3] === "HTTP/2" ? "HTTP/2.0" : match[3],
   };
 }

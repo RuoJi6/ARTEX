@@ -582,3 +582,66 @@ test("evidence import preserves captured request line and protocol rather than r
   assert.equal(imported.targetOrigin, "https://example.test");
   assert.equal(buildRawRequest(imported), imported.rawRequest);
 });
+
+test("raw request-target characters in query and path are preserved without WHATWG URL normalization", () => {
+  const sqli = parseRawRequest("GET /item?id=1' HTTP/1.1\nHost: example.test\n\n");
+  assert.equal(sqli.url, "https://example.test/item?id=1'");
+
+  const specialQuery = parseRawRequest(
+    "GET /item?id=1'\"<>`{}\\| HTTP/1.1\nHost: example.test\n\n",
+    "http://example.test:8080",
+  );
+  assert.equal(specialQuery.url, "http://example.test:8080/item?id=1'\"<>`{}\\|");
+
+  const traversal = parseRawRequest("GET /a/../b/./c?id=1' HTTP/1.1\nHost: example.test\n\n");
+  assert.equal(traversal.url, "https://example.test/a/../b/./c?id=1'");
+
+  const encodedDots = parseRawRequest("GET /a/%2e%2e/b?x=' HTTP/1.1\nHost: example.test\n\n");
+  assert.equal(encodedDots.url, "https://example.test/a/%2e%2e/b?x='");
+
+  const rawPathChars = parseRawRequest("GET /a\\b\"c?q=' HTTP/1.1\nHost: example.test\n\n");
+  assert.equal(rawPathChars.url, "https://example.test/a\\b\"c?q='");
+
+  const absolute = parseRawRequest("GET http://elsewhere.test:8080/a/../item?id=1'\"<> HTTP/1.1\nHost: vhost.test\n\n");
+  assert.equal(absolute.url, "http://elsewhere.test:8080/a/../item?id=1'\"<>");
+
+  assert.equal(
+    parseRawRequest("GET http://elsewhere.test HTTP/1.1\nHost: elsewhere.test\n\n").url,
+    "http://elsewhere.test/",
+  );
+  assert.equal(
+    parseRawRequest("GET http://elsewhere.test?id=1' HTTP/1.1\nHost: elsewhere.test\n\n").url,
+    "http://elsewhere.test/?id=1'",
+  );
+
+  assert.throws(() => parseRawRequest("GET /item?id=1'#frag HTTP/1.1\nHost: example.test\n\n"), /URL 片段/);
+  assert.throws(() => parseRawRequest("GET /item# HTTP/1.1\nHost: example.test\n\n"), /URL 片段/);
+  assert.throws(
+    () => parseRawRequest("GET http://example.test/item?id=1'#frag HTTP/1.1\nHost: example.test\n\n"),
+    /URL 片段/,
+  );
+  assert.throws(() => parseRawRequest("GET http://example.test\\evil/path HTTP/1.1\nHost: example.test\n\n"));
+
+  const built = buildRawRequest({
+    method: "GET",
+    url: "https://example.test:8443/a/../item?id=1'",
+  });
+  assert.equal(built, "GET /a/../item?id=1' HTTP/1.1\nHost: example.test:8443\n\n");
+
+  const fromTraffic = requestFromTraffic("GET /item?id=1' HTTP/1.1\r\nHost: example.test\r\n\r\n", {
+    method: "GET",
+    url: "https://example.test/item?id=1'",
+    host: "example.test",
+  });
+  assert.equal(fromTraffic.url, "https://example.test/item?id=1'");
+  assert.match(fromTraffic.rawRequest, /^GET \/item\?id=1' HTTP\/1\.1\n/);
+
+  const tab = {
+    ...defaultWorkspace().tabs[0],
+    method: "GET",
+    url: "https://example.test/a/../item?id=1'",
+    rawRequest: "GET /a/../item?id=1' HTTP/1.1\nHost: example.test\n\n",
+  };
+  assert.equal(matchesRepeaterFilters(tab, { ...DEFAULT_FILTERS, path: "id=1'" }), true);
+  assert.equal(matchesRepeaterFilters(tab, { ...DEFAULT_FILTERS, path: "/a/../item" }), true);
+});
