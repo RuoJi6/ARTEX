@@ -703,9 +703,12 @@ func extractTarZst(input io.Reader, destination string, maxFiles int) error {
 			if err := os.MkdirAll(filepath.Dir(target), archiveDirMode); err != nil {
 				return err
 			}
-			output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fs.FileMode(header.Mode)&0o777)
+			output, stored, err := openExtractedFile(target, fs.FileMode(header.Mode)&0o777)
 			if err != nil {
 				return err
+			}
+			if stored != target {
+				log.Printf("[archive] 大小写不敏感的文件系统无法同时保存 %s，改存为 %s", header.Name, stored)
 			}
 			_, copyErr := io.CopyN(output, tarReader, header.Size)
 			closeErr := output.Close()
@@ -717,4 +720,65 @@ func extractTarZst(input io.Reader, destination string, maxFiles int) error {
 		}
 	}
 	return nil
+}
+
+// openExtractedFile creates target exclusively. A case-insensitive volume cannot
+// store a second spelling of a name that is already present, so that entry is
+// written beside the first one instead of failing the whole archive.
+func openExtractedFile(target string, mode fs.FileMode) (*os.File, string, error) {
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err == nil || !errors.Is(err, fs.ErrExist) {
+		return file, target, err
+	}
+	alternative, ok, altErr := caseDistinctArchivePath(target)
+	if altErr != nil {
+		return nil, "", altErr
+	}
+	if !ok {
+		return nil, "", err
+	}
+	file, err = os.OpenFile(alternative, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return nil, "", err
+	}
+	return file, alternative, nil
+}
+
+// caseDistinctArchivePath reports a sibling path when target lost the create
+// against a different case spelling. ok is false for an exact duplicate.
+func caseDistinctArchivePath(target string) (string, bool, error) {
+	base := filepath.Base(target)
+	dir := filepath.Dir(target)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false, err
+	}
+	folded := false
+	for _, entry := range entries {
+		if entry.Name() == base {
+			return "", false, nil
+		}
+		if strings.EqualFold(entry.Name(), base) {
+			folded = true
+		}
+	}
+	if !folded {
+		return "", false, nil
+	}
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	for n := 1; n < 1000; n++ {
+		candidate := fmt.Sprintf("%s.__artex-case-%d%s", stem, n, ext)
+		taken := false
+		for _, entry := range entries {
+			if strings.EqualFold(entry.Name(), candidate) {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			return filepath.Join(dir, candidate), true, nil
+		}
+	}
+	return "", false, fmt.Errorf("too many case-insensitive name collisions for %s", target)
 }
