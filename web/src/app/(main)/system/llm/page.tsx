@@ -49,11 +49,12 @@ const MAX_TOKENS_FIELDS = (ui: UITranslate): { value: string; label: string }[] 
   { value: NONE, label: ui("screen.af7202f4ddd9ce") },
   { value: "max_completion_tokens", label: "max_completion_tokens" },
 ];
-// 另外两种格式各自定死了字段名，选项对它们无意义，说明文案里直接讲清楚。
+// 另外几种格式各自定死了字段名，选项对它们无意义，说明文案里直接讲清楚。
 const MAX_TOKENS_FIELD_HINTS = (ui: UITranslate): Record<string, string> => ({
   openai: ui("screen.8565b2d7398535"),
   anthropic: ui("screen.55138cdb37fe16"),
   "openai-responses": ui("screen.82b05dbd905574"),
+  gemini: ui("llm.maxTokensFieldHint.gemini"),
 });
 const EFFORT_LEVELS = (ui: UITranslate): { value: string; label: string }[] => [
   { value: NONE, label: ui("screen.d703a9bcd8b626") },
@@ -325,7 +326,9 @@ function ProfileSheet({
 
   const isNew = !profile;
   const [name, setName] = React.useState("");
-  const [format, setFormat] = React.useState<"anthropic" | "openai" | "openai-responses" | "jev">("anthropic");
+  const [format, setFormat] = React.useState<"anthropic" | "openai" | "openai-responses" | "gemini" | "jev">(
+    "anthropic",
+  );
   const [model, setModel] = React.useState("");
   const [baseUrl, setBaseUrl] = React.useState("");
   const [proxy, setProxy] = React.useState("");
@@ -355,7 +358,10 @@ function ProfileSheet({
     if (!open) return;
     setName(profile?.name ?? "");
     setFormat(
-      profile?.format === "openai" || profile?.format === "openai-responses" || profile?.format === "jev"
+      profile?.format === "openai" ||
+        profile?.format === "openai-responses" ||
+        profile?.format === "gemini" ||
+        profile?.format === "jev"
         ? profile.format
         : "anthropic",
     );
@@ -509,7 +515,7 @@ function ProfileSheet({
               <Select
                 value={format}
                 onValueChange={(v) => {
-                  const next = v as "anthropic" | "openai" | "openai-responses" | "jev";
+                  const next = v as "anthropic" | "openai" | "openai-responses" | "gemini" | "jev";
                   setFormat(next);
                   if (next === "jev" && !model.trim()) setModel("jev-latest");
                 }}
@@ -521,6 +527,7 @@ function ProfileSheet({
                   <SelectItem value="anthropic">Anthropic</SelectItem>
                   <SelectItem value="openai">OpenAI (Chat Completions)</SelectItem>
                   <SelectItem value="openai-responses">OpenAI (Responses API)</SelectItem>
+                  <SelectItem value="gemini">Google Gemini</SelectItem>
                   <SelectItem value="jev">{ui("screen.1959e996efa50a")}</SelectItem>
                 </SelectContent>
               </Select>
@@ -533,7 +540,7 @@ function ProfileSheet({
               <Input
                 id="p-model"
                 className="font-mono"
-                placeholder="claude-opus-4-8"
+                placeholder={format === "gemini" ? "gemini-2.5-pro" : "claude-opus-4-8"}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
               />
@@ -585,7 +592,9 @@ function ProfileSheet({
             <Input
               id="p-base-url"
               className="font-mono"
-              placeholder="https://api.openai.com/v1"
+              placeholder={
+                format === "gemini" ? "https://generativelanguage.googleapis.com/v1beta" : "https://api.openai.com/v1"
+              }
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
             />

@@ -656,7 +656,13 @@ func extractTaskArchivePackage(path, expectedSHA, destination string) error {
 			return err
 		}
 	}
-	decoder, err := zstd.NewReader(file)
+	return extractTarZst(file, destination, maxArchiveFiles)
+}
+
+// extractTarZst unpacks a zstd-compressed tar stream of plain files and
+// directories into destination, refusing entries that would escape it.
+func extractTarZst(input io.Reader, destination string, maxFiles int) error {
+	decoder, err := zstd.NewReader(input)
 	if err != nil {
 		return err
 	}
@@ -676,17 +682,17 @@ func extractTaskArchivePackage(path, expectedSHA, destination string) error {
 			return err
 		}
 		entries++
-		if entries > maxArchiveFiles || header.Size < 0 || total+header.Size > maxArchiveBytes {
-			return errors.New("task archive exceeds extraction safety limits")
+		if entries > maxFiles || header.Size < 0 || total+header.Size > maxArchiveBytes {
+			return errors.New("archive exceeds extraction safety limits")
 		}
 		total += header.Size
 		clean := filepath.Clean(filepath.FromSlash(header.Name))
 		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("unsafe task archive path %q", header.Name)
+			return fmt.Errorf("unsafe archive path %q", header.Name)
 		}
 		target := filepath.Join(destination, clean)
 		if relative, err := filepath.Rel(destination, target); err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("unsafe task archive target %q", header.Name)
+			return fmt.Errorf("unsafe archive target %q", header.Name)
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -707,7 +713,7 @@ func extractTaskArchivePackage(path, expectedSHA, destination string) error {
 				return err
 			}
 		default:
-			return fmt.Errorf("unsupported task archive entry type %d", header.Typeflag)
+			return fmt.Errorf("unsupported archive entry type %d", header.Typeflag)
 		}
 	}
 	return nil

@@ -12,14 +12,14 @@ export const settingsMessages = {
   "settings.workerLimit": ["Worker 总数不能超过 50", "The total number of Workers cannot exceed 50"],
   "settings.duplicatePoolProfile": ["不能重复选择同一个 LLM 配置", "Each LLM profile can only be selected once"],
   "settings.workerPoolsSaved": [
-    "已保存多模型 Worker 池（对之后启动的任务生效）",
-    "Model pools saved; applies to tasks started afterward",
+    "已保存多模型 Worker 池，跟随全局配置的任务已热更新",
+    "Model pools saved; tasks following the global configuration have been updated live",
   ],
   "settings.saveFailed": ["保存失败：{{message}}", "Could not save: {{message}}"],
   "settings.positiveConcurrency": ["并发数必须是大于 0 的整数", "Concurrency must be a positive whole number"],
   "settings.workersSaved": [
-    "已保存并发工作 agent 数（对之后启动的任务生效）",
-    "Worker count saved; applies to tasks started afterward",
+    "已保存工作并发，跟随全局配置的任务已热更新",
+    "Worker count saved; tasks following the global configuration have been updated live",
   ],
   "settings.saveFailedPrefix": ["保存失败：", "Could not save: "],
   "settings.pythonSaved": ["已保存 Python 解释器配置", "Python interpreter settings saved"],
@@ -110,6 +110,52 @@ export const settingsMessages = {
   "settings.matchingSettings": ["匹配“{{query}}”的设置项", "Settings matching “{{query}}”"],
   "settings.clearSearch": ["清除搜索", "Clear search"],
   "settings.keywords.update": ["更新 版本 升级", "update version upgrade"],
+  "settings.keywords.backup": [
+    "备份 恢复 迁移 导出 导入 数据 一键备份",
+    "backup restore migrate migration export import data",
+  ],
+  "settings.backup.title": ["备份与迁移", "Backup and migration"],
+  "settings.backup.help": [
+    "一键导出全部数据（数据库、任务工作区、会话、流量、证据、归档包、MITM 证书和 skills），在新机器上恢复即可完成迁移。",
+    "Export all data (database, task workspaces, sessions, traffic, evidence, archive packages, MITM certificate and skills) in one file, then restore it on another machine to migrate.",
+  ],
+  "settings.backup.download": ["下载备份", "Download backup"],
+  "settings.backup.downloadStarted": [
+    "备份已开始生成，浏览器会直接下载，数据较多时需要一些时间",
+    "The backup is being generated and will download directly. Large installations take a while.",
+  ],
+  "settings.backup.downloadFailedPrefix": ["下载备份失败：", "Could not download backup: "],
+  "settings.backup.restore": ["从备份恢复", "Restore from backup"],
+  "settings.backup.uploading": ["正在上传并校验备份…", "Uploading and verifying the backup…"],
+  "settings.backup.restoreFailedPrefix": ["恢复失败：", "Restore failed: "],
+  "settings.backup.confirmTitle": ["用备份替换当前全部数据？", "Replace all current data with this backup?"],
+  "settings.backup.confirmBody": [
+    "当前实例的任务、资产、漏洞、配置、文件和流量都会被「{{name}}」中的内容替换，且无法撤销。上传校验通过后程序会重启并停止当前运行中的任务；备份中未结束的任务在恢复后会保持暂停，不会自动继续执行。建议先下载一份当前数据的备份。",
+    "Tasks, assets, findings, settings, files and traffic on this instance will be replaced by the contents of “{{name}}”. This cannot be undone. After the upload is verified, ARTEX restarts and stops tasks currently running here; any unfinished tasks from the backup start paused rather than resuming automatically. Download a backup of the current data first.",
+  ],
+  "settings.backup.cancel": ["取消", "Cancel"],
+  "settings.backup.confirm": ["替换并重启", "Replace and restart"],
+  "settings.backup.restarting": [
+    "备份已校验，正在重启并恢复数据，请稍候（页面会自动刷新）…",
+    "Backup verified. Restarting to restore data. Please wait; the page will reload automatically…",
+  ],
+  "settings.backup.restoreTimeout": [
+    "等待服务重启超时（大备份的数据库恢复可能仍在进行）。请查看后端日志、稍后刷新页面，或确认 artex 是通过 start.sh / start.bat 启动的。",
+    "Timed out waiting for the service to restart (a large backup may still be restoring on the server). Check the backend logs, refresh later, or confirm ARTEX was started with start.sh / start.bat.",
+  ],
+  "settings.backup.lastRestoreOk": [
+    "已于 {{time}} 从备份恢复（备份版本 {{version}}）。",
+    "Restored from a backup at {{time}} (backup version {{version}}).",
+  ],
+  "settings.backup.lastRestoreFailed": ["上次恢复失败：{{message}}", "The last restore failed: {{message}}"],
+  "settings.backup.pending": [
+    "有一份已上传的备份等待重启后恢复。",
+    "An uploaded backup will be restored at the next restart.",
+  ],
+  "settings.backup.note": [
+    "下载备份前需先暂停或等待所有运行中、排队中的任务结束。恢复需要相同或更新版本的 ARTEX；登录密码、Basic Auth 与 LLM 配置随数据库一起迁移，恢复后请使用原实例的密码登录；新机器上已有的同名 skill 保留本机版本。",
+    "Pause or finish active and queued tasks before downloading a backup. Restoring requires the same or a newer ARTEX version. The sign-in password, Basic Auth and LLM settings move with the database, so sign in with the original instance's password afterwards. Skills that already exist on the new machine keep the local copy.",
+  ],
   "settings.keywords.basicAuth": [
     "基础认证 登录 用户名 密码",
     "basic auth authentication sign-in login username password",
@@ -427,8 +473,14 @@ export const settingsMessages = {
     "每个任务并发运行的工作 agent 数量（默认 3）。数值越大并发探测越多、消耗也越高。修改后",
     "The number of Workers running concurrently per task (default: 3). More Workers mean more parallel probes and higher usage. Changes ",
   ],
-  "settings.futureTasksOnly": ["对之后启动的任务生效", "apply to tasks started afterward"],
-  "settings.runningTasksUnchanged": ["，正在运行的任务不受影响。", "; running tasks are unaffected."],
+  "settings.workersLiveUpdate": [
+    "即时更新跟随全局配置（worker_count = 0）的任务",
+    "apply immediately to tasks following the global configuration (worker_count = 0)",
+  ],
+  "settings.workersDrainHelp": [
+    "；单任务覆盖值不受影响。增容启动新 Worker loops；缩容等待在跑意图完成后退出，不会强杀，实际数量可能暂时高于目标。",
+    "; per-task overrides are unchanged. Scaling up starts new Worker loops; scaling down lets running intents finish before loops exit, without force-cancelling them. Actual counts may temporarily exceed target.",
+  ],
   "settings.workerPools": ["多模型 Worker 池", "Model pools"],
   "settings.addPool": ["添加模型池", "Add model pool"],
   "settings.unavailableProfile": ["配置 #{{id}} 已删除/不可用", "Profile #{{id}} deleted or unavailable"],

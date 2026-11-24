@@ -26,6 +26,7 @@ func TestExpandWorkerSlotsLegacy(t *testing.T) {
 		{"configured", 2, 2},
 		{"zero defaults", 0, 3},
 		{"negative defaults", -1, 3},
+		{"oversized caps", db.MaxTaskWorkerCount + 1, db.MaxTaskWorkerCount},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			slots, err := ExpandWorkerSlots(nil, tc.count)
@@ -170,6 +171,13 @@ func TestWorkerPoolSettingsRoundTrip(t *testing.T) {
 	if clearResult.Code != http.StatusOK || m.Workers() != 4 || len(m.WorkerPools()) != 0 {
 		t.Fatalf("PUT legacy clear status=%d body=%s workers=%d pools=%+v", clearResult.Code, clearResult.Body.String(), m.Workers(), m.WorkerPools())
 	}
+	for _, body := range []string{`{"workers":51}`, `{"workers":51,"worker_pools":[]}`, `{"workers":0}`} {
+		invalid := httptest.NewRecorder()
+		s.putSettings(invalid, httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body)))
+		if invalid.Code != http.StatusBadRequest || m.Workers() != 4 || len(m.WorkerPools()) != 0 {
+			t.Fatalf("invalid legacy workers %s status=%d body=%s workers=%d", body, invalid.Code, invalid.Body.String(), m.Workers())
+		}
+	}
 	res = httptest.NewRecorder()
 	s.getSettings(res, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
 	var cleared map[string]any
@@ -280,7 +288,7 @@ func TestPinnedWorkerLoopDoesNotConsultTaskRouterAndReportsFailureOnce(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		e.workerLoop(ctx, task, WorkerSlot{Name: "work#4", ProfileID: 12})
+		e.workerLoop(ctx, task, WorkerSlot{Name: "work#4", ProfileID: 12}, &workerSlotRuntime{idleCtx: ctx})
 		close(done)
 	}()
 	time.Sleep(100 * time.Millisecond)
@@ -389,5 +397,94 @@ func TestDetachedIntentPinnedOwnerUsesPinnedResolver(t *testing.T) {
 	node, err := task.Store.GetNode(intentID)
 	if err != nil || node == nil || node.State != "paused" {
 		t.Fatalf("intent changed after unavailable resolver: node=%+v err=%v", node, err)
+	}
+}
+
+func TestWorkerSettingsDirectSettersNotifyAfterPersistence(t *testing.T) {
+	m, err := NewManager(t.TempDir(), "")
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	defer m.Close()
+	oldPools, poolsSet, _ := m.pg.GetSetting(settingWorkerPools)
+	oldWorkers, workersSet, _ := m.pg.GetSetting(settingWorkers)
+	defer func() {
+		for key, saved := range map[string]struct {
+			value string
+			set   bool
+		}{
+			settingWorkerPools: {oldPools, poolsSet},
+			settingWorkers:     {oldWorkers, workersSet},
+		} {
+			if saved.set {
+				_ = m.pg.SetSetting(key, saved.value)
+			} else {
+				_, _ = m.pg.Exec("DELETE FROM settings WHERE key=$1", key)
+			}
+		}
+	}()
+	profileID, err := m.pg.SaveProfile(&db.LLMProfile{Name: "worker-notify-test", Format: "openai", Model: "worker-notify-test", APIKey: "worker-notify-test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.pg.DeleteProfile(profileID)
+	var notifications int
+	wantWorkers, wantPools := 0, 0
+	callback := func() {
+		notifications++
+		// Re-enter Manager APIs: callbacks must run after the write and outside mu.
+		if got := m.Workers(); got != wantWorkers {
+			t.Errorf("callback observed workers=%d, want %d", got, wantWorkers)
+		}
+		if got := len(m.WorkerPools()); got != wantPools {
+			t.Errorf("callback observed %d pools, want %d", got, wantPools)
+		}
+		m.SetWorkerConfigChangedCallback(nil)
+	}
+	m.SetWorkerConfigChangedCallback(callback)
+	check := func(want int) {
+		t.Helper()
+		if notifications != want {
+			t.Fatalf("notifications=%d, want %d", notifications, want)
+		}
+	}
+	wantWorkers, wantPools = 50, len(m.WorkerPools())
+	if err := m.SetWorkers(50); err != nil {
+		t.Fatal(err)
+	}
+	check(1)
+	m.SetWorkerConfigChangedCallback(callback)
+	for _, count := range []int{-1, 0, 51} {
+		if err := m.SetWorkers(count); err == nil {
+			t.Fatalf("SetWorkers(%d) accepted", count)
+		}
+		if err := m.SetWorkerPools(nil, count); err == nil {
+			t.Fatalf("SetWorkerPools(nil, %d) accepted", count)
+		}
+		check(1)
+	}
+	if err := m.SetWorkerPools([]WorkerPool{{ProfileID: 9223372036854775807, Workers: 1}}); err == nil {
+		t.Fatal("missing profile accepted")
+	}
+	check(1)
+	if got := m.Workers(); got != 50 {
+		t.Fatalf("rejected worker settings changed persisted workers=%d, want 50", got)
+	}
+	wantWorkers, wantPools = 2, 1
+	if err := m.SetWorkerPools([]WorkerPool{{ProfileID: profileID, Workers: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	check(2)
+	m.SetWorkerConfigChangedCallback(callback)
+	wantWorkers, wantPools = 3, 0
+	if err := m.SetWorkerPools(nil, 3); err != nil {
+		t.Fatal(err)
+	}
+	check(3)
+	if err := m.pg.SetSetting(settingWorkers, "1000"); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Workers(); got != db.MaxTaskWorkerCount {
+		t.Fatalf("old oversized workers=%d, want %d", got, db.MaxTaskWorkerCount)
 	}
 }

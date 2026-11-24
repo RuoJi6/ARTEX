@@ -423,7 +423,7 @@ func (s *Server) saveLLMConfig(cfg agent.Config) error {
 		return db.ErrJevProfileJudgeOnly
 	}
 	// cfg.Provider() returns one of the chat format strings
-	// (anthropic / openai / openai-responses), matching the DB CHECK constraint;
+	// (anthropic / openai / openai-responses / gemini), matching the DB CHECK constraint;
 	// Jev is intentionally handled by the dedicated intercept path.
 	format := cfg.Provider()
 	var id int64
@@ -825,6 +825,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/update/rollback", s.updateRollback)
 	mux.HandleFunc("GET /api/update/stream", s.updateStream)
 
+	// 一键备份 / 恢复（迁移数据）。恢复会替换全部数据并重启，同样只对已登录管理员开放。
+	mux.HandleFunc("GET /api/system/backup/status", s.backupStatus)
+	mux.HandleFunc("GET /api/system/backup/export", s.backupExport)
+	mux.HandleFunc("POST /api/system/backup/restore", s.backupRestore)
+
 	mux.HandleFunc("GET /api/tasks", s.listTasks)
 	mux.HandleFunc("POST /api/tasks", s.createTask)
 	mux.HandleFunc("GET /api/schedules", s.listSchedules)
@@ -933,6 +938,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/exploration/frontier", s.frontier)
 	mux.HandleFunc("GET /api/exploration/findings", s.findings)
+	mux.HandleFunc("DELETE /api/exploration/findings", s.deleteFindings)
 	mux.HandleFunc("GET /api/exploration/findings/groups", s.findingGroups)
 	mux.HandleFunc("GET /api/exploration/finding-cases", s.listFindingCases)
 	mux.HandleFunc("POST /api/exploration/finding-cases", s.mergeFindingCase)
@@ -1285,6 +1291,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	dtos := make([]TaskDTO, 0, len(list))
 	for _, t := range list {
 		dto := taskDTO(t, s.resolvedTaskStatus(t))
+		dto.WorkerActualCount, dto.WorkerTargetCount = s.engine.WorkerCounts(t)
 		applyTaskArchiveBlocker(&dto, archiveBlockers)
 		metric := metrics[t.ExpID]
 		dto.Tokens = tokenTotalDTO(metric.Tokens)
@@ -2068,6 +2075,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto := taskDTO(t, s.resolvedTaskStatus(t))
+	dto.WorkerActualCount, dto.WorkerTargetCount = s.engine.WorkerCounts(t)
 	archiveBlockers, _ := s.m.PG().TaskArchiveBlockers()
 	applyTaskArchiveBlocker(&dto, archiveBlockers)
 	writeJSON(w, 200, dto)
@@ -2724,6 +2732,123 @@ func (s *Server) deleteFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"deleted": true, "id": id})
+}
+
+// deleteFindings bulk-deletes findings according to scope:
+//   - scope="all": delete all findings
+//   - scope="filtered": delete findings matching the shared FindingFilter fields
+//   - scope="selected": delete findings listed in ids (required, positive int64)
+//
+// Accepts a JSON body (preferred for large id lists) or query parameters.
+func (s *Server) deleteFindings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Scope   string            `json:"scope"`
+		IDs     []json.RawMessage `json:"ids"`
+		Filters *struct {
+			Severity   string `json:"severity"`
+			Status     string `json:"status"`
+			VulnClass  string `json:"vulnclass"`
+			TaskID     string `json:"task_id"`
+			Query      string `json:"q"`
+			From       string `json:"from"`
+			To         string `json:"to"`
+			AssetScope string `json:"asset_scope"`
+		} `json:"filters"`
+	}
+	if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, 400, "invalid body")
+			return
+		}
+	}
+
+	q := r.URL.Query()
+	scope := strings.TrimSpace(req.Scope)
+	if scope == "" {
+		scope = strings.TrimSpace(q.Get("scope"))
+	}
+
+	var (
+		ids    []int64
+		filter db.FindingFilter
+	)
+	switch scope {
+	case "selected":
+		if len(req.IDs) > 0 {
+			for _, raw := range req.IDs {
+				var (
+					id  int64
+					str string
+				)
+				if err := json.Unmarshal(raw, &id); err != nil {
+					if err2 := json.Unmarshal(raw, &str); err2 != nil {
+						writeErr(w, 400, "bad finding id")
+						return
+					}
+					parsed, err2 := strconv.ParseInt(strings.TrimSpace(str), 10, 64)
+					if err2 != nil {
+						writeErr(w, 400, "bad finding id: "+str)
+						return
+					}
+					id = parsed
+				}
+				if id <= 0 {
+					writeErr(w, 400, "bad finding id")
+					return
+				}
+				ids = append(ids, id)
+			}
+		} else {
+			for _, part := range strings.Split(q.Get("ids"), ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				id, err := strconv.ParseInt(part, 10, 64)
+				if err != nil || id <= 0 {
+					writeErr(w, 400, "bad finding id: "+part)
+					return
+				}
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			writeErr(w, 400, "no findings selected")
+			return
+		}
+	case "all":
+		// Empty filter deletes every finding in the standalone findings table.
+	case "filtered":
+		if req.Filters != nil {
+			filter = db.FindingFilter{
+				Severity:   normFilter(req.Filters.Severity),
+				Status:     normFilter(req.Filters.Status),
+				VulnClass:  normFilter(req.Filters.VulnClass),
+				TaskID:     normFilter(req.Filters.TaskID),
+				Query:      req.Filters.Query,
+				From:       strings.TrimSpace(req.Filters.From),
+				To:         strings.TrimSpace(req.Filters.To),
+				AssetScope: strings.TrimSpace(req.Filters.AssetScope),
+			}
+		} else {
+			filter = findingFilterFromQuery(q)
+		}
+	default:
+		writeErr(w, 400, "bad scope: "+scope)
+		return
+	}
+
+	n, err := s.m.pg.DeleteFindings(r.Context(), filter, ids)
+	if err != nil {
+		if errors.Is(err, db.ErrTaskArchiveState) {
+			writeErr(w, 409, err.Error())
+			return
+		}
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"deleted": n})
 }
 
 func (s *Server) intents(w http.ResponseWriter, r *http.Request) {
@@ -3740,7 +3865,7 @@ func (s *Server) settingsPayload() map[string]any {
 		"show_egress_ip":                      s.m.pg.GetBool(settingShowEgressIP, false),
 		"egress_probe_url":                    s.m.EgressProbeURL(),
 		"python_interpreter":                  strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
-		"workers":                             s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
+		"workers":                             s.m.Workers(),               // 并发工作 agent 数(默认3)；实时更新使用全局默认的任务
 		"worker_pools":                        s.m.WorkerPools(),           // 非空时按池顺序绑定 worker 会话
 		"task_concurrency_enabled":            concOn,                      // 任务并发上限开关(默认关)
 		"task_concurrency_limit":              concLimit,                   // 同时运行任务上限(开启后默认5)
@@ -3833,7 +3958,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		ShowEgressIP           *bool         `json:"show_egress_ip"`     // 在顶栏显示直连/全局代理出口 IP；默认关
 		EgressProbeURL         *string       `json:"egress_probe_url"`   // null=不改；空串=默认公共探测服务
 		PythonInterp           *string       `json:"python_interpreter"` // 自定义脚本工具的 python 解释器路径
-		Workers                *int          `json:"workers"`            // 并发工作 agent 数(>0)；对之后启动的任务生效
+		Workers                *int          `json:"workers"`            // 并发工作 agent 数(1..50)；实时更新使用全局默认的任务
 		WorkerPools            *[]WorkerPool `json:"worker_pools"`
 		// 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
 		ConcurrencyEnabled *bool `json:"task_concurrency_enabled"`
@@ -3923,10 +4048,6 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	// synchronizes workers to its total. An empty list clears pools; when workers
 	// is also present it sets the legacy count for the newly restored legacy mode.
 	if req.WorkerPools != nil {
-		if len(*req.WorkerPools) == 0 && req.Workers != nil && *req.Workers <= 0 {
-			writeErr(w, 400, "workers 必须 >0")
-			return
-		}
 		legacyWorkers := []int(nil)
 		if req.Workers != nil {
 			legacyWorkers = []int{*req.Workers}

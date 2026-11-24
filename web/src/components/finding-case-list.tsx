@@ -448,6 +448,7 @@ export function FindingCaseList({
   contextTask,
   readOnly = false,
   onTotal,
+  refreshKey = 0,
 }: {
   query: Omit<FindingQuery, "page" | "pageSize">;
   selectedIds?: Set<string>;
@@ -455,6 +456,7 @@ export function FindingCaseList({
   contextTask?: string;
   readOnly?: boolean;
   onTotal?: (total: number) => void;
+  refreshKey?: number;
 }) {
   const { ui } = useUITranslation();
 
@@ -464,10 +466,10 @@ export function FindingCaseList({
   const [error, setError] = React.useState("");
   const [refresh, setRefresh] = React.useState(0);
   const key = JSON.stringify(query);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset pagination when the filter fingerprint changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset pagination when the filter fingerprint or external refresh changes.
   React.useEffect(() => {
     setPage(1);
-  }, [key]);
+  }, [key, refreshKey]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: refresh is an explicit reload requested after grouping/retry.
   React.useEffect(() => {
     let active = true;
@@ -490,7 +492,7 @@ export function FindingCaseList({
       active = false;
       clearTimeout(timer);
     };
-  }, [key, page, pageSize, refresh]);
+  }, [key, page, pageSize, refresh, refreshKey]);
   React.useEffect(() => {
     if (data) onTotal?.(data.total);
   }, [data, onTotal]);

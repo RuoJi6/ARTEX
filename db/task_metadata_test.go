@@ -102,3 +102,41 @@ func TestDeleteConversationsReturnsExistingIDs(t *testing.T) {
 		t.Fatalf("deleted=%v, want existing ids only", deleted)
 	}
 }
+
+func TestTaskPatchWorkerCountPersistsAndValidates(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+	task, err := d.CreateTask("worker count patch", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.DeleteTask(task.ID) }()
+	for _, count := range []int{1, MaxTaskWorkerCount, 0, 4} {
+		updated, err := d.UpdateTask(task.ID, TaskPatch{WorkerCount: &count})
+		if err != nil || updated == nil || updated.WorkerCount != count {
+			t.Fatalf("patch worker_count=%d task=%+v err=%v", count, updated, err)
+		}
+		persisted, err := d.GetTask(task.ID)
+		if err != nil || persisted == nil || persisted.WorkerCount != count {
+			t.Fatalf("read worker_count=%d task=%+v err=%v", count, persisted, err)
+		}
+	}
+	name := "renamed without worker override"
+	updated, err := d.UpdateTask(task.ID, TaskPatch{Name: &name})
+	if err != nil || updated == nil || updated.WorkerCount != 4 {
+		t.Fatalf("omitted worker_count changed override: task=%+v err=%v", updated, err)
+	}
+	for _, count := range []int{-1, MaxTaskWorkerCount + 1} {
+		invalidName := "must not commit"
+		if updated, err := d.UpdateTask(task.ID, TaskPatch{Name: &invalidName, WorkerCount: &count}); err == nil || updated != nil {
+			t.Fatalf("accepted invalid worker_count=%d: task=%+v err=%v", count, updated, err)
+		}
+		persisted, err := d.GetTask(task.ID)
+		if err != nil || persisted == nil || persisted.WorkerCount != 4 || persisted.Name != name {
+			t.Fatalf("invalid patch changed task=%+v err=%v", persisted, err)
+		}
+	}
+}

@@ -104,15 +104,14 @@ func (s *Server) sendRepeater(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "url 必填")
 		return
 	}
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" || u.Hostname() == "" ||
-		!strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
+	target, err := parseRepeaterURL(rawURL)
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, "仅支持绝对 http/https URL")
 		return
 	}
 	// This check is needed even when a proxy is used: the proxy must remain usable
 	// for normal targets, while obvious literal metadata/loopback URLs stay blocked.
-	if err := repeaterCheckURL(u); err != nil {
+	if err := repeaterCheckURL(target.origin); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -138,11 +137,12 @@ func (s *Server) sendRepeater(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
+	req, err := http.NewRequestWithContext(ctx, method, target.origin.String(), body)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "构造请求失败")
 		return
 	}
+	req.URL = target.requestURL()
 	httpidentity.Apply(req)
 	for key, value := range in.Headers {
 		name := strings.TrimSpace(key)
@@ -180,7 +180,15 @@ func (s *Server) sendRepeater(w http.ResponseWriter, r *http.Request) {
 		tr.Protocols = new(http.Protocols)
 		tr.Protocols.SetHTTP1(in.HTTPVersion == "HTTP/1.1")
 		tr.Protocols.SetHTTP2(in.HTTPVersion == "HTTP/2.0")
-		tr.Protocols.SetUnencryptedHTTP2(in.HTTPVersion == "HTTP/2.0" && strings.EqualFold(u.Scheme, "http"))
+		tr.Protocols.SetUnencryptedHTTP2(in.HTTPVersion == "HTTP/2.0" && strings.EqualFold(target.origin.Scheme, "http"))
+	}
+	if target.needsOpaque && strings.EqualFold(req.URL.Scheme, "http") {
+		if tr, ok := transport.(*http.Transport); ok && tr.Proxy != nil {
+			if proxyURL, perr := tr.Proxy(req); perr == nil && proxyURL != nil &&
+				(strings.EqualFold(proxyURL.Scheme, "http") || strings.EqualFold(proxyURL.Scheme, "https")) {
+				req.URL.Opaque = "//" + req.URL.Host + target.rawPath
+			}
+		}
 	}
 
 	client := &http.Client{
@@ -207,16 +215,20 @@ func (s *Server) sendRepeater(w http.ResponseWriter, r *http.Request) {
 	resp, err := client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusOK, repeaterSendResponse{
-			Headers: map[string][]string{}, URL: u.String(),
+			Headers: map[string][]string{}, URL: target.displayURL,
 			ElapsedMs: time.Since(started).Milliseconds(), Error: repeaterRedactError(err),
 		})
 		return
 	}
 	defer resp.Body.Close()
 
+	respURL := target.displayURL
+	if resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.Opaque == "" {
+		respURL = resp.Request.URL.String()
+	}
 	out := repeaterSendResponse{
 		Status: resp.StatusCode, StatusText: resp.Status, Proto: resp.Proto,
-		Headers: resp.Header.Clone(), URL: resp.Request.URL.String(),
+		Headers: resp.Header.Clone(), URL: respURL,
 	}
 	if method != http.MethodHead {
 		// Read one byte beyond the cap so truncation is exact. The MVP keeps the
@@ -234,6 +246,113 @@ func (s *Server) sendRepeater(w http.ResponseWriter, r *http.Request) {
 	}
 	out.ElapsedMs = time.Since(started).Milliseconds()
 	writeJSON(w, http.StatusOK, out)
+}
+
+type repeaterTargetURL struct {
+	origin      *url.URL
+	parsed      *url.URL
+	rawPath     string
+	rawQuery    string
+	forceQuery  bool
+	needsOpaque bool
+	displayURL  string
+}
+
+func (t *repeaterTargetURL) requestURL() *url.URL {
+	if !t.needsOpaque {
+		u := *t.parsed
+		return &u
+	}
+	u := *t.origin
+	u.Path = ""
+	u.RawPath = ""
+	u.RawQuery = t.rawQuery
+	u.ForceQuery = t.forceQuery
+	u.Opaque = t.rawPath
+	return &u
+}
+
+// parseRepeaterURL validates the scheme and authority while preserving the raw
+// request-target (path and query). Normal targets keep Opaque empty so net/http
+// handles proxies, redirects and HTTP/2 natively; Opaque is only engaged when
+// rawPath contains characters that net/url would percent-encode or reject.
+func parseRepeaterURL(rawURL string) (*repeaterTargetURL, error) {
+	for i := range len(rawURL) {
+		if rawURL[i] < 0x20 || rawURL[i] == 0x7f {
+			return nil, errors.New("control character in URL")
+		}
+	}
+	schemeSep := strings.Index(rawURL, "://")
+	if schemeSep <= 0 {
+		return nil, errors.New("missing scheme")
+	}
+	scheme := rawURL[:schemeSep]
+	if !strings.EqualFold(scheme, "http") && !strings.EqualFold(scheme, "https") {
+		return nil, errors.New("unsupported scheme")
+	}
+	afterScheme := rawURL[schemeSep+3:]
+	restIdx := strings.IndexAny(afterScheme, "/?#")
+	authority, rest := afterScheme, ""
+	if restIdx >= 0 {
+		authority, rest = afterScheme[:restIdx], afterScheme[restIdx:]
+	}
+	if authority == "" || strings.Contains(authority, "\\") {
+		return nil, errors.New("invalid authority")
+	}
+	origin, err := url.Parse(rawURL[:schemeSep+3+len(authority)])
+	if err != nil || origin.Host == "" || origin.Hostname() == "" ||
+		(!strings.EqualFold(origin.Scheme, "http") && !strings.EqualFold(origin.Scheme, "https")) {
+		return nil, errors.New("invalid origin")
+	}
+
+	beforeHash := rest
+	if hash := strings.IndexByte(beforeHash, '#'); hash >= 0 {
+		beforeHash = beforeHash[:hash]
+	}
+	rawPath, rawQuery := beforeHash, ""
+	hasQuery := false
+	if q := strings.IndexByte(beforeHash, '?'); q >= 0 {
+		rawPath = beforeHash[:q]
+		rawQuery = beforeHash[q+1:]
+		hasQuery = true
+	}
+	if rawPath == "" {
+		rawPath = "/"
+	}
+
+	u, parseErr := url.Parse(rawURL)
+	needsOpaque := false
+	if parseErr != nil {
+		if strings.HasPrefix(rawPath, "//") {
+			return nil, parseErr
+		}
+		needsOpaque = true
+	} else {
+		escapedPath := u.EscapedPath()
+		if escapedPath == "" {
+			escapedPath = "/"
+		}
+		if escapedPath != rawPath && !strings.HasPrefix(rawPath, "//") {
+			needsOpaque = true
+		}
+	}
+
+	displayURL := origin.String() + rawPath
+	if hasQuery {
+		displayURL += "?" + rawQuery
+	}
+	if !needsOpaque {
+		displayURL = u.String()
+	}
+	return &repeaterTargetURL{
+		origin:      origin,
+		parsed:      u,
+		rawPath:     rawPath,
+		rawQuery:    rawQuery,
+		forceQuery:  hasQuery && rawQuery == "",
+		needsOpaque: needsOpaque,
+		displayURL:  displayURL,
+	}, nil
 }
 
 // repeaterBodyText keeps the response preview as text for the MVP. Invalid

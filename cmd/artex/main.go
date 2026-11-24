@@ -90,6 +90,18 @@ func run() int {
 		log.Printf("[config] 配置文件: %s (不存在 — 将仅尝试环境变量 ARTEX_PG_DSN)", cfgPath)
 	}
 
+	// 页面「恢复备份」暂存的数据必须在任何组件打开数据目录与数据库之前装好。
+	skillDir := config.SkillDir()
+	if abs, err := filepath.Abs(skillDir); err == nil {
+		skillDir = abs
+	}
+	restoreResult, err := server.ApplyPendingRestore(*dataDir, skillDir)
+	if err != nil {
+		log.Printf("[backup] 恢复文件替换未完成，终止本次启动等待重试：%v", err)
+		return 1
+	}
+	server.SetBootRestoreResult(restoreResult)
+
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, shutdown := shutdownContext(sigCtx)
@@ -107,10 +119,6 @@ func run() int {
 	settle := time.AfterFunc(selfupdate.SettleDelay, selfupdate.Settle)
 	defer settle.Stop()
 
-	skillDir := config.SkillDir()
-	if abs, err := filepath.Abs(skillDir); err == nil {
-		skillDir = abs
-	}
 	log.Printf("[config] skill 目录: %s", skillDir)
 	srv := server.New(ctx, mgr, skillDir, *dataDir, config.BaseDir())
 	defer srv.Close()

@@ -55,6 +55,7 @@ func TestTaskLifecycleSnapshotConcurrentConsistency(t *testing.T) {
 			state.CompletedAt = generation
 			state.FirstRunAt = generation
 			state.DeadlineAt = generation
+			state.WorkerCount = int(generation % 51)
 			state.SourceTaskIDs = []int64{generation, generation + 1}
 			state.CompanyIDs = []int64{generation, generation + 1}
 		})
@@ -93,7 +94,7 @@ func TestTaskLifecycleSnapshotConcurrentConsistency(t *testing.T) {
 				}
 				generation := state.QueuedAt
 				if state.CompletedAt != generation || state.FirstRunAt != generation || state.DeadlineAt != generation ||
-					len(state.SourceTaskIDs) != 2 || len(state.CompanyIDs) != 2 ||
+					state.WorkerCount != int(generation%51) || len(state.SourceTaskIDs) != 2 || len(state.CompanyIDs) != 2 ||
 					state.SourceTaskIDs[0] != generation || state.CompanyIDs[0] != generation {
 					errCh <- fmt.Errorf("mixed lifecycle snapshot: %+v", state)
 					return
@@ -105,5 +106,21 @@ func TestTaskLifecycleSnapshotConcurrentConsistency(t *testing.T) {
 	close(errCh)
 	for err := range errCh {
 		t.Fatal(err)
+	}
+}
+
+func TestTaskLifecycleWorkerCountSnapshot(t *testing.T) {
+	task := &Task{WorkerCount: 2}
+	if got := taskDTO(task, "created").WorkerCount; got != 2 {
+		t.Fatalf("DTO worker_count=%d, want 2", got)
+	}
+	task.updateLifecycle(func(state *taskLifecycleState) {
+		state.WorkerCount = 7
+	})
+	if got := task.lifecycleSnapshot().WorkerCount; got != 7 {
+		t.Fatalf("snapshot worker_count=%d, want 7", got)
+	}
+	if got := taskDTO(task, "created").WorkerCount; got != 7 {
+		t.Fatalf("DTO worker_count=%d, want 7", got)
 	}
 }

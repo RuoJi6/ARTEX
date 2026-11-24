@@ -378,6 +378,14 @@ func (t *Traffic) CACertPath() string {
 	return filepath.Join(t.dir, "_ca", "mitmproxy-ca-cert.pem")
 }
 
+// SnapshotIndex writes a transactionally consistent copy of the live SQLite
+// index to dest (which must not exist). Copying index.sqlite directly would miss
+// pages still in the WAL and could capture a half-applied write.
+func (t *Traffic) SnapshotIndex(dest string) error {
+	_, err := t.db.Exec(`VACUUM INTO ?`, dest)
+	return err
+}
+
 // Start runs the proxy (blocking); run in a goroutine.
 func (t *Traffic) Start() error { return t.proxy.Start() }
 

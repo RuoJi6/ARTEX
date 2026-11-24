@@ -4,12 +4,17 @@
 
 AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 
+<p>
+  <a href="https://www.chainreactors.ai" target="_blank" rel="noopener noreferrer">
+    <img src="screenshots/chainreactors.png" alt="ChainReactors" height="45" />
+  </a>
+</p>
 
 🌐 **在线 Demo**： [https://artex-demo-ruoji6.vercel.app/](https://artex-demo-ruoji6.vercel.app/)
 
 </div>
 
-本仓库为独立维护的 [RuoJi6/ARTEX](https://github.com/RuoJi6/ARTEX)，保留 https://github.com/Autumn-27/ARTEX 的原始提交历史与 AGPL-3.0 许可证。程序发布包从本仓库 Releases 下载，Docker 镜像 [ruoji6/artex](https://hub.docker.com/r/ruoji6/artex) 由本仓库 GitHub Actions 构建并发布。
+本仓库（[RuoJi6/ARTEX](https://github.com/RuoJi6/ARTEX)）Fork 自 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)，保留上游原始提交历史与 AGPL-3.0 许可证，现由 [ChainReactors](https://www.chainreactors.ai) 持续维护。程序发布包从本仓库 Releases 下载，Docker 镜像 [ruoji6/artex](https://hub.docker.com/r/ruoji6/artex) 由本仓库 GitHub Actions 构建并发布。
 
 ---
 ## 致谢 
@@ -188,6 +193,18 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 ```
 
 ---
+
+## 一键备份与迁移
+
+在 **系统配置 → 系统与账号** 的 **备份与迁移** 卡片中：
+
+- **下载备份**：生成单个 `artex-backup-<时间>.tar.zst`，浏览器直接落盘。导出前需先暂停或等待所有运行中/排队中的任务完成，避免导出期间文件写入导致不一致。内容包括 PostgreSQL 全部业务表（同一快照事务内分片流式导出，表间一致）、数据目录（任务工作区、会话、证据、任务归档包、MITM CA 证书、流量及其 SQLite 索引快照）和 skills 目录。不含系统运行日志（`server_logs`）和 `jwt.key`。
+- **从备份恢复**：在新机器上先正常安装并启动 ARTEX，登录后上传备份文件。服务端先完整解包并按当前数据库结构校验，通过后重启；重启时、在任何组件打开数据之前替换数据：数据库在一个事务内整体替换（失败则原数据不变，恢复包移到 `data/.restore-failed` 供排查），数据目录逐项替换；若文件替换失败，进程会非零退出由守护脚本重试，直到全部替换完成才启动业务引擎。卡片会显示上次恢复的结果。
+- 恢复会**覆盖当前实例的全部数据**并重启停止当前运行中的任务；备份中未结束的任务在恢复后会保持暂停，需手动恢复，不会在新机器上自动继续向目标发起请求。登录密码、Basic Auth、LLM 与其他配置都随数据库迁移，恢复后用原实例的密码登录。
+- 新机器上已存在的同名 skill 保留本机版本（避免旧备份覆盖新版内置 skill），其余 skill 从备份装入。
+- 只能恢复到**相同或更新版本**的 ARTEX；备份含当前版本不认识的表或列时会拒绝恢复。旧路径（如任务归档包的绝对路径）会自动改写到新数据目录。
+- 恢复依赖 `start.sh` / `start.bat`（Docker 下为镜像 ENTRYPOINT）重启程序，与页面一键更新相同。
+- 恢复期间需在数据目录所在磁盘额外预留约一份**未压缩备份包**大小的临时空间（解包后的数据库文本与文件）；若前面有 Nginx 反向代理，请按下方反代示例为 `/api/system/backup/` 放宽 `client_max_body_size` 并关闭 `proxy_request_buffering`。
 
 ## 更新升级
 
@@ -453,6 +470,22 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Connection "";
     }
+
+    # 一键备份 / 恢复：允许大体积备份流式上传与下载，避免触发默认 1m 限制与请求体缓冲
+    location /api/system/backup/ {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        client_max_body_size 0;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
 }
 ```
 
@@ -693,9 +726,15 @@ https://github.com/oritera/Cairn
 
 ### 开源协议
 
-本项目采用 **GNU Affero General Public License v3.0（AGPL-3.0）** 授权，完整条款见仓库根目录的 [LICENSE](LICENSE) 文件。
+本项目 Fork 自 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)，保留原始提交历史与上游版权归属，现由 [ChainReactors](https://www.chainreactors.ai) 维护。本项目在个人学习与教育研究场景下采用 **GNU Affero General Public License v3.0（AGPL-3.0）** 授权，完整条款见仓库根目录的 [LICENSE](LICENSE) 文件。
 
 这意味着任何人都可以自由使用、修改和分发本项目，但**衍生作品必须同样以 AGPL-3.0 开源**；特别地，**若你修改本项目并通过网络（如部署为在线服务）向用户提供，也必须向这些用户公开对应的完整源码**。
+
+**商业使用与合作**：如希望在商业或闭源环境中使用本项目且不受 AGPL-3.0 开源义务限制，请联系 [business@chainreactors.ai](mailto:business@chainreactors.ai) 获取商业授权或洽谈合作。
+
+**贡献声明**：提交 Pull Request 即表示你同意你的贡献可同时在 AGPL-3.0 与本项目的商业许可下使用。
+
+**ARTEX (forked from [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)), maintained by [ChainReactors](https://www.chainreactors.ai)**
 
 > ⚠️ **重要提示**：开源协议本身不限制软件的使用用途。以下的「使用限制」与「免责声明」是作者对使用者的额外约定与郑重声明，请务必遵守。
 
