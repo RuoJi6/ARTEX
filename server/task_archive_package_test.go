@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	pgdb "github.com/Autumn-27/artex/db"
@@ -253,4 +255,121 @@ func TestTaskArchivePackageRejectsTraversal(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(root), "escape.txt")); !os.IsNotExist(err) {
 		t.Fatalf("traversal wrote outside destination: %v", err)
 	}
+}
+
+func TestExtractTarZstKeepsCaseVariants(t *testing.T) {
+	body := packTarZst(t, map[string]string{
+		"files/sessions/conv-18/probe__contact-news_LOG_php_error.LOG": "upper",
+		"files/sessions/conv-18/probe__contact-news_lOg_php_error.log": "mixed",
+		"files/sessions/conv-18/probe__contact-news_log_php_error.log": "lower",
+	})
+	destination := t.TempDir()
+	if err := extractTarZst(bytes.NewReader(body), destination, 10); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(destination, "files", "sessions", "conv-18")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, entry := range entries {
+		raw, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got[entry.Name()] = string(raw)
+	}
+	if volumeFoldsCase(t, destination) {
+		if len(got) != 3 {
+			t.Fatalf("case-insensitive extract kept %d files: %v", len(got), got)
+		}
+		if got["probe__contact-news_LOG_php_error.LOG"] != "upper" {
+			t.Fatalf("first spelling was not preserved: %v", got)
+		}
+		values := make([]string, 0, len(got))
+		for _, value := range got {
+			values = append(values, value)
+		}
+		slices.Sort(values)
+		if strings.Join(values, ",") != "lower,mixed,upper" {
+			t.Fatalf("case variants lost content: %v", got)
+		}
+		return
+	}
+	if got["probe__contact-news_LOG_php_error.LOG"] != "upper" || got["probe__contact-news_lOg_php_error.log"] != "mixed" || got["probe__contact-news_log_php_error.log"] != "lower" {
+		t.Fatalf("case-sensitive extract changed names or bytes: %v", got)
+	}
+}
+
+func TestExtractTarZstRejectsDuplicatePath(t *testing.T) {
+	var compressed bytes.Buffer
+	encoder, err := zstd.NewWriter(&compressed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(encoder)
+	for range 2 {
+		content := []byte("same")
+		header := &tar.Header{Name: "files/same.txt", Mode: 0o600, Size: int64(len(content)), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = extractTarZst(bytes.NewReader(compressed.Bytes()), t.TempDir(), 10)
+	if err == nil || !strings.Contains(err.Error(), "file exists") {
+		t.Fatalf("duplicate path err=%v", err)
+	}
+}
+
+func packTarZst(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var compressed bytes.Buffer
+	encoder, err := zstd.NewWriter(&compressed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(encoder)
+	for _, name := range names {
+		content := []byte(files[name])
+		header := &tar.Header{Name: name, Mode: 0o600, Size: int64(len(content)), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return compressed.Bytes()
+}
+
+func volumeFoldsCase(t *testing.T, dir string) bool {
+	t.Helper()
+	path := filepath.Join(dir, "FoldProbe")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	_, err := os.Stat(filepath.Join(dir, "foldprobe"))
+	return err == nil
 }
