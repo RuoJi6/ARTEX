@@ -55,9 +55,11 @@ import type {
   IntelligencePage,
   IntentAsset,
   InterceptApprovalFilter,
+  InterceptApprovalPage,
   InterceptApprovalRow,
   InterceptDetail,
   InterceptPending,
+  InterceptPendingSummary,
   InterceptRule,
   JudgeConfig,
   JudgeUsage,
@@ -1668,7 +1670,17 @@ export const api = {
     post<{ ok: boolean; enabled: boolean }>(`/asset-intercept/rules/${id}/toggle`, { enabled }),
 
   // ---- intercept pending (ask) ----
-  interceptPending: () => get<{ pending: InterceptPending[] }>("/intercept/pending").then((r) => arr(r.pending)),
+  interceptPending: (taskId?: string) =>
+    get<{ pending: InterceptPending[] }>(
+      taskId ? `/intercept/pending?task_id=${encodeURIComponent(taskId)}` : "/intercept/pending",
+    ).then((r) => arr(r.pending)),
+  interceptPendingSummary: (taskId?: string): Promise<InterceptPendingSummary> =>
+    get<{ count?: number; agent_names?: string[] }>(
+      taskId ? `/intercept/pending/summary?task_id=${encodeURIComponent(taskId)}` : "/intercept/pending/summary",
+    ).then((r) => ({
+      count: r.count ?? 0,
+      agent_names: arr(r.agent_names),
+    })),
   interceptGetOne: (id: number) => get<InterceptPending>(`/intercept/pending/${id}`),
   interceptDecide: (id: number, decision: "allowed" | "denied") =>
     post<{ ok: boolean }>(`/intercept/pending/${id}/decide`, { decision }),
@@ -1678,21 +1690,38 @@ export const api = {
     ),
   interceptDetail: (id: number) => get<InterceptDetail>(`/intercept/history/${id}`),
   interceptHistory: () => get<{ items: InterceptApprovalRow[] }>("/intercept/history").then((r) => arr(r.items)),
-  interceptHistoryPage: (page = 1, size = 20, filter: InterceptApprovalFilter = {}) =>
-    get<{ items: InterceptApprovalRow[]; total?: number }>(
-      `/intercept/history?${interceptPageQuery(page, size, filter)}`,
-    ).then((r) => ({
+  interceptHistoryPage: (page = 1, size = 20, filter: InterceptApprovalFilter = {}): Promise<InterceptApprovalPage> =>
+    get<{
+      items: InterceptApprovalRow[];
+      total?: number;
+      total_approximate?: boolean;
+      total_capped?: boolean;
+      has_more?: boolean;
+    }>(`/intercept/history?${interceptPageQuery(page, size, filter)}`).then((r) => ({
       items: arr(r.items),
       total: r.total ?? r.items?.length ?? 0,
+      total_approximate: Boolean(r.total_approximate),
+      total_capped: Boolean(r.total_capped),
+      has_more: Boolean(r.has_more),
     })),
-  interceptTask: (taskId: string) =>
-    get<{ items: InterceptApprovalRow[] }>(`/intercept/task/${taskId}`).then((r) => arr(r.items)),
-  interceptTaskPage: (taskId: string, page = 1, size = 20, filter: InterceptApprovalFilter = {}) =>
-    get<{ items: InterceptApprovalRow[]; total?: number }>(
-      `/intercept/task/${encodeURIComponent(taskId)}?${interceptPageQuery(page, size, filter)}`,
-    ).then((r) => ({
+  interceptTaskPage: (
+    taskId: string,
+    page = 1,
+    size = 20,
+    filter: InterceptApprovalFilter = {},
+  ): Promise<InterceptApprovalPage> =>
+    get<{
+      items: InterceptApprovalRow[];
+      total?: number;
+      total_approximate?: boolean;
+      total_capped?: boolean;
+      has_more?: boolean;
+    }>(`/intercept/task/${encodeURIComponent(taskId)}?${interceptPageQuery(page, size, filter)}`).then((r) => ({
       items: arr(r.items),
       total: r.total ?? r.items?.length ?? 0,
+      total_approximate: Boolean(r.total_approximate),
+      total_capped: Boolean(r.total_capped),
+      has_more: Boolean(r.has_more),
     })),
 
   // ---- intercept tool-config (全局工具拦截范围) ----

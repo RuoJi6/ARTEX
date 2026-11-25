@@ -63,10 +63,11 @@ func TestInterceptFilterHTTP(t *testing.T) {
 	}
 	scope := "approval-http-filter"
 	t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM intercept_pending WHERE task_id IN ($1,$2)`, scope, scope+"-other") })
-	_, baseline, err := d.ListAllInterceptsPage(1, 20, db.InterceptApprovalFilter{Status: "denied", DecisionSource: "model"})
+	basePage, err := d.ListAllInterceptsPage(1, 20, db.InterceptApprovalFilter{Status: "denied", DecisionSource: "model"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	baseline := basePage.Total
 	for _, state := range []string{"pending", "allowed", "denied", "timeout"} {
 		if _, err := d.CreateDecidedIntercept(0, 0, scope, "test", "Bash", []byte(`{}`), state, "[模型] fixture"); err != nil {
 			t.Fatal(err)
@@ -142,5 +143,51 @@ func TestInterceptFilterHTTP(t *testing.T) {
 		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &body) != nil || body.Total != tc.total || len(body.Items) != tc.rows || body.Page != tc.page {
 			t.Fatalf("%s: %d %s", tc.query, rec.Code, rec.Body.String())
 		}
+	}
+
+	// Pending summary endpoints must require auth and return lightweight counts
+	// without historical rows.
+	if rec := do("/api/intercept/pending/summary", false); rec.Code != 401 {
+		t.Fatalf("unprotected summary: %d", rec.Code)
+	}
+	rec := do("/api/intercept/pending/summary", true)
+	var globalSummary struct {
+		Count int `json:"count"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &globalSummary) != nil || globalSummary.Count < 1 {
+		t.Fatalf("global summary: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do("/api/intercept/pending/summary?task_id="+scope, true)
+	var taskSummary struct {
+		Count      int      `json:"count"`
+		AgentNames []string `json:"agent_names"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &taskSummary) != nil || taskSummary.Count != 1 || len(taskSummary.AgentNames) != 1 || taskSummary.AgentNames[0] != "test" {
+		t.Fatalf("task summary: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do("/api/intercept/pending?task_id="+scope, true)
+	var taskPending struct {
+		Pending []db.InterceptPending `json:"pending"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &taskPending) != nil || len(taskPending.Pending) != 1 {
+		t.Fatalf("task pending: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Unpaginated task history must stay bounded so large tasks never dump full history.
+	bigScope := scope + "-cap"
+	t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM intercept_pending WHERE task_id=$1`, bigScope) })
+	if _, err := d.Exec(`
+		INSERT INTO intercept_pending (task_id, agent_name, tool_name, tool_input, status, reason, decision_source)
+		SELECT $1, 'worker', 'Bash', '{}'::jsonb, 'allowed', 'ok', 'rule'
+		FROM generate_series(1, 205)`, bigScope); err != nil {
+		t.Fatal(err)
+	}
+	rec = do("/api/intercept/task/"+bigScope, true)
+	var cappedTask struct {
+		Items []db.InterceptApprovalRow `json:"items"`
+		Total int                       `json:"total"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &cappedTask) != nil || len(cappedTask.Items) != 200 || cappedTask.Total != 200 {
+		t.Fatalf("unpaginated task cap: %d len=%d total=%d", rec.Code, len(cappedTask.Items), cappedTask.Total)
 	}
 }

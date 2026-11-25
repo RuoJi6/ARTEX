@@ -314,6 +314,7 @@ function TaskDetailInner() {
     if (TABS(liveUI).some((item) => item.value === normalizedRequestedTab)) setTab(normalizedRequestedTab);
   }, [normalizedRequestedTab, liveUI]);
   const [interceptPendingCount, setInterceptPendingCount] = React.useState(0);
+  const [pendingAgentNames, setPendingAgentNames] = React.useState<string[]>([]);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [archiving, setArchiving] = React.useState(false);
 
@@ -326,20 +327,36 @@ function TaskDetailInner() {
 
   React.useEffect(() => {
     let alive = true;
-    const load = () =>
+    let inFlight = false;
+    setInterceptPendingCount(0);
+    setPendingAgentNames([]);
+    const loadSummary = () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
       api
-        .interceptTask(id)
-        .then((rows) => {
-          if (alive) setInterceptPendingCount(rows.filter((r) => r.status === "pending").length);
+        .interceptPendingSummary(id)
+        .then((summary) => {
+          if (!alive) return;
+          setInterceptPendingCount(summary.count);
+          setPendingAgentNames(summary.agent_names);
         })
         .catch(() => {
           // Polling is best-effort; the next interval retries automatically.
+        })
+        .finally(() => {
+          inFlight = false;
         });
-    void load();
-    const t = setInterval(load, 5000);
+    };
+    loadSummary();
+    const t = setInterval(loadSummary, 5000);
+    const onVisible = () => {
+      if (!document.hidden) loadSummary();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
       clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [id]);
 
@@ -598,7 +615,12 @@ function TaskDetailInner() {
       {/* Tab content */}
       <div className="flex-1 p-4 lg:p-6">
         <TabsContent value="sessions" className="mt-0">
-          <SessionsTab key={id} taskId={id} requestedSession={searchParams.get("session") ?? ""} />
+          <SessionsTab
+            key={id}
+            taskId={id}
+            requestedSession={searchParams.get("session") ?? ""}
+            pendingAgentNames={pendingAgentNames}
+          />
         </TabsContent>
         <TabsContent value="traffic" className="mt-0">
           <TrafficHistory taskId={id} />
