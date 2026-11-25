@@ -374,6 +374,10 @@ const (
 	// defaultConcurrencyLimit is the simultaneous-running-task cap when the feature
 	// is enabled but no explicit limit was saved.
 	defaultConcurrencyLimit = 5
+	// Default states for core evidence/intelligence toggles when unset in DB.
+	defaultBrowserScreenshot   = true
+	defaultScreenshotTimestamp = true
+	defaultAgentTrafficBinding = true
 )
 
 // WorkerPool binds a number of worker slots to one LLM profile. Profile IDs are
@@ -930,11 +934,12 @@ func (m *Manager) syncBrowserMCPProxy() {
 	proxy := m.ProxyAddr()  // "" when capture off
 	cert := m.ProxyCACert() // "" when capture off
 
-	args := ensureBrowserMCPArgs(stripProxyArgs(decodeStrSlice(srv.Args)), m.pg.GetBool(settingBrowserScreenshot, false))
+	screenshotOn := m.pg.GetBool(settingBrowserScreenshot, defaultBrowserScreenshot)
+	args := ensureBrowserMCPArgs(stripProxyArgs(decodeStrSlice(srv.Args)), screenshotOn)
 	env := decodeStrMap(srv.Env)
-	if m.pg.GetBool(settingBrowserScreenshot, false) {
-		// A persisted screenshot opt-in must survive restart even if an older
-		// database had the seeded MCP disabled.
+	if screenshotOn {
+		// Keep the built-in browser MCP enabled when screenshots are active
+		// (including default-on after upgrade from an older DB where it was seeded disabled).
 		srv.Enabled = true
 	}
 	delete(env, "NODE_EXTRA_CA_CERTS")
@@ -974,6 +979,12 @@ func ensureBrowserMCPArgs(args []string, screenshotEnabled bool) []string {
 			}
 		}
 		return false
+	}
+	if !has("--browser") {
+		// @playwright/mcp defaults to channel="chrome" (/opt/google/chrome/chrome),
+		// which is absent in slim/arm64 containers. Explicitly select Playwright's
+		// bundled Chromium unless the user configured another browser.
+		out = append(out, "--browser", "chromium")
 	}
 	if !has("--headless") {
 		out = append(out, "--headless")

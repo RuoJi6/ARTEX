@@ -228,7 +228,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			if err != nil || t == "" {
 				return "", false
 			}
-			if key == "reporter" && m.pg.GetBool(settingBrowserScreenshot, false) {
+			if key == "reporter" && m.pg.GetBool(settingBrowserScreenshot, defaultBrowserScreenshot) {
 				t += `
 
 【报告步骤截图已开启】
@@ -267,7 +267,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			}
 			return a.TaskTimeoutWrapupMaxTurns, true
 		}
-		wireAgentAugment(m.pg, s.skillDir, s.hostTools) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
+		wireAgentAugment(m.pg, s.skillDir, m.dir, s.hostTools) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
 		domainReg := buildDomainReg(m.Assets())
 		wireTools(m.pg, domainReg) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
 		seedPrompts(m.pg)          // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
@@ -3827,11 +3827,11 @@ func (s *Server) settingsPayload() map[string]any {
 	}
 	return map[string]any{
 		"traffic_capture":                      s.m.TrafficEnabled(),
-		"browser_screenshot_enabled":           s.m.pg.GetBool(settingBrowserScreenshot, false),
-		"browser_screenshot_timestamp_enabled": s.m.pg.GetBool(settingScreenshotTimestamp, false),
+		"browser_screenshot_enabled":           s.m.pg.GetBool(settingBrowserScreenshot, defaultBrowserScreenshot),
+		"browser_screenshot_timestamp_enabled": s.m.pg.GetBool(settingScreenshotTimestamp, defaultScreenshotTimestamp),
 		"opsec_enabled":                        s.m.pg.GetBool(settingOpsecEnabled, false),
-		"agent_traffic_binding":                s.m.pg.GetBool(settingAgentTrafficBinding, false),
-		"task_intelligence_enabled":            s.m.pg.GetBool(db.SettingTaskIntelligence, false),
+		"agent_traffic_binding":                s.m.pg.GetBool(settingAgentTrafficBinding, defaultAgentTrafficBinding),
+		"task_intelligence_enabled":            s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence),
 		db.SettingTaskAutoTitle:                s.m.pg.GetBool(db.SettingTaskAutoTitle, false),
 		db.SettingChatAutoTitle:                s.m.pg.GetBool(db.SettingChatAutoTitle, false),
 		db.SettingCredentialAgent:              s.m.pg.GetBool(db.SettingCredentialAgent, false),

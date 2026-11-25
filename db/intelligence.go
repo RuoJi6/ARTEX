@@ -16,6 +16,9 @@ import (
 
 const SettingTaskIntelligence = "task_intelligence_enabled"
 
+// DefaultTaskIntelligence is the fallback for SettingTaskIntelligence when unset.
+const DefaultTaskIntelligence = true
+
 var ErrIntelligenceInvalid = errors.New("invalid intelligence")
 var ErrIntelligenceNotFound = errors.New("intelligence not found")
 
@@ -237,7 +240,7 @@ func (d *DB) ListIntelligence(ctx context.Context, f IntelligenceFilter) (*Intel
 	if f.Offset < 0 {
 		f.Offset = 0
 	}
-	page := &IntelligencePage{Items: []*Intelligence{}, Counts: map[string]int{"credential": 0, "lead": 0, "sensitive_data": 0}, Enabled: d.GetBool(SettingTaskIntelligence, false)}
+	page := &IntelligencePage{Items: []*Intelligence{}, Counts: map[string]int{"credential": 0, "lead": 0, "sensitive_data": 0}, Enabled: d.GetBool(SettingTaskIntelligence, DefaultTaskIntelligence)}
 	page.CredentialAgentEnabled = d.GetBool(SettingCredentialAgent, false)
 	page.CredentialTrafficBinding = page.CredentialAgentEnabled && d.GetBool(SettingCredentialTraffic, false)
 	scope := intelligenceScope()

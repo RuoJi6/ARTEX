@@ -3347,13 +3347,15 @@ export const tools: Tool[] = [
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 export const settings: Settings = {
-  task_intelligence_enabled: false,
+  browser_screenshot_enabled: true,
+  browser_screenshot_timestamp_enabled: true,
+  task_intelligence_enabled: true,
   credential_agent_enabled: false,
   credential_traffic_binding: false,
   task_auto_title_enabled: false,
   chat_auto_title_enabled: false,
   traffic_capture: true,
-  agent_traffic_binding: false,
+  agent_traffic_binding: true,
   llm_record: false,
   web_search_enabled: true,
   web_search_backend: "ddgs",

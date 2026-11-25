@@ -553,7 +553,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
 	s.migrateReporterWorkflow()       // 修复旧库残留的 reproduction 工具/提示词绑定
-	if s.m.pg.GetBool(settingBrowserScreenshot, false) {
+	if s.m.pg.GetBool(settingBrowserScreenshot, defaultBrowserScreenshot) {
 		// Re-apply the opt-in after startup seeding so an existing database gets
 		// both reporter visibility and the repaired Playwright launch arguments.
 		if err := s.setReporterBrowserScreenshotVisibility(true); err != nil {

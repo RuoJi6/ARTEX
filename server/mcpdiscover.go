@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/mcphttp"
-	"github.com/Autumn-27/norma/mcp"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -20,14 +22,62 @@ type mcpClient interface {
 	Close() error
 }
 
+var lookPath = exec.LookPath
+
+// resolveStdioMCPCommand prefers a locally installed playwright-mcp binary
+// when an MCP server is configured as `npx @playwright/mcp ...`. In Docker
+// images where `@playwright/mcp` is globally installed, calling the binary
+// directly avoids `npx` trying to hit the registry or prompting on stdin; when
+// falling back to `npx`, inject `-y` so it never blocks waiting for consent.
+func resolveStdioMCPCommand(command string, args []string) (string, []string) {
+	out := append([]string(nil), args...)
+	if filepath.Base(strings.TrimSpace(command)) != "npx" {
+		return command, out
+	}
+	pkgIdx := -1
+	hasYes := false
+	for i, arg := range out {
+		if arg == "-y" || arg == "--yes" {
+			hasYes = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if arg == "@playwright/mcp" || strings.HasPrefix(arg, "@playwright/mcp@") {
+			pkgIdx = i
+		}
+		break
+	}
+	if pkgIdx < 0 {
+		return command, out
+	}
+	if bin, err := lookPath("playwright-mcp"); err == nil && strings.TrimSpace(bin) != "" {
+		rest := make([]string, 0, len(out)-1)
+		for i, arg := range out {
+			if i == pkgIdx || (i < pkgIdx && (arg == "-y" || arg == "--yes")) {
+				continue
+			}
+			rest = append(rest, arg)
+		}
+		return bin, rest
+	}
+	if !hasYes {
+		out = append([]string{"-y"}, out...)
+	}
+	return command, out
+}
+
 // connectMCP dials one MCP server per its transport. Callers must Close the client.
-func connectMCP(ctx context.Context, m *db.MCPServer) (mcpClient, error) {
+// workDir sets the subprocess working directory for stdio MCP servers when non-empty.
+func connectMCP(ctx context.Context, m *db.MCPServer, workDir string) (mcpClient, error) {
 	switch m.Transport {
 	case "stdio":
 		if m.Command == "" {
 			return nil, fmt.Errorf("stdio 传输缺少命令")
 		}
-		return mcp.NewStdioClient(ctx, m.Name, m.Command, jsonStrMap(m.Env), jsonStrSlice(m.Args)...)
+		cmd, args := resolveStdioMCPCommand(m.Command, jsonStrSlice(m.Args))
+		return newStdioMCPClient(ctx, m.Name, workDir, cmd, jsonStrMap(m.Env), args...)
 	case "http":
 		if m.URL == "" {
 			return nil, fmt.Errorf("http 传输缺少 URL")
@@ -47,7 +97,7 @@ func connectMCP(ctx context.Context, m *db.MCPServer) (mcpClient, error) {
 // discoverAndCacheMCP connects to one MCP, lists its tools, and persists the tool
 // names to mcp_tools_cache so the UI shows them without a live connection.
 func (s *Server) discoverAndCacheMCP(ctx context.Context, m *db.MCPServer) error {
-	cl, err := connectMCP(ctx, m)
+	cl, err := connectMCP(ctx, m, s.m.dir)
 	if err != nil {
 		return err
 	}

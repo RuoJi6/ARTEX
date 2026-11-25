@@ -37,7 +37,7 @@ func TestCredentialProcessingFlowBindingAndScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskID := *f.TaskID
-	oldRecording := s.m.pg.GetBool(db.SettingTaskIntelligence, false)
+	oldRecording := s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence)
 	oldOn, oldBind := s.m.pg.GetBool(db.SettingCredentialAgent, false), s.m.pg.GetBool(db.SettingCredentialTraffic, false)
 	defer func() {
 		_ = s.m.pg.SetBool(db.SettingTaskIntelligence, oldRecording)
@@ -46,6 +46,7 @@ func TestCredentialProcessingFlowBindingAndScopes(t *testing.T) {
 			_ = s.m.pg.SetCredentialAgentSettings(t.Context(), nil, &oldBind)
 		}
 	}()
+	_ = s.m.pg.SetBool(db.SettingTaskIntelligence, false)
 	_ = s.m.pg.SetBool(db.SettingCredentialAgent, false)
 	_ = s.m.pg.SetBool(db.SettingCredentialTraffic, false)
 	if r := request("PUT", "/api/settings", `{"credential_traffic_binding":true}`); r.Code != 400 {
@@ -209,7 +210,7 @@ func TestCredentialDisableCancelsInFlightModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskID := *finding.TaskID
-	oldRecording := s.m.pg.GetBool(db.SettingTaskIntelligence, false)
+	oldRecording := s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence)
 	oldOn, oldBinding := s.m.pg.GetBool(db.SettingCredentialAgent, false), s.m.pg.GetBool(db.SettingCredentialTraffic, false)
 	defer func() {
 		_ = s.m.pg.SetBool(db.SettingTaskIntelligence, oldRecording)
@@ -274,7 +275,7 @@ func TestCredentialFailedModelCanRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskID := *finding.TaskID
-	oldRecord, oldAgent, oldBind := s.m.pg.GetBool(db.SettingTaskIntelligence, false), s.m.pg.GetBool(db.SettingCredentialAgent, false), s.m.pg.GetBool(db.SettingCredentialTraffic, false)
+	oldRecord, oldAgent, oldBind := s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence), s.m.pg.GetBool(db.SettingCredentialAgent, false), s.m.pg.GetBool(db.SettingCredentialTraffic, false)
 	defer s.m.pg.SetIntelligenceSettings(t.Context(), &oldRecord, &oldAgent, &oldBind)
 	on, off := true, false
 	_ = s.m.pg.SetIntelligenceSettings(t.Context(), &on, &on, &off)

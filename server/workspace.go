@@ -255,7 +255,7 @@ func (s *Server) wsPreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 415, "仅支持图片预览")
 		return
 	}
-	if s.m.pg.GetBool(settingScreenshotTimestamp, false) {
+	if s.m.pg.GetBool(settingScreenshotTimestamp, defaultScreenshotTimestamp) {
 		rawRel := filepath.ToSlash(strings.TrimPrefix(strings.TrimSpace(rawPath), "/"))
 		rel := filepath.ToSlash(s.wsRel(abs))
 		if strings.HasPrefix(rawRel, "findings/screenshots/") || strings.HasPrefix(rel, "findings/screenshots/") || strings.Contains(rel, "/findings/screenshots/") {
@@ -280,9 +280,14 @@ func (s *Server) findSessionPreview(rawPath string) (string, bool) {
 	if rel == "." || !strings.HasPrefix(rel, prefix) || strings.Contains(rel, ".."+string(os.PathSeparator)) {
 		return "", false
 	}
-	base := filepath.Join(filepath.Clean(s.m.dir), "sessions")
-	matches, err := filepath.Glob(filepath.Join(base, "*", filepath.FromSlash(rel)))
-	if err != nil || len(matches) == 0 {
+	root := filepath.Clean(s.m.dir)
+	var matches []string
+	for _, sub := range []string{"sessions", "tasks"} {
+		if found, err := filepath.Glob(filepath.Join(root, sub, "*", filepath.FromSlash(rel))); err == nil {
+			matches = append(matches, found...)
+		}
+	}
+	if len(matches) == 0 {
 		return "", false
 	}
 	var newest string

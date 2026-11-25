@@ -20,6 +20,7 @@ type RunInfo struct {
 	ExplorationID int64  // exploration id; 0 when unknown
 	IntentID      int64  // worker's intent node; 0 for planner/mainagent/chat
 	SessionID     string // chat conversation id; empty for task runs
+	WorkDir       string // active agent run working directory; used for stdio MCP CWD
 }
 
 // explorationID reads a store's exploration id, tolerating a nil store (planner and

@@ -77,13 +77,15 @@ func (d *DB) SetIntelligenceSettings(ctx context.Context, recording, enabled, bi
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(7337741006)`); err != nil {
 		return err
 	}
-	record, on, bind := false, false, false
+	record, on, bind := DefaultTaskIntelligence, false, false
 	var value string
 	err = tx.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=$1`, SettingTaskIntelligence).Scan(&value)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	record = value == "true" || value == "1"
+	if err == nil {
+		record = value == "true" || value == "1"
+	}
 	if recording != nil {
 		record = *recording
 	}
@@ -140,7 +142,7 @@ func (d *DB) ClaimCredentialJob(ctx context.Context, bind bool, taskID int64) (*
 	defer tx.Rollback()
 	var id int64
 	err = tx.QueryRowContext(ctx, `SELECT i.id FROM task_intelligence i JOIN tasks t ON t.id=i.task_id
- WHERE i.kind='credential' AND EXISTS(SELECT 1 FROM settings WHERE key='credential_agent_enabled' AND value IN ('true','1')) AND EXISTS(SELECT 1 FROM settings WHERE key='task_intelligence_enabled' AND value IN ('true','1')) AND ($2::bigint=0 OR i.task_id=$2) AND t.deleted_at IS NULL AND t.archived_at IS NULL
+ WHERE i.kind='credential' AND EXISTS(SELECT 1 FROM settings WHERE key='credential_agent_enabled' AND value IN ('true','1')) AND NOT EXISTS(SELECT 1 FROM settings WHERE key='task_intelligence_enabled' AND value NOT IN ('true','1')) AND ($2::bigint=0 OR i.task_id=$2) AND t.deleted_at IS NULL AND t.archived_at IS NULL
  AND NOT EXISTS(SELECT 1 FROM task_archives a WHERE a.task_id=t.id AND a.state IN ('archive_queued','archiving','restore_queued','restoring','delete_queued','deleting'))
  AND (i.credential_analysis IS NULL OR i.credential_analysis->>'state'='queued'
  OR (i.credential_analysis->>'state'='processing' AND (i.credential_analysis->>'lease_until')::timestamptz < now())
@@ -177,7 +179,7 @@ func (d *DB) FinishCredentialJob(ctx context.Context, item *Intelligence, result
 		return err
 	}
 	var enabled, binding bool
-	if err = tx.QueryRowContext(ctx, `SELECT (EXISTS(SELECT 1 FROM settings WHERE key=$1 AND value IN ('true','1')) AND EXISTS(SELECT 1 FROM settings WHERE key='task_intelligence_enabled' AND value IN ('true','1'))),EXISTS(SELECT 1 FROM settings WHERE key=$2 AND value IN ('true','1'))`, SettingCredentialAgent, SettingCredentialTraffic).Scan(&enabled, &binding); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT (EXISTS(SELECT 1 FROM settings WHERE key=$1 AND value IN ('true','1')) AND NOT EXISTS(SELECT 1 FROM settings WHERE key='task_intelligence_enabled' AND value NOT IN ('true','1'))),EXISTS(SELECT 1 FROM settings WHERE key=$2 AND value IN ('true','1'))`, SettingCredentialAgent, SettingCredentialTraffic).Scan(&enabled, &binding); err != nil {
 		return err
 	}
 	if !enabled {

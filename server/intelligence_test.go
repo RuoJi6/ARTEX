@@ -15,8 +15,12 @@ func TestIntelligenceHTTPSettingsAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskID := *f.TaskID
-	if s.settingsPayload()[db.SettingTaskIntelligence] != false {
-		t.Fatal("default must be off")
+	if _, err := s.m.pg.Exec(`DELETE FROM settings WHERE key=$1`, db.SettingTaskIntelligence); err != nil {
+		t.Fatal(err)
+	}
+	defer s.m.pg.Exec(`DELETE FROM settings WHERE key=$1`, db.SettingTaskIntelligence)
+	if s.settingsPayload()[db.SettingTaskIntelligence] != true {
+		t.Fatal("default must be on")
 	}
 	if s.settingsPayload()[db.SettingTaskAutoTitle] != false || s.settingsPayload()[db.SettingChatAutoTitle] != false {
 		t.Fatal("auto title settings must default to off")
@@ -29,11 +33,16 @@ func TestIntelligenceHTTPSettingsAndScope(t *testing.T) {
 	}
 	defer s.m.pg.SetBool(db.SettingTaskAutoTitle, false)
 	defer s.m.pg.SetBool(db.SettingChatAutoTitle, false)
+	if r := request("PUT", "/api/settings", `{"task_intelligence_enabled":false}`); r.Code != 200 {
+		t.Fatal(r.Code, r.Body)
+	}
+	if s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence) {
+		t.Fatal("disable setting not persisted")
+	}
 	if r := request("PUT", "/api/settings", `{"task_intelligence_enabled":true}`); r.Code != 200 {
 		t.Fatal(r.Code, r.Body)
 	}
-	defer s.m.pg.SetBool(db.SettingTaskIntelligence, false)
-	if !s.m.pg.GetBool(db.SettingTaskIntelligence, false) {
+	if !s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence) {
 		t.Fatal("setting not persisted")
 	}
 	in := db.IntelligenceInput{Kind: "credential", Title: "test credential", Content: "local-api-fixture-secret", Evidence: "local fixture evidence", Confidence: "observed"}
