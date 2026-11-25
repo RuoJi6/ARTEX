@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增与改进
+
+- 漏洞合并改为由 AI 自动判断并直接完成（#189）：取消人工勾选与待确认建议步骤，停用 `suggest_finding_merge` 工具并移除「疑似重复分组 · 待确认」人工确认卡片；Reporter 依据根因证据直接归并或保持独立，`complete_finding_case_review` 验收结论收敛为 `merged` / `independent`。发现页与任务详情「发现」页签提供一键「AI 自动合并」入口，`POST /api/exploration/finding-case-review` 支持无需手工传入 `finding_ids` 按筛选/任务自动分批排队整理。
+
 ## [0.3.31] - 2026-11-23
 
 ### 新增与改进

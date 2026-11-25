@@ -6,28 +6,40 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
-
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
+type findingCaseFilters struct {
+	Severity   string `json:"severity"`
+	Status     string `json:"status"`
+	VulnClass  string `json:"vulnclass"`
+	TaskID     string `json:"task_id"`
+	Query      string `json:"q"`
+	From       string `json:"from"`
+	To         string `json:"to"`
+	AssetScope string `json:"asset_scope"`
+}
+
 type findingCaseRequest struct {
-	TaskID         json.RawMessage   `json:"task_id"`
-	FindingID      json.RawMessage   `json:"finding_id"`
-	IDs            []json.RawMessage `json:"finding_ids"`
-	CaseID         json.RawMessage   `json:"case_id"`
-	Version        int64             `json:"version"`
-	Title          string            `json:"title"`
-	Reason         string            `json:"reason"`
-	Report         string            `json:"report"`
-	Severity       string            `json:"severity"`
-	SeverityReason string            `json:"severity_reason"`
-	Page           int               `json:"page"`
+	TaskID         json.RawMessage     `json:"task_id"`
+	FindingID      json.RawMessage     `json:"finding_id"`
+	IDs            []json.RawMessage   `json:"finding_ids"`
+	CaseID         json.RawMessage     `json:"case_id"`
+	Filters        *findingCaseFilters `json:"filters"`
+	Version        int64               `json:"version"`
+	Title          string              `json:"title"`
+	Reason         string              `json:"reason"`
+	Report         string              `json:"report"`
+	Severity       string              `json:"severity"`
+	SeverityReason string              `json:"severity_reason"`
+	Page           int                 `json:"page"`
 }
 
 func (a findingCaseRequest) ids() []int64 {
@@ -267,8 +279,7 @@ func (s *Server) findingCaseTools() []actool.CoreTool {
 	}{
 		{"search_finding_duplicates", "只读检索同任务候选摘要与资产，按分数排序并返回 score、tier、hit_reasons：strong=同漏洞类型且资产重叠，weak=未同时具备同漏洞类型和资产重叠，请结合 hit_reasons 核对，仅作参考。等级不同也可能重复。支持分页，按需读取详情。", []string{"finding_id"}},
 		{"get_finding_record", "读取独立漏洞完整原始证据和报告，返回探索节点编号以便追溯执行记录。", []string{"finding_id"}},
-		{"merge_finding_records", "证据明确证明同一缺陷时归并；保留所有原始记录。不跨任务、不改变原评级，不可绕过人工否决。", []string{"task_id", "finding_ids", "title", "reason"}},
-		{"suggest_finding_merge", "证据存在具体共同点但缺少关键证据时，提交一个疑似重复分组（2..20 条同任务记录，一次覆盖全部疑似成员，不要拆成两两建议），待人工确认；不是自动合并。仅类型/资产相同不应提交。", []string{"task_id", "finding_ids", "title", "reason"}},
+		{"merge_finding_records", "AI 依据证据判断属于同一实际缺陷时直接完成归并；保留所有原始记录。不跨任务、不改变原评级，不可绕过人工移出后的归并屏蔽。", []string{"task_id", "finding_ids", "title", "reason"}},
 		{"get_finding_case", "读取归并组和成员分页。先记录version，再读取成员的原报告、证据及流量；版本变化必须重新读取。", []string{"case_id"}},
 		{"update_finding_case_report", "保存统一报告及评级理由，version必须来自实际读取。保留各条原报告，不新建漏洞。", []string{"case_id", "version", "title", "report", "severity", "severity_reason"}},
 	}
@@ -326,7 +337,7 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 		}
 		items, total, strongTotal, err := s.m.pg.FindingCaseCandidates(fid, page, 20, scopes...)
 		return map[string]any{"items": items, "total": total, "strong_total": strongTotal, "page": page, "page_size": 20,
-			"note": "按分数排序；weak 表示未同时具备同漏洞类型和资产重叠，请结合 hit_reasons 核对，仅作参考，通常不应据此建议归并"}, err
+			"note": "按分数排序；weak 表示未同时具备同漏洞类型和资产重叠，请结合 hit_reasons 核对，仅作参考，不能仅凭此归并"}, err
 	case "get_finding_record":
 		f, err := s.m.pg.GetFinding(fid)
 		if err != nil {
@@ -352,13 +363,6 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 	case "merge_finding_records":
 		id, err := s.m.pg.MergeFindingCase(ctx, parseProfileID(a.TaskID), a.ids(), a.Title, a.Reason, "reporter")
 		return map[string]string{"case_id": i64s(id)}, err
-	case "suggest_finding_merge":
-		ids := a.ids()
-		if len(ids) < 2 || len(ids) > 20 {
-			return nil, errors.New("疑似重复分组需要2至20条记录")
-		}
-		id, err := s.m.pg.SuggestFindingCase(ctx, parseProfileID(a.TaskID), ids, a.Title, a.Reason)
-		return map[string]any{"suggestion_id": i64s(id), "finding_ids": ids}, err
 	case "get_finding_case":
 		c, err := s.m.pg.GetFindingCase(cid)
 		if err != nil {
@@ -391,13 +395,13 @@ func (s *Server) seedFindingCaseTools() {
 	if err != nil || a == nil {
 		return
 	}
-	const flag = "finding_case_tools_v3_review"
+	const flag = "finding_case_tools_v4_auto_merge"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
 	names := []string{}
 	previous, _, _ := s.m.pg.GetSetting("finding_case_tools_v1")
-	// v3 refreshes descriptions and schemas without repeating the v2 binding migration.
+	// v4 refreshes descriptions/schemas and retires suggest_finding_merge without replaying v2 binding migration.
 	previousReview, _, _ := s.m.pg.GetSetting("finding_case_tools_v2_review")
 	for _, t := range s.findingCaseTools() {
 		schema, _ := json.Marshal(t.InputSchema())
@@ -414,6 +418,12 @@ func (s *Server) seedFindingCaseTools() {
 			names = append(names, t.Name())
 		}
 	}
+	if _, err := s.m.pg.Exec(`UPDATE tools SET enabled=false, updated_at=now() WHERE key='suggest_finding_merge' AND system`); err != nil {
+		log.Printf("[finding-cases] disable suggest_finding_merge failed: %v", err)
+	}
+	if _, err := s.m.pg.Exec(`UPDATE finding_case_suggestions SET state='obsolete' WHERE state='pending'`); err != nil {
+		log.Printf("[finding-cases] obsolete pending suggestions failed: %v", err)
+	}
 	if previousReview != "true" {
 		if err := s.m.pg.AddAgentToToolBinding("reporter", names); err != nil {
 			return
@@ -422,18 +432,32 @@ func (s *Server) seedFindingCaseTools() {
 			return
 		}
 	}
+	_ = s.m.pg.SetSetting("finding_case_tools_v3_review", "true")
 	_ = s.m.pg.SetSetting(flag, "true")
 }
 
-const findingCaseReviewTaskMessage = "人工选择整理（只读原始记录）：本任务所选 finding_ids=%s。逐条读取已有报告，仅判断同一实际根因；根因明确相同则直接归并。只有证据指向相同端点、处理器/后端组件、参数或缺失检查等具体共同点，但缺少确认共同根因的关键证据时，才提交一个覆盖2..20条同任务疑似成员的分组，不要拆成两两建议；仅类型或资产相同不足以建议，没有具体共同点时保持 independent，不要因为不确定就提交建议。证据表明属于不同代码路径时可判 independent。已有或新建组应尽力更新统一报告；统一报告暂缺或待更新不阻塞 complete_finding_case_review，可由后续运行或人工补齐。禁止生成或覆盖原始报告、改评级状态、补绑证据，不归并未选记录，不探测目标，遵守人工否决。结束前调用 complete_finding_case_review 提交逐条判断并通过验收。"
+const findingCaseReviewTaskMessage = "AI 自动合并整理（只读原始记录）：本任务待判断 finding_ids=%s。逐条读取已有报告，由 AI 直接判断是否属于同一实际根因；证据明确指向同一缺陷（相同端点/路由、处理器或后端组件、参数或缺失检查等实际根因）时，直接调用 merge_finding_records 完成归并，不再提交待人工确认的建议。证据表明属于不同代码路径，或缺少足够证据确认同一根因时，保持 independent（仅类型、资产、标题、令牌或登录入口相同不足以归并）。已有或新建组应尽力更新统一报告；统一报告暂缺或待更新不阻塞 complete_finding_case_review，可由后续运行或人工补齐。禁止生成或覆盖原始报告、改评级状态、补绑证据，不归并本次范围外记录，不探测目标，遵守已撤销/否决的归并屏蔽。结束前调用 complete_finding_case_review 提交逐条判断（仅 merged 或 independent）并通过验收。"
+
+const maxAutoReviewPerTask = 200
 
 func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 	var a findingCaseRequest
-	if !decodeCaseRequest(w, r, &a) {
-		return
+	if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		if err := json.NewDecoder(r.Body).Decode(&a); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, 400, "无效请求正文")
+			return
+		}
 	}
 	ids := a.ids()
-	if cid := parseProfileID(a.CaseID); cid > 0 {
+	explicitCase := len(a.CaseID) > 0
+	explicitIDs := len(a.IDs) > 0
+	if explicitCase {
+		cid := parseProfileID(a.CaseID)
+		if cid <= 0 {
+			writeErr(w, 400, "漏洞组不可用")
+			return
+		}
 		c, err := s.m.pg.GetFindingCase(cid)
 		if err != nil || c == nil || !c.Active {
 			writeErr(w, 400, "漏洞组不可用")
@@ -452,48 +476,109 @@ func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 		for _, f := range fs {
 			ids = append(ids, f.ID)
 		}
+		if len(ids) == 0 {
+			writeErr(w, 400, "漏洞组没有可整理的原始上报")
+			return
+		}
+	} else if explicitIDs {
+		if len(ids) == 0 || len(ids) > maxAutoReviewPerTask {
+			writeErr(w, 400, "请选择1至200条原始上报")
+			return
+		}
 	}
-	if len(ids) == 0 || (len(a.CaseID) == 0 && len(ids) > 200) {
-		writeErr(w, 400, "请选择1至200条原始上报")
-		return
-	}
+
 	reporter, err := s.m.pg.GetAgentByKey("reporter")
 	if err != nil || reporter == nil || !reporter.Enabled || s.chatAgentRef() == nil {
 		writeErr(w, 409, "报告 Agent 未启用或模型不可用")
 		return
 	}
-	batches := map[int64][]int64{}
-	for _, fid := range ids {
-		f, err := s.m.pg.FindingCaseSummary(fid)
-		if err != nil || f == nil || f.TaskID == nil {
-			writeErr(w, 400, "所选漏洞来源任务不可用")
-			return
-		}
-		batches[*f.TaskID] = append(batches[*f.TaskID], fid)
-	}
-	// Validate and snapshot every source before starting any batch.
-	taskContexts := map[int64]triggeredRun{}
-	for taskID := range batches {
-		t, ok := s.m.Task(i64s(taskID))
-		if !ok {
-			writeErr(w, 409, "任务不可用")
-			return
-		}
 
-		taskContexts[taskID] = triggeredRun{taskDesc: t.Description, taskGoal: t.Goal}
+	autoMode := !explicitCase && !explicitIDs
+	batches := map[int64][]int64{}
+	taskContexts := map[int64]triggeredRun{}
+	var reservations []db.FindingCaseReviewReservation
+	skippedBusy := 0
+
+	if autoMode {
+		var filter db.FindingFilter
+		if a.Filters != nil {
+			filter = db.FindingFilter{
+				Severity:   normFilter(a.Filters.Severity),
+				Status:     normFilter(a.Filters.Status),
+				VulnClass:  normFilter(a.Filters.VulnClass),
+				TaskID:     normFilter(a.Filters.TaskID),
+				Query:      a.Filters.Query,
+				From:       strings.TrimSpace(a.Filters.From),
+				To:         strings.TrimSpace(a.Filters.To),
+				AssetScope: strings.TrimSpace(a.Filters.AssetScope),
+			}
+		} else {
+			filter = findingFilterFromQuery(r.URL.Query())
+		}
+		if tid := parseProfileID(a.TaskID); tid > 0 && filter.TaskID == "" {
+			filter.TaskID = i64s(tid)
+		}
+		byTask, err := s.m.pg.ListFindingIDsByTask(filter, maxAutoReviewPerTask)
+		if err != nil {
+			caseHTTPError(w, err)
+			return
+		}
+		for taskID, fids := range byTask {
+			if len(fids) < 2 {
+				continue
+			}
+			t, ok := s.m.Task(i64s(taskID))
+			if !ok {
+				continue
+			}
+			batches[taskID] = fids
+			taskContexts[taskID] = triggeredRun{taskDesc: t.Description, taskGoal: t.Goal}
+		}
+		if len(batches) == 0 {
+			writeJSON(w, 200, map[string]any{"runs": []map[string]any{}, "skipped_busy": 0})
+			return
+		}
+		reservations, skippedBusy, err = s.m.pg.CreateAutoFindingCaseReviews(r.Context(), batches)
+		if err != nil {
+			caseHTTPError(w, err)
+			return
+		}
+	} else {
+		for _, fid := range ids {
+			f, err := s.m.pg.FindingCaseSummary(fid)
+			if err != nil || f == nil || f.TaskID == nil {
+				writeErr(w, 400, "所选漏洞来源任务不可用")
+				return
+			}
+			batches[*f.TaskID] = append(batches[*f.TaskID], fid)
+		}
+		// Validate and snapshot every source before starting any batch.
+		for taskID := range batches {
+			t, ok := s.m.Task(i64s(taskID))
+			if !ok {
+				writeErr(w, 409, "任务不可用")
+				return
+			}
+			taskContexts[taskID] = triggeredRun{taskDesc: t.Description, taskGoal: t.Goal}
+		}
+		reservations, err = s.m.pg.CreateFindingCaseReviews(r.Context(), batches)
+		if err != nil {
+			caseHTTPError(w, err)
+			return
+		}
 	}
-	reservations, err := s.m.pg.CreateFindingCaseReviews(r.Context(), batches)
-	if err != nil {
-		caseHTTPError(w, err)
-		return
-	}
+
 	runs := []map[string]any{}
 	for _, reservation := range reservations {
 		taskID, fids := reservation.TaskID, reservation.FindingIDs
 		taskContext := taskContexts[taskID]
 		raw, _ := json.Marshal(fids)
 		msg := fmt.Sprintf(findingCaseReviewTaskMessage, raw)
-		item := triggeredRun{agentKey: "reporter", title: "漏洞整理 · task#" + i64s(taskID), message: msg, taskID: taskID, taskDesc: taskContext.taskDesc, taskGoal: taskContext.taskGoal, conversationID: reservation.ConversationID}
+		title := "漏洞整理 · task#" + i64s(taskID)
+		if autoMode {
+			title = "AI 漏洞合并 · task#" + i64s(taskID)
+		}
+		item := triggeredRun{agentKey: "reporter", title: title, message: msg, taskID: taskID, taskDesc: taskContext.taskDesc, taskGoal: taskContext.taskGoal, conversationID: reservation.ConversationID}
 		cfg := s.readTriggerBehavior("reporter")
 		s.queueMu.Lock()
 		s.triggerCfg["reporter"] = cfg
@@ -502,7 +587,7 @@ func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 		s.queueMu.Unlock()
 		runs = append(runs, map[string]any{"conversation_id": reservation.ConversationID, "task_id": i64s(taskID)})
 	}
-	writeJSON(w, 202, map[string]any{"runs": runs})
+	writeJSON(w, 202, map[string]any{"runs": runs, "skipped_busy": skippedBusy})
 }
 func (s *Server) caseReviewRuns(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.m.pg.Query(`SELECT conversation_id,task_id,state,error FROM finding_case_review_runs ORDER BY conversation_id DESC LIMIT 50`)
@@ -547,7 +632,7 @@ func (s *Server) checkCaseReviewScope(ctx context.Context, name string, a findin
 	if err := json.Unmarshal(raw, &ids); err != nil {
 		return err
 	}
-	if string(conclusion) != "{}" && (name == "merge_finding_records" || name == "suggest_finding_merge" || name == "update_finding_case_report") {
+	if string(conclusion) != "{}" && (name == "merge_finding_records" || name == "update_finding_case_report") {
 		return errors.New("整理判断已提交，不能在验收后继续修改")
 	}
 	allowed := map[int64]bool{}
@@ -561,11 +646,11 @@ func (s *Server) checkCaseReviewScope(ctx context.Context, name string, a findin
 		}
 	case "update_finding_report", "bind_finding_traffic", "report_finding":
 		return errors.New("历史整理禁止修改原始报告、上报或证据；只能写归并关系及统一报告")
-	case "merge_finding_records", "suggest_finding_merge":
+	case "merge_finding_records":
 		checkIDs := a.ids()
 		for _, id := range checkIDs {
 			if !allowed[id] {
-				return errors.New("人工整理只能归并所选记录")
+				return errors.New("本次整理只能归并范围内的记录")
 			}
 		}
 	case "update_finding_case_report":
@@ -580,7 +665,7 @@ func (s *Server) checkCaseReviewScope(ctx context.Context, name string, a findin
 			}
 		}
 		if !found {
-			return errors.New("该漏洞组不属于人工所选范围")
+			return errors.New("该漏洞组不属于本次整理范围")
 		}
 	}
 	return nil

@@ -42,7 +42,6 @@ import type {
   FindingCaseDetail,
   FindingCasePage,
   FindingCaseReviewRun,
-  FindingCaseSuggestion,
   FindingDeepenResponse,
   FindingGroupsPage,
   FindingQuery,
@@ -866,19 +865,24 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify({ reason }),
     }),
-  findingCaseSuggestions: (task?: string) =>
-    get<FindingCaseSuggestion[]>(
-      `/exploration/finding-case-suggestions${task ? `?task_id=${encodeURIComponent(task)}` : ""}`,
+  autoMergeFindings: (filters?: Omit<FindingQuery, "page" | "pageSize">) =>
+    post<{ runs: { conversation_id: number; task_id: string }[]; skipped_busy?: number }>(
+      "/exploration/finding-case-review",
+      filters
+        ? {
+            filters: {
+              severity: filters.severity && filters.severity !== "all" ? filters.severity : undefined,
+              status: filters.status && filters.status !== "all" ? filters.status : undefined,
+              vulnclass: filters.vulnclass && filters.vulnclass !== "all" ? filters.vulnclass : undefined,
+              task_id: filters.task && filters.task !== "all" ? filters.task : undefined,
+              q: filters.query || undefined,
+              from: filters.from || undefined,
+              to: filters.to || undefined,
+              asset_scope: filters.assetScope || undefined,
+            },
+          }
+        : {},
     ),
-  resolveFindingCaseSuggestion: (id: string, accept: boolean, excludeIds?: string[]) =>
-    post<{ case_id: string }>(`/exploration/finding-case-suggestions/${id}`, {
-      accept,
-      ...(excludeIds && excludeIds.length > 0 ? { exclude_ids: excludeIds } : {}),
-    }),
-  reviewFindingCases: (ids: string[]) =>
-    post<{ runs: { conversation_id: number; task_id: string }[] }>("/exploration/finding-case-review", {
-      finding_ids: ids,
-    }),
   regenerateFindingCase: (id: string, contextTask?: string) =>
     post<{ runs: { conversation_id: number; task_id: string }[] }>(
       `/exploration/finding-case-review${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,

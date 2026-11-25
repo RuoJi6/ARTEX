@@ -2087,7 +2087,7 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/exploration/finding-case-suggestions" || (path === "/exploration/finding-case-review" && m === "GET"))
     return [];
   if (path === "/exploration/finding-case-review" && m === "POST")
-    throw new Error("演示模式不执行 Reporter 整理，请在已配置模型的实例中使用");
+    throw new Error("演示模式不执行 AI 自动合并，请在已配置模型的实例中使用");
   if (path === "/exploration/finding-cases" && m === "GET") {
     const list = filterAndSortFindings(mockApplyAssetScope(mockFilterFindings(q), q.get("asset_scope")), "all", {
       field: q.get("sort") === "severity" ? "severity" : "time",

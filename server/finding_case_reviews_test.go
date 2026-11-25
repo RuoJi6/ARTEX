@@ -14,33 +14,40 @@ func TestFindingCaseReviewTaskMessagePolicy(t *testing.T) {
 	message := fmt.Sprintf(findingCaseReviewTaskMessage, `[101,102,103]`)
 	for _, want := range []string{
 		"finding_ids=[101,102,103]",
-		"根因明确相同则直接归并",
-		"相同端点、处理器/后端组件、参数或缺失检查",
-		"缺少确认共同根因的关键证据",
-		"一个覆盖2..20条同任务疑似成员的分组",
-		"不要拆成两两建议",
-		"仅类型或资产相同不足以建议",
-		"没有具体共同点时保持 independent",
-		"不同代码路径时可判 independent",
+		"由 AI 直接判断是否属于同一实际根因",
+		"相同端点/路由、处理器或后端组件、参数或缺失检查",
+		"直接调用 merge_finding_records 完成归并",
+		"不再提交待人工确认的建议",
+		"保持 independent",
 		"尽力更新统一报告",
 		"统一报告暂缺或待更新不阻塞 complete_finding_case_review",
-		"不归并未选记录",
+		"不归并本次范围外记录",
 		"不探测目标",
-		"遵守人工否决",
+		"仅 merged 或 independent",
 	} {
 		if !strings.Contains(message, want) {
 			t.Errorf("task message missing policy: %s", want)
 		}
 	}
-	if strings.Contains(message, "不确定提交建议") {
-		t.Fatal("task message suggests solely because of uncertainty")
+	for _, banned := range []string{"人工选择整理", "suggest_finding_merge", "不确定提交建议", "疑似成员"} {
+		if strings.Contains(message, banned) {
+			t.Fatalf("task message still references manual selection/suggestion: %s", banned)
+		}
 	}
 	schema, err := json.Marshal((&Server{}).toolCompleteFindingCaseReview().InputSchema())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(schema), "没有具体共同点应判 independent") || strings.Contains(string(schema), "不确定则说明缺失证据及已保存建议") {
-		t.Fatal("completion schema must not require suggestions solely because of uncertainty")
+	if strings.Contains(string(schema), `"suggested"`) {
+		t.Fatalf("completion schema must not allow suggested verdict: %s", schema)
+	}
+	if !strings.Contains(string(schema), `"independent"`) || !strings.Contains(string(schema), `"merged"`) {
+		t.Fatalf("completion schema missing binary verdicts: %s", schema)
+	}
+	for _, tool := range (&Server{}).findingCaseTools() {
+		if tool.Name() == "suggest_finding_merge" {
+			t.Fatal("retired suggest_finding_merge still registered in findingCaseTools")
+		}
 	}
 }
 
@@ -148,7 +155,7 @@ func TestFindingCaseReviewProtectsOriginalToolWrites(t *testing.T) {
 	workflowCall(t, context.Background(), s.toolUpdateFindingReport(), map[string]any{"finding_id": f.NodeID, "report": "normal report", "evidence_version": original.EvidenceVersion}, false)
 }
 
-func TestFindingCaseReviewSuggestionNeedsSavedSuggestion(t *testing.T) {
+func TestFindingCaseReviewRejectsSuggestedVerdict(t *testing.T) {
 	s, task, ids := testCaseServer(t)
 	runs, err := s.m.pg.CreateFindingCaseReviews(t.Context(), map[int64][]int64{task: ids[:2]})
 	if err != nil {
@@ -158,19 +165,16 @@ func TestFindingCaseReviewSuggestionNeedsSavedSuggestion(t *testing.T) {
 	defer s.m.pg.Exec(`DELETE FROM conversations WHERE id=$1`, conv)
 	s.m.pg.Exec(`UPDATE finding_case_review_runs SET state='running' WHERE conversation_id=$1`, conv)
 	ctx := intercept.WithConvID(context.Background(), conv)
-	a := findingReviewConclusion{Summary: "需人工确认共同组件"}
+	a := findingReviewConclusion{Summary: "尝试提交已废弃的 suggested 结论"}
 	for _, id := range ids[:2] {
 		s.performFindingCaseTool(ctx, "get_finding_record", findingCaseRequest{FindingID: json.RawMessage(fmt.Sprint(id))})
-		a.Decisions = append(a.Decisions, findingReviewDecision{FindingID: id, Verdict: "suggested", Reason: "同一边界但根因未确认", RootCauseEvidence: "原报告指向对象权限边界，缺少共同组件证据"})
+		a.Decisions = append(a.Decisions, findingReviewDecision{FindingID: id, Verdict: "suggested", Reason: "疑似重复", RootCauseEvidence: "缺少根因证据"})
 	}
 	if err := s.saveFindingReviewConclusion(ctx, conv, a); err == nil {
-		t.Fatal("unpersisted suggestion accepted")
+		t.Fatal("retired suggested verdict was accepted")
 	}
-	if _, err := s.m.pg.SuggestFindingCase(ctx, task, []int64{ids[0], ids[1]}, "orders", "common component unknown"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.saveFindingReviewConclusion(ctx, conv, a); err != nil {
-		t.Fatal(err)
+	if _, err := s.performFindingCaseTool(ctx, "suggest_finding_merge", findingCaseRequest{TaskID: json.RawMessage(fmt.Sprint(task)), IDs: []json.RawMessage{json.RawMessage(fmt.Sprint(ids[0])), json.RawMessage(fmt.Sprint(ids[1]))}, Title: "orders", Reason: "uncertain"}); err == nil {
+		t.Fatal("retired suggest_finding_merge tool was allowed")
 	}
 }
 

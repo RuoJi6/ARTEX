@@ -46,7 +46,7 @@ func testCaseServer(t *testing.T) (*Server, int64, []int64) {
 func TestFindingCaseToolMigrationPreservesBindings(t *testing.T) {
 	s, _, _ := testCaseServer(t)
 	pg := s.m.pg
-	for _, flag := range []string{"finding_case_tools_v1", "finding_case_tools_v2_review", "finding_case_tools_v3_review"} {
+	for _, flag := range []string{"finding_case_tools_v1", "finding_case_tools_v2_review", "finding_case_tools_v3_review", "finding_case_tools_v4_auto_merge"} {
 		value, exists, err := pg.GetSetting(flag)
 		if err != nil {
 			t.Fatal(err)
@@ -95,9 +95,10 @@ func TestFindingCaseToolMigrationPreservesBindings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for flag, value := range map[string]bool{
-				"finding_case_tools_v1":        tc.v1,
-				"finding_case_tools_v2_review": tc.v2,
-				"finding_case_tools_v3_review": false,
+				"finding_case_tools_v1":            tc.v1,
+				"finding_case_tools_v2_review":     tc.v2,
+				"finding_case_tools_v3_review":     false,
+				"finding_case_tools_v4_auto_merge": false,
 			} {
 				if value {
 					if err := pg.SetSetting(flag, "true"); err != nil {
@@ -130,7 +131,7 @@ func TestFindingCaseToolMigrationPreservesBindings(t *testing.T) {
 					t.Fatalf("description/schema not refreshed: %+v", row)
 				}
 			}
-			for _, flag := range []string{"finding_case_tools_v2_review", "finding_case_tools_v3_review"} {
+			for _, flag := range []string{"finding_case_tools_v2_review", "finding_case_tools_v3_review", "finding_case_tools_v4_auto_merge"} {
 				if value, _, err := pg.GetSetting(flag); err != nil || value != "true" {
 					t.Fatalf("migration flag %s not saved: %q, %v", flag, value, err)
 				}
@@ -141,7 +142,7 @@ func TestFindingCaseToolMigrationPreservesBindings(t *testing.T) {
 				}
 			}
 			// A refresh retry must not replay a completed legacy binding migration.
-			if err := pg.SetSetting("finding_case_tools_v3_review", "false"); err != nil {
+			if err := pg.SetSetting("finding_case_tools_v4_auto_merge", "false"); err != nil {
 				t.Fatal(err)
 			}
 			s.seedFindingCaseTools()
@@ -505,4 +506,85 @@ func TestOriginalFindingRowsKeepEvidenceAndOmitReportBody(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestSeedFindingCaseToolsRetiresSuggestToolAndPendingSuggestions(t *testing.T) {
+	s, task, ids := testCaseServer(t)
+	pg := s.m.pg
+	oldVal, oldExists, err := pg.GetSetting("finding_case_tools_v4_auto_merge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if oldExists {
+			_ = pg.SetSetting("finding_case_tools_v4_auto_merge", oldVal)
+		} else {
+			_, _ = pg.Exec(`DELETE FROM settings WHERE key='finding_case_tools_v4_auto_merge'`)
+		}
+	})
+	if err := pg.SeedTool("suggest_finding_merge", "legacy", json.RawMessage(`{}`), json.RawMessage(`["reporter"]`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.UpdateTool("suggest_finding_merge", "legacy", json.RawMessage(`{}`), json.RawMessage(`["reporter"]`), true); err != nil {
+		t.Fatal(err)
+	}
+	sid, err := pg.SuggestFindingCase(t.Context(), task, ids[:2], "legacy group", "legacy reason")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.Exec(`DELETE FROM settings WHERE key='finding_case_tools_v4_auto_merge'`); err != nil {
+		t.Fatal(err)
+	}
+	s.seedFindingCaseTools()
+	row, err := pg.GetTool("suggest_finding_merge")
+	if err != nil || row == nil || row.Enabled {
+		t.Fatalf("suggest_finding_merge should be disabled after v4 migration: %+v %v", row, err)
+	}
+	var state string
+	if err := pg.QueryRow(`SELECT state FROM finding_case_suggestions WHERE id=$1`, sid).Scan(&state); err != nil || state != "obsolete" {
+		t.Fatalf("legacy pending suggestion should be obsoleted, got state=%q err=%v", state, err)
+	}
+}
+
+func TestReviewFindingCasesAutoModeRequiresNoManualSelection(t *testing.T) {
+	s, task, ids := testCaseServer(t)
+	// Add a second task with only 1 finding; auto-merge must skip single-finding tasks.
+	singleTask, err := s.m.pg.CreateTask("single finding task", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.m.pg.Exec(`DELETE FROM findings WHERE task_id=$1`, singleTask.ID)
+		_ = s.m.pg.DeleteTask(singleTask.ID)
+	})
+	if _, err := s.m.pg.AddFinding(singleTask.ID, 0, "XSS", "only one", "low", "s", "p", "worker", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if rep, err := s.m.pg.GetAgentByKey("reporter"); err != nil {
+		t.Fatal(err)
+	} else if rep == nil {
+		if _, err := s.m.pg.CreateAgent("reporter", "报告撰写", "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.m.tasks = map[string]*Task{
+		strconv.FormatInt(task, 10):          {ID: strconv.FormatInt(task, 10), Description: "case server", Goal: "goal"},
+		strconv.FormatInt(singleTask.ID, 10): {ID: strconv.FormatInt(singleTask.ID, 10), Description: "single", Goal: "goal"},
+	}
+	// Without an LLM ref, reviewFindingCases must return 409 even in auto mode (not 400 "请选择1至200条").
+	req := httptest.NewRequest("POST", "/api/exploration/finding-case-review", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	s.reviewFindingCases(w, req)
+	if w.Code != 409 {
+		t.Fatalf("expected 409 (no LLM ref, bypassing manual selection check), got %d: %s", w.Code, w.Body.String())
+	}
+	// Invalid case_id still returns 400.
+	req = httptest.NewRequest("POST", "/api/exploration/finding-case-review", strings.NewReader(`{"case_id":"bad"}`))
+	w = httptest.NewRecorder()
+	s.reviewFindingCases(w, req)
+	if w.Code != 400 {
+		t.Fatalf("expected 400 for invalid case_id, got %d: %s", w.Code, w.Body.String())
+	}
+	_ = ids
 }

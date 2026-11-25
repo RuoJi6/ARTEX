@@ -1861,16 +1861,6 @@ export interface FindingCaseDetail {
   case: FindingCase;
   events: FindingCaseEvent[];
 }
-export interface FindingCaseSuggestion {
-  id: string;
-  task_id: string;
-  left_id: string;
-  right_id: string;
-  finding_ids: string[];
-  title: string;
-  reason: string;
-  state: string;
-}
 export interface FindingCaseReviewRun {
   conversation_id: number;
   task_id: string;
