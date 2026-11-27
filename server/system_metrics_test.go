@@ -8,6 +8,9 @@ import (
 )
 
 func TestSystemMetricsReturnsContainerAndDiskValues(t *testing.T) {
+	t.Setenv("ARTEX_TOOL_MEMORY_LIMIT_MB", "96")
+	t.Setenv("ARTEX_TOOL_TIMEOUT_S", "72")
+	t.Setenv("ARTEX_TOOL_PIDS_LIMIT", "48")
 	s := &Server{dataDir: t.TempDir()}
 	r := httptest.NewRequest("GET", "/api/system/metrics", nil)
 	w := httptest.NewRecorder()
@@ -21,6 +24,9 @@ func TestSystemMetricsReturnsContainerAndDiskValues(t *testing.T) {
 	}
 	if got.Scope == "" || got.Timestamp.IsZero() {
 		t.Fatalf("unexpected response metadata: %+v", got)
+	}
+	if got.Limits.ToolMemoryLimitMB != 96 || got.Limits.ToolTimeoutSeconds != 72 || got.Limits.ToolPidsLimit != 48 {
+		t.Fatalf("configured tool limits missing: %+v", got.Limits)
 	}
 	if runtime.GOOS != "linux" {
 		if got.Supported || got.Scope != "unsupported" {

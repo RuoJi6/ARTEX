@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -183,5 +184,34 @@ func TestHTTPToolTruncatesLargeBody(t *testing.T) {
 	out := res.Flatten()
 	if len(out) >= 40000 {
 		t.Fatalf("oversized http body was not truncated: len=%d", len(out))
+	}
+}
+
+func TestCustomCommandToolTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell syntax")
+	}
+	s := &Server{}
+	res, err := s.runCommandTool(context.Background(), []byte(`{"command":"sleep 10", "timeout_ms":100}`), nil, nil)
+	if err != nil || !res.IsError || !strings.Contains(res.Flatten(), "timed out") {
+		t.Fatalf("expected timeout, got %s, %v", res.Flatten(), err)
+	}
+}
+
+func TestExecPythonMemoryLimit(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("requires a process memory watchdog")
+	}
+	interp, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	t.Setenv("ARTEX_TOOL_MEMORY_LIMIT_MB", "16")
+	_, err = execPython(context.Background(), interp, "test", `import time
+b = bytearray(b'x') * (48 * 1024 * 1024)
+time.sleep(10)
+`, nil, t.TempDir(), nil, 5*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "memory limit exceeded") {
+		t.Fatalf("expected a memory limit error, got %v", err)
 	}
 }
