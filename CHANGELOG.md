@@ -4,9 +4,21 @@
 
 ## [Unreleased]
 
+## [0.3.32] - 2026-11-27
+
 ### 新增与改进
 
 - 漏洞合并改为由 AI 自动判断并直接完成（#189）：取消人工勾选与待确认建议步骤，停用 `suggest_finding_merge` 工具并移除「疑似重复分组 · 待确认」人工确认卡片；Reporter 依据根因证据直接归并或保持独立，`complete_finding_case_review` 验收结论收敛为 `merged` / `independent`。发现页与任务详情「发现」页签提供一键「AI 自动合并」入口，`POST /api/exploration/finding-case-review` 支持无需手工传入 `finding_ids` 按筛选/任务自动分批排队整理。
+- 默认开启截图与证据相关设置并修复容器内 Playwright MCP 截图失效（#188）：未显式保存时默认启用浏览器截图、截图时间标记、Agent 自动绑定流量和任务情报自动记录（保留用户手动关闭值）；自动补齐 `--browser chromium`、对齐 Dockerfile 浏览器安装版本、优先直调本地 `playwright-mcp`，并将 stdio MCP 工作目录对齐到当前会话/任务目录。
+- 新增漏洞手动备注与编辑功能（#198）：扩展 `PATCH /api/exploration/findings/{id}` 支持修改标题、分类、严重度、状态、摘要、证据、报告及备注；漏洞详情页新增备注卡片与编辑弹窗，发现列表与任务发现页签展示备注预览，备注同步纳入全文检索、任务归档及 Markdown/CSV/JSON 导出。
+- 支持原地恢复并继续引导已关闭或暂停的任务（#196）：新增 `resume_task`、`set_task_goals`、`add_task_intent` 编排工具及 `POST /api/tasks/{id}/resume`（含 MCP `resume_task`），在保留原任务图谱、漏洞和资产上下文的前提下恢复暂停任务或通过追加目标/意图重新激活终态任务。
+
+### 修复
+
+- 限制 ARTEX 容器与工具内存使用（#194）：Compose 默认配置 4 GiB 内存、禁用容器 swap、512 进程/线程（支持 `.env` 覆盖）；前台/后台 Bash、自定义命令与 Python 脚本统一接入工具资源保护（默认 2048 MiB / 120s），Linux 可委托 cgroup v2 下走内核限制、常规容器下回退进程树采样；`/api/system/metrics` 补充容器和工具限制信息。
+- 修复拦截审批列表全量历史轮询与全表 `COUNT(*)` 性能问题（#186）：新增部分覆盖索引与轻量接口 `GET /api/intercept/pending/summary`，大表分页采用目录近似估计或有界计数，前端统一改为轻量轮询并支持隐藏页签暂停与防重入。
+- 修复 OpenCode Go 用量窗口耗尽未触发多账户轮换的问题（#184）：在配额耗尽识别中补充 `GoUsageLimitError`、`usage limit reached`、`usage_limit_reached` 标记。
+- 修复任务归档打包遇到 Unix Domain Socket 等非普通文件时报错中断的问题（#199）：打包阶段跳过非目录且非普通文件的特殊条目并记录路径日志。
 
 ## [0.3.31] - 2026-11-23
 
