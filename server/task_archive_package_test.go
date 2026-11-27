@@ -4,8 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/json"
+	"log"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	pgdb "github.com/Autumn-27/artex/db"
@@ -124,6 +127,95 @@ func TestTaskArchivePackageSkipsSymlink(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(extracted, "link.txt")); !os.IsNotExist(err) {
 		t.Fatalf("symlink should have been skipped, but link.txt exists: %v", err)
+	}
+}
+
+func TestTaskArchivePackageSkipsUnixSocket(t *testing.T) {
+	// Unix domain socket paths are capped around 104 bytes on macOS / 108 on Linux,
+	// so prefer a short temp directory under /tmp when available.
+	tempBase := ""
+	if info, err := os.Stat("/tmp"); err == nil && info.IsDir() {
+		tempBase = "/tmp"
+	}
+	dataDir, err := os.MkdirTemp(tempBase, "artex-sock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dataDir) })
+
+	taskID := "42"
+	explorationID := int64(73)
+	regularFile := filepath.Join(dataDir, "tasks", taskID, "uploads", "evidence.txt")
+	if err := os.MkdirAll(filepath.Dir(regularFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(regularFile, []byte("task evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	socketPath := filepath.Join(dataDir, "tasks", taskID, "run", "agent.sock")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Skipf("unix domain socket unsupported in this environment: %v", err)
+	}
+	if unixLn, ok := ln.(*net.UnixListener); ok {
+		unixLn.SetUnlinkOnClose(false)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sockInfo, err := os.Lstat(socketPath)
+	if err != nil || sockInfo.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("expected unix socket at %s, info=%v err=%v", socketPath, sockInfo, err)
+	}
+
+	stage, err := stageTaskArchiveFiles(dataDir, 2, taskID, explorationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var logBuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(prevOut) })
+
+	archivePath := taskArchivePath(dataDir, 2, taskID)
+	snapshot := &pgdb.TaskArchiveSnapshot{
+		FormatVersion: pgdb.TaskArchiveFormatVersion,
+		TaskID:        42,
+		ExplorationID: explorationID,
+	}
+	_, _, checksum, err := writeTaskArchivePackage(archivePath, stage.payload, snapshot)
+	if err != nil {
+		t.Fatalf("archive should skip unix socket, not fail: %v", err)
+	}
+	if err := stage.commit(); err != nil {
+		t.Fatal(err)
+	}
+	wantLoggedRel := "files/tasks/42/run/agent.sock"
+	if !strings.Contains(logBuf.String(), wantLoggedRel) {
+		t.Fatalf("expected skipped socket relative path %q in logs, got %q", wantLoggedRel, logBuf.String())
+	}
+
+	extracted := filepath.Join(dataDir, "restore")
+	if err := extractTaskArchivePackage(archivePath, checksum, extracted); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := installTaskArchiveFiles(dataDir, extracted, taskID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := installed.commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(regularFile); err != nil || string(got) != "task evidence" {
+		t.Fatalf("regular file not restored: got=%q err=%v", got, err)
+	}
+	if _, err := os.Lstat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("unix socket should have been skipped, but %s exists: %v", socketPath, err)
 	}
 }
 
