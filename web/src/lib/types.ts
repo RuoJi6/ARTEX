@@ -1468,6 +1468,11 @@ export interface InterceptPending {
   created_at: string;
 }
 
+export interface InterceptPendingSummary {
+  count: number;
+  agent_names: string[];
+}
+
 // JudgeConfig: 模型兜底审批(仅当没有任何拦截规则命中时由模型判断)的全局配置。
 export interface JudgeConfig {
   enabled: boolean;
@@ -1512,6 +1517,14 @@ export interface InterceptApprovalRow extends InterceptPending {
   conv_title: string; // "" if no linked conversation
   conv_agent_key: string; // "" if no linked conversation
   rule_name: string; // "" if rule was deleted
+}
+
+export interface InterceptApprovalPage {
+  items: InterceptApprovalRow[];
+  total: number;
+  total_approximate?: boolean;
+  total_capped?: boolean;
+  has_more?: boolean;
 }
 
 // ── 资产同步 (ScopeSentry 数据源) ──────────────────────────────────────────────

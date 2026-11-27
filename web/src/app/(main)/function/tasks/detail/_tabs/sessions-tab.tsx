@@ -59,7 +59,6 @@ import type {
   Activity,
   ChatAttachment,
   IntentAsset,
-  InterceptApprovalRow,
   Session,
   SessionStatus,
   SessionTokenUsage,
@@ -491,7 +490,17 @@ function WorkerAssetBadge({ assets }: { assets: IntentAsset[] }) {
   );
 }
 
-export function SessionsTab({ taskId, requestedSession = "" }: { taskId: string; requestedSession?: string }) {
+const EMPTY_PENDING_AGENTS: string[] = [];
+
+export function SessionsTab({
+  taskId,
+  requestedSession = "",
+  pendingAgentNames = EMPTY_PENDING_AGENTS,
+}: {
+  taskId: string;
+  requestedSession?: string;
+  pendingAgentNames?: string[];
+}) {
   const { ui, liveUI } = useUITranslation();
 
   const approvalFocus = useApprovalFocus({ taskId });
@@ -676,8 +685,6 @@ export function SessionsTab({ taskId, requestedSession = "" }: { taskId: string;
   const [taskTokens, setTaskTokens] = React.useState<TokenTotal | null>(null);
   const [sessionTokens, setSessionTokens] = React.useState<Record<string, SessionTokenUsage>>({});
   const [llmResolutions, setLLMResolutions] = React.useState<TaskLLMResolutions | null>(null);
-  // Pending intercept requests for this task — used to show warning icons on sessions.
-  const [pendingIntercepts, setPendingIntercepts] = React.useState<InterceptApprovalRow[]>([]);
 
   // Refs backing SSE/loading without re-render churn.
   const snapshotRef = React.useRef(0); // task-level snapshot cursor → SSE since=
@@ -882,25 +889,6 @@ export function SessionsTab({ taskId, requestedSession = "" }: { taskId: string;
     return () => {
       alive = false;
       clearInterval(timer);
-    };
-  }, [taskId]);
-
-  React.useEffect(() => {
-    let alive = true;
-    const load = () =>
-      api
-        .interceptTask(taskId)
-        .then((rows) => {
-          if (alive) setPendingIntercepts(rows.filter((r) => r.status === "pending"));
-        })
-        .catch(() => {
-          // Polling is best-effort; the next interval retries automatically.
-        });
-    void load();
-    const t = setInterval(load, 5000);
-    return () => {
-      alive = false;
-      clearInterval(t);
     };
   }, [taskId]);
 
@@ -1225,16 +1213,16 @@ export function SessionsTab({ taskId, requestedSession = "" }: { taskId: string;
   const hasPendingForSession = React.useCallback(
     (s: Session): boolean => {
       if (s.inherited) return false;
-      if (!pendingIntercepts.length) return false;
-      if (s.role === "mainagent") return pendingIntercepts.some((r) => r.agent_name === "mainagent");
-      if (s.role === "planner") return pendingIntercepts.some((r) => r.agent_name === "planner");
+      if (!pendingAgentNames.length) return false;
+      if (s.role === "mainagent") return pendingAgentNames.includes("mainagent");
+      if (s.role === "planner") return pendingAgentNames.includes("planner");
       // Worker: extract intent ID from "work#N · #<intentID>"
-      return pendingIntercepts.some((r) => {
-        const m = r.agent_name.match(/·\s*#(\d+)$/);
+      return pendingAgentNames.some((agentName) => {
+        const m = agentName.match(/·\s*#(\d+)$/);
         return m ? m[1] === s.intent_id : false;
       });
     },
-    [pendingIntercepts],
+    [pendingAgentNames],
   );
 
   // Liveness from each session's last-seen activity time (kept fresh by the 1.5s tick).

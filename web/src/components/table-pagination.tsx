@@ -13,6 +13,9 @@ interface TablePaginationProps {
   page: number; // 1-based
   pageSize: number;
   total: number; // total (after filtering)
+  totalApproximate?: boolean;
+  totalCapped?: boolean;
+  hasMore?: boolean;
   onPageChange: (p: number) => void;
   onPageSizeChange: (s: number) => void;
   pageSizeOptions?: number[];
@@ -35,15 +38,22 @@ export function TablePagination({
   page,
   pageSize,
   total,
+  totalApproximate = false,
+  totalCapped = false,
+  hasMore = false,
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = [10, 20, 50],
 }: TablePaginationProps) {
   const { t } = useTranslation();
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize), hasMore ? page + 1 : 0);
   const safePage = Math.min(Math.max(1, page), totalPages);
-  const from = total === 0 ? 0 : (safePage - 1) * pageSize + 1;
-  const to = Math.min(safePage * pageSize, total);
+  const hasItems = total > 0 || hasMore;
+  const from = hasItems ? (safePage - 1) * pageSize + 1 : 0;
+  const to = hasMore ? safePage * pageSize : Math.min(safePage * pageSize, total);
+  let totalLabel: string | number = total;
+  if (totalCapped) totalLabel = `${total}+`;
+  else if (totalApproximate) totalLabel = `~${total}`;
   const onPageChangeRef = useRef(onPageChange);
   onPageChangeRef.current = onPageChange;
 
@@ -67,8 +77,8 @@ export function TablePagination({
           </SelectContent>
         </Select>
         <span>{t("pagination.perPage")}</span>
-        {total > 0 ? (
-          <span className="tabular-nums">{t("pagination.range", { from, to, total, count: total })}</span>
+        {hasItems ? (
+          <span className="tabular-nums">{t("pagination.range", { from, to, total: totalLabel, count: total })}</span>
         ) : (
           <span>{t("pagination.empty")}</span>
         )}

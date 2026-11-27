@@ -2774,8 +2774,19 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/intercept/rules" && m === "GET") return { rules: D.interceptRules };
   if (seg[0] === "intercept" && seg[1] === "rules" && seg[3] === "toggle")
     return { ok: true, enabled: b.enabled ?? true };
-  if (path === "/intercept/pending" && m === "GET")
-    return { pending: mockInterceptHistory.filter((r) => r.status === "pending") };
+  if (path === "/intercept/pending/summary" && m === "GET") {
+    const taskId = q.get("task_id")?.trim() || "";
+    const pending = mockInterceptHistory.filter((r) => r.status === "pending" && (!taskId || r.task_id === taskId));
+    if (!taskId) return { count: pending.length };
+    const agentNames = [...new Set(pending.map((r) => r.agent_name).filter(Boolean))].sort();
+    return { count: pending.length, agent_names: agentNames };
+  }
+  if (path === "/intercept/pending" && m === "GET") {
+    const taskId = q.get("task_id")?.trim() || "";
+    return {
+      pending: mockInterceptHistory.filter((r) => r.status === "pending" && (!taskId || r.task_id === taskId)),
+    };
+  }
   if (seg[0] === "intercept" && seg[1] === "pending" && seg[3] === "decide") {
     const id = Number(seg[2]);
     const row = mockInterceptHistory.find((r) => r.id === id) ?? mockInterceptPending.find((r) => r.id === id);
@@ -2834,14 +2845,17 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
           (search.startsWith("#") ? row.id === Number(search.slice(1)) : haystack.includes(search.toLowerCase())))
       );
     });
-    if (!q.has("page") && !q.has("size") && !status && !decisionSource && !search && !from && !to)
-      return { items: filtered, total: filtered.length };
+    if (!q.has("page") && !q.has("size") && !status && !decisionSource && !search && !from && !to) {
+      const capped = filtered.slice(0, 200);
+      return { items: capped, total: capped.length };
+    }
     const page = Math.max(1, Number(q.get("page")) || 1);
     const size = Math.min(100, Math.max(1, Number(q.get("size")) || 20));
     const offset = (page - 1) * size;
     return {
       items: filtered.slice(offset, offset + size),
       total: filtered.length,
+      has_more: offset + size < filtered.length,
       page,
       page_size: size,
     };

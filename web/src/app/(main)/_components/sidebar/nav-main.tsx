@@ -161,21 +161,36 @@ function NavItem({ item, isItemActive, isSubItemActive, isSubmenuOpen }: NavItem
   );
 }
 
-// InterceptPendingBadge polls /api/intercept/pending every 5 s and shows a red
-// count badge when there are unresolved approval requests.
+// InterceptPendingBadge polls /api/intercept/pending/summary every 5 s (while
+// visible) and shows an amber count badge when there are unresolved requests.
 function InterceptPendingBadge() {
   const [count, setCount] = React.useState(0);
   React.useEffect(() => {
     let live = true;
+    let inFlight = false;
     async function poll() {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
       try {
-        const list = await api.interceptPending();
-        if (live) setCount(list.length);
-      } catch { /* ignore */ }
+        const summary = await api.interceptPendingSummary();
+        if (live) setCount(summary.count);
+      } catch {
+        /* ignore */
+      } finally {
+        inFlight = false;
+      }
     }
-    poll();
-    const t = setInterval(poll, 5000);
-    return () => { live = false; clearInterval(t); };
+    void poll();
+    const t = setInterval(() => void poll(), 5000);
+    const onVisible = () => {
+      if (!document.hidden) void poll();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      live = false;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
   if (count === 0) return null;
   return (

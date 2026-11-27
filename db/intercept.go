@@ -197,6 +197,64 @@ func (d *DB) ListPendingIntercepts() ([]InterceptPending, error) {
 	return out, rows.Err()
 }
 
+// ListPendingInterceptsByTask returns unresolved approval requests for one task,
+// newest first.
+func (d *DB) ListPendingInterceptsByTask(taskID string) ([]InterceptPending, error) {
+	rows, err := d.Query(`SELECT `+interceptPendingCols+` FROM intercept_pending WHERE status='pending' AND task_id=$1 ORDER BY created_at DESC`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InterceptPending
+	for rows.Next() {
+		var p InterceptPending
+		if err := scanInterceptPending(rows, &p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// InterceptPendingSummary is a lightweight snapshot of unresolved approval
+// requests without loading tool_input JSONB or historical rows.
+type InterceptPendingSummary struct {
+	Count      int      `json:"count"`
+	AgentNames []string `json:"agent_names,omitempty"`
+}
+
+// CountPendingIntercepts returns the number of unresolved approval requests.
+func (d *DB) CountPendingIntercepts() (int, error) {
+	var count int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM intercept_pending WHERE status='pending'`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// TaskPendingInterceptSummary returns the pending count and distinct agent names
+// awaiting approval for one task.
+func (d *DB) TaskPendingInterceptSummary(taskID string) (InterceptPendingSummary, error) {
+	rows, err := d.Query(`SELECT agent_name, COUNT(*) FROM intercept_pending WHERE status='pending' AND task_id=$1 GROUP BY agent_name ORDER BY agent_name`, taskID)
+	if err != nil {
+		return InterceptPendingSummary{}, err
+	}
+	defer rows.Close()
+	out := InterceptPendingSummary{AgentNames: []string{}}
+	for rows.Next() {
+		var agent string
+		var n int
+		if err := rows.Scan(&agent, &n); err != nil {
+			return InterceptPendingSummary{}, err
+		}
+		out.Count += n
+		if agent != "" {
+			out.AgentNames = append(out.AgentNames, agent)
+		}
+	}
+	return out, rows.Err()
+}
+
 // GetInterceptPending returns one pending record (nil if absent).
 func (d *DB) GetInterceptPending(id int64) (*InterceptPending, error) {
 	var p InterceptPending
@@ -243,10 +301,13 @@ const approvalRowColumns = `ip.id, ip.rule_id, ip.conversation_id, ip.task_id, i
 const approvalRowJoins = `
 FROM intercept_pending ip
 LEFT JOIN conversations c ON c.id = ip.conversation_id
-LEFT JOIN tasks t ON t.id::text = ip.task_id
 LEFT JOIN intercept_rules ir ON ir.id = ip.rule_id`
 
+const approvalRowSearchJoins = approvalRowJoins + `
+LEFT JOIN tasks t ON t.id::text = ip.task_id`
+
 const approvalRowSelect = `SELECT ` + approvalRowColumns + approvalRowJoins
+const approvalRowSearchSelect = `SELECT ` + approvalRowColumns + approvalRowSearchJoins
 const approvalRowSelectWithAudit = `SELECT ` + approvalRowColumns + `, ip.audit` + approvalRowJoins
 
 func interceptSource(ruleID int64, reason string) string {
@@ -299,14 +360,42 @@ type InterceptApprovalFilter struct {
 	CreatedTo      string // inclusive UTC calendar date, YYYY-MM-DD
 }
 
-// ListAllInterceptsPage returns one 1-based page and the total matching count.
-func (d *DB) ListAllInterceptsPage(page, size int, filter InterceptApprovalFilter) ([]InterceptApprovalRow, int, error) {
+// InterceptApprovalPage is one 1-based page of approval history.
+// When TotalApproximate is true, Total is either a PostgreSQL table-size
+// estimate (unfiltered large table) or a lower bound (TotalCapped == true)
+// rather than an exact full-table count.
+type InterceptApprovalPage struct {
+	Items            []InterceptApprovalRow
+	Total            int
+	TotalApproximate bool
+	TotalCapped      bool
+	HasMore          bool
+}
+
+// interceptExactCountCap bounds exact COUNT(*) scans so large tables never
+// trigger unbounded full scans on every poll. Tests may override it.
+var interceptExactCountCap = 10000
+
+// ListAllInterceptsPage returns one 1-based page and matching count metadata.
+func (d *DB) ListAllInterceptsPage(page, size int, filter InterceptApprovalFilter) (InterceptApprovalPage, error) {
 	return d.listInterceptsPage("", page, size, filter)
 }
 
 // ListTaskIntercepts returns all intercept_pending rows for a specific task (newest first).
 func (d *DB) ListTaskIntercepts(taskID string) ([]InterceptApprovalRow, error) {
-	rows, err := d.Query(approvalRowSelect+` WHERE ip.task_id=$1 ORDER BY ip.created_at DESC`, taskID)
+	return d.ListTaskInterceptsLimit(taskID, 0)
+}
+
+// ListTaskInterceptsLimit returns up to limit intercept_pending rows for a
+// specific task (newest first). limit <= 0 returns all rows.
+func (d *DB) ListTaskInterceptsLimit(taskID string, limit int) ([]InterceptApprovalRow, error) {
+	q := approvalRowSelect + ` WHERE ip.task_id=$1 ORDER BY ip.created_at DESC, ip.id DESC`
+	args := []any{taskID}
+	if limit > 0 {
+		q += ` LIMIT $2`
+		args = append(args, limit)
+	}
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -323,11 +412,37 @@ func (d *DB) ListTaskIntercepts(taskID string) ([]InterceptApprovalRow, error) {
 }
 
 // ListTaskInterceptsPage is the paginated variant of ListTaskIntercepts.
-func (d *DB) ListTaskInterceptsPage(taskID string, page, size int, filter InterceptApprovalFilter) ([]InterceptApprovalRow, int, error) {
+func (d *DB) ListTaskInterceptsPage(taskID string, page, size int, filter InterceptApprovalFilter) (InterceptApprovalPage, error) {
 	return d.listInterceptsPage(taskID, page, size, filter)
 }
 
-func (d *DB) listInterceptsPage(taskID string, page, size int, filter InterceptApprovalFilter) ([]InterceptApprovalRow, int, error) {
+// estimateInterceptTableRows reads PostgreSQL's live row estimate for
+// intercept_pending without scanning the table.
+func (d *DB) estimateInterceptTableRows() (int64, error) {
+	var relTuples, liveTuples, deadTuples int64
+	err := d.QueryRow(`
+		SELECT
+			CASE WHEN c.reltuples >= 0 THEN c.reltuples::bigint ELSE -1 END,
+			pg_stat_get_live_tuples(c.oid),
+			pg_stat_get_dead_tuples(c.oid)
+		FROM pg_class c
+		WHERE c.oid = 'intercept_pending'::regclass`).Scan(&relTuples, &liveTuples, &deadTuples)
+	if err != nil {
+		return 0, err
+	}
+	if liveTuples > 0 {
+		return liveTuples, nil
+	}
+	if liveTuples == 0 && deadTuples > 0 {
+		return 0, nil
+	}
+	if relTuples > 0 {
+		return relTuples, nil
+	}
+	return 0, nil
+}
+
+func (d *DB) listInterceptsPage(taskID string, page, size int, filter InterceptApprovalFilter) (InterceptApprovalPage, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -359,13 +474,15 @@ func (d *DB) listInterceptsPage(taskID string, page, size int, filter InterceptA
 		conditions = append(conditions, "ip.created_at < ($"+fmt.Sprint(len(args))+"::date + INTERVAL '1 day')")
 	}
 	search := strings.TrimSpace(filter.Search)
+	hasTextSearch := false
 	if strings.HasPrefix(search, "#") {
 		id, err := strconv.ParseInt(strings.TrimPrefix(search, "#"), 10, 64)
 		if err != nil || id <= 0 {
-			return nil, 0, fmt.Errorf("审批编号必须为 # 后接正整数")
+			return InterceptApprovalPage{}, fmt.Errorf("审批编号必须为 # 后接正整数")
 		}
 		add("ip.id", strconv.FormatInt(id, 10))
 	} else if search != "" {
+		hasTextSearch = true
 		// Treat SQL LIKE metacharacters literally, including URL percent escapes.
 		pattern := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(search)
 		args = append(args, "%"+pattern+"%")
@@ -391,33 +508,96 @@ func (d *DB) listInterceptsPage(taskID string, page, size int, filter InterceptA
 	if len(conditions) > 0 {
 		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
-	var total int
-	countFrom := "FROM intercept_pending ip"
-	if search != "" && !strings.HasPrefix(search, "#") {
-		countFrom = approvalRowJoins
-	}
-	if err := d.QueryRow("SELECT COUNT(*) "+countFrom+where, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
 
+	selectClause := approvalRowSelect
+	if hasTextSearch {
+		selectClause = approvalRowSearchSelect
+	}
 	limitArg := len(args) + 1
 	offsetArg := limitArg + 1
-	dataQ := approvalRowSelect + where +
+	dataQ := selectClause + where +
 		" ORDER BY ip.created_at DESC, ip.id DESC LIMIT $" + fmt.Sprint(limitArg) +
 		" OFFSET $" + fmt.Sprint(offsetArg)
-	args = append(args, size, offset)
-	rows, err := d.Query(dataQ, args...)
+	dataArgs := make([]any, 0, len(args)+2)
+	dataArgs = append(dataArgs, args...)
+	dataArgs = append(dataArgs, size+1, offset)
+	rows, err := d.Query(dataQ, dataArgs...)
 	if err != nil {
-		return nil, 0, err
+		return InterceptApprovalPage{}, err
 	}
 	defer rows.Close()
 	out := []InterceptApprovalRow{}
 	for rows.Next() {
 		var r InterceptApprovalRow
 		if err := scanInterceptApprovalRow(rows, &r); err != nil {
-			return nil, 0, err
+			return InterceptApprovalPage{}, err
 		}
 		out = append(out, r)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return InterceptApprovalPage{}, err
+	}
+
+	hasMore := len(out) > size
+	if hasMore {
+		out = out[:size]
+	}
+	// Fast path: when we already hit the end of the result set on a non-empty
+	// page (or page 1), the exact total is known without a separate COUNT query.
+	if !hasMore && (len(out) > 0 || offset == 0) {
+		return InterceptApprovalPage{
+			Items:   out,
+			Total:   offset + len(out),
+			HasMore: false,
+		}, nil
+	}
+
+	capLimit := interceptExactCountCap
+	if capLimit < offset+size {
+		capLimit = offset + size
+	}
+	// For large unfiltered global queries, use PostgreSQL's catalog estimate
+	// instead of scanning the entire intercept_pending table.
+	if len(conditions) == 0 {
+		if est, estErr := d.estimateInterceptTableRows(); estErr == nil && est > int64(capLimit) {
+			total := int(est)
+			if hasMore && total <= offset+len(out) {
+				total = offset + len(out) + 1
+			}
+			return InterceptApprovalPage{
+				Items:            out,
+				Total:            total,
+				TotalApproximate: true,
+				HasMore:          hasMore,
+			}, nil
+		}
+	}
+
+	countFrom := "FROM intercept_pending ip"
+	if hasTextSearch {
+		countFrom = approvalRowSearchJoins
+	}
+	capArg := len(args) + 1
+	countArgs := make([]any, 0, len(args)+1)
+	countArgs = append(countArgs, args...)
+	countArgs = append(countArgs, capLimit+1)
+	var counted int
+	countQ := "SELECT COUNT(*) FROM (SELECT 1 " + countFrom + where + " LIMIT $" + fmt.Sprint(capArg) + ") s"
+	if err := d.QueryRow(countQ, countArgs...).Scan(&counted); err != nil {
+		return InterceptApprovalPage{}, err
+	}
+	if counted > capLimit {
+		return InterceptApprovalPage{
+			Items:            out,
+			Total:            capLimit,
+			TotalApproximate: true,
+			TotalCapped:      true,
+			HasMore:          hasMore,
+		}, nil
+	}
+	return InterceptApprovalPage{
+		Items:   out,
+		Total:   counted,
+		HasMore: hasMore,
+	}, nil
 }

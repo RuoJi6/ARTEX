@@ -34,6 +34,7 @@ import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type {
   InterceptApprovalFilter,
+  InterceptApprovalPage,
   InterceptApprovalRow,
   InterceptAudit,
   InterceptDetail,
@@ -902,6 +903,9 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(20);
   const [total, setTotal] = React.useState(0);
+  const [totalApproximate, setTotalApproximate] = React.useState(false);
+  const [totalCapped, setTotalCapped] = React.useState(false);
+  const [hasMore, setHasMore] = React.useState(false);
   const [filter, setFilter] = React.useState<InterceptApprovalFilter>({});
   const [searchText, setSearchText] = React.useState("");
   const [fromDate, setFromDate] = React.useState("");
@@ -913,6 +917,8 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   const [deciding, setDeciding] = React.useState(false);
   const [revision, setRevision] = React.useState(0);
   const request = React.useRef(0);
+  const inFlight = React.useRef<number | null>(null);
+  const pendingKeyRef = React.useRef<string | null>(null);
   const decisionLock = React.useRef(false);
   const filterID = React.useId();
   const filtered = Boolean(filter.status || filter.decision_source || filter.q || filter.from || filter.to);
@@ -925,37 +931,77 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   }, [taskId]);
 
   const load = React.useCallback(
-    async (manual = false) => {
+    async (mode: "full" | "manual" | "poll" = "full") => {
+      if (mode === "poll" && (document.hidden || inFlight.current !== null)) return;
       const id = ++request.current;
-      if (manual) setRefreshing(true);
+      inFlight.current = id;
+      if (mode === "manual") setRefreshing(true);
+      const fetchHistory = () =>
+        taskId
+          ? api.interceptTaskPage(taskId, page, pageSize, filter)
+          : api.interceptHistoryPage(page, pageSize, filter);
+      const applyHistory = (value: InterceptApprovalPage) => {
+        setRows(value.items);
+        setTotal(value.total);
+        setTotalApproximate(Boolean(value.total_approximate));
+        setTotalCapped(Boolean(value.total_capped));
+        setHasMore(Boolean(value.has_more));
+        setError("");
+      };
+      const pendingSignature = (list: InterceptPending[]) =>
+        list
+          .map((row) => row.id)
+          .sort((a, b) => a - b)
+          .join(",");
       try {
-        // The approval queue is independent of the current history page and its
-        // filter. Older requests must remain actionable even when newer decisions
-        // fill the page or a filter would hide them.
-        const [history, pending] = await Promise.allSettled([
-          taskId
-            ? api.interceptTaskPage(taskId, page, pageSize, filter)
-            : api.interceptHistoryPage(page, pageSize, filter),
-          api.interceptPending(),
-        ]);
-        if (id !== request.current) return;
-        if (history.status === "fulfilled") {
-          setRows(history.value.items);
-          setTotal(history.value.total);
-          setError("");
+        // Keep the actionable pending queue fresh on every tick. Only auto-refresh
+        // history on page 1 without a free-text search (or when pending IDs change)
+        // so background polls neither re-run full-text scans nor shift deeper pages.
+        const pollHistory = mode !== "poll" || (page === 1 && !filter.q);
+        if (pollHistory) {
+          // The approval queue is independent of the current history page and its
+          // filter. Older requests must remain actionable even when newer decisions
+          // fill the page or a filter would hide them.
+          const [history, pending] = await Promise.allSettled([fetchHistory(), api.interceptPending(taskId)]);
+          if (id !== request.current) return;
+          if (history.status === "fulfilled") {
+            applyHistory(history.value);
+          } else {
+            setError((history.reason as Error).message || liveUI("screen.d1d044826a45ef"));
+          }
+          if (pending.status === "fulfilled") {
+            pendingKeyRef.current = pendingSignature(pending.value);
+            setPendingRows(pending.value);
+            setPendingError("");
+          } else {
+            setPendingError((pending.reason as Error).message || liveUI("screen.d1d044826a45ef"));
+          }
         } else {
-          setError((history.reason as Error).message || liveUI("screen.d1d044826a45ef"));
+          try {
+            const pending = await api.interceptPending(taskId);
+            if (id !== request.current) return;
+            const nextKey = pendingSignature(pending);
+            const changed = pendingKeyRef.current !== null && nextKey !== pendingKeyRef.current;
+            pendingKeyRef.current = nextKey;
+            setPendingRows(pending);
+            setPendingError("");
+            if (changed) {
+              try {
+                const history = await fetchHistory();
+                if (id === request.current) applyHistory(history);
+              } catch (e) {
+                if (id === request.current) setError((e as Error).message || liveUI("screen.d1d044826a45ef"));
+              }
+            }
+          } catch (e) {
+            if (id === request.current) setPendingError((e as Error).message || liveUI("screen.d1d044826a45ef"));
+          }
         }
-        if (pending.status === "fulfilled") {
-          setPendingRows(pending.value);
-          setPendingError("");
-        } else {
-          setPendingError((pending.reason as Error).message || liveUI("screen.d1d044826a45ef"));
-        }
-        if (manual) setRevision((v) => v + 1);
+        if (mode === "manual") setRevision((v) => v + 1);
       } catch (e) {
         if (id === request.current) setError((e as Error).message || liveUI("screen.d1d044826a45ef"));
       } finally {
+        if (inFlight.current === id) inFlight.current = null;
         if (id === request.current) {
           setLoading(false);
           setRefreshing(false);
@@ -968,11 +1014,17 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   latestLoad.current = load;
 
   React.useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(), 5000);
+    void load("full");
+    const timer = setInterval(() => void load("poll"), 5000);
+    const onVisible = () => {
+      if (!document.hidden) void load("poll");
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       request.current++;
+      inFlight.current = null;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [load]);
 
@@ -991,6 +1043,9 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
     setPage(1);
     setRows([]);
     setTotal(0);
+    setTotalApproximate(false);
+    setTotalCapped(false);
+    setHasMore(false);
     setError("");
     setLoading(true);
   };
@@ -1013,6 +1068,9 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
       setPage(1);
       setRows([]);
       setTotal(0);
+      setTotalApproximate(false);
+      setTotalCapped(false);
+      setHasMore(false);
       setError("");
       setLoading(true);
     }, 300);
@@ -1036,10 +1094,10 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
       setRevision((v) => v + 1);
       toast.success(decision === "allowed" ? ui("screen.c90e80972b10bf") : ui("screen.846e5cf371bfdc"));
       // Re-fetch counts and rows: a decided item may no longer match the filter.
-      await latestLoad.current(true);
+      await latestLoad.current("manual");
     } catch (e) {
       toast.error((e as Error).message);
-      await latestLoad.current(true);
+      await latestLoad.current("manual");
     } finally {
       decisionLock.current = false;
       setDeciding(false);
@@ -1056,6 +1114,9 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
       ...historyById.get(row.id),
       ...row,
     }));
+  let totalDisplay: string | number = total;
+  if (totalCapped) totalDisplay = `${total}+`;
+  else if (totalApproximate) totalDisplay = `~${total}`;
   const title = taskId ? ui("screen.b4c245b6421a35") : ui("screen.b75d0f43cd1eb7");
   return (
     <div className="flex min-w-0 flex-col gap-5">
@@ -1069,7 +1130,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
             </Badge>
           ) : null}
         </div>
-        <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading || refreshing}>
+        <Button variant="outline" size="sm" onClick={() => void load("manual")} disabled={loading || refreshing}>
           <RefreshCwIcon data-icon="inline-start" className={cn(refreshing && "animate-spin")} />
           {ui("screen.aee88743413144")}
         </Button>
@@ -1217,7 +1278,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
         <div className="border-b px-4 py-3 font-medium text-sm">
           {filtered ? ui("screen.479424539ce56d") : ui("screen.e4257920848098")}
           {ui("punctuation.da047c04c9")}
-          {total}
+          {totalDisplay}
           {ui("punctuation.f2e44c6c95")}
           {filter.q ? (
             <span className="ml-2 break-all font-normal text-muted-foreground text-xs">
@@ -1260,6 +1321,9 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
             page={page}
             pageSize={pageSize}
             total={total}
+            totalApproximate={totalApproximate}
+            totalCapped={totalCapped}
+            hasMore={hasMore}
             onPageChange={setPage}
             onPageSizeChange={changePageSize}
             pageSizeOptions={[10, 20, 50]}

@@ -1146,6 +1146,10 @@ CREATE TABLE IF NOT EXISTS intercept_pending (
 CREATE INDEX IF NOT EXISTS idx_intercept_pending_status ON intercept_pending(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_intercept_pending_task   ON intercept_pending(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_intercept_pending_created ON intercept_pending(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_intercept_pending_pending_task
+    ON intercept_pending(task_id, created_at DESC)
+    INCLUDE (agent_name)
+    WHERE status = 'pending';
 -- 补旧库:reason 列(已发版,加列要带 IF NOT EXISTS)。
 ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '';
 -- Detail payloads are lazy-loaded; NULL preserves the meaning of legacy history.
