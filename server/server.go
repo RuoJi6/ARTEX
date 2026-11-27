@@ -1793,9 +1793,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "bad json: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.OutputLanguage) == "" {
-		req.OutputLanguage = outputLanguageForLocale(r.Header.Get(localeHeader))
-	}
+	req.OutputLanguage = createOutputLanguage(req.OutputLanguage, r.Header.Get(localeHeader))
 	t, cerr := s.createTaskFromRequest(req)
 	if cerr != nil {
 		writeErr(w, cerr.Status, cerr.Msg)

@@ -72,3 +72,35 @@ func TestSetOutputLangNormalizes(t *testing.T) {
 		t.Errorf("mainagent default: %q", m.outputLang)
 	}
 }
+
+// The English directive must come after every Chinese guidance block that
+// deferredSystem appends, so it is the last instruction text in the prompt.
+func TestDeferredSystemPutsOutputLangDirectiveLast(t *testing.T) {
+	def := DeferredInfo{
+		FindingGuidance:      "\n漏洞记录指引",
+		CaseGuidance:         "\n案例指引",
+		IntelligenceGuidance: "\n情报指引",
+		GlobalNames:          []string{"some_tool"},
+	}
+	sys, _ := deferredSystemWithLang("系统提示", def, "en")
+	if len(sys) != 2 {
+		t.Fatalf("want text + deferred-tools segments, got %d", len(sys))
+	}
+	text := sys[0]
+	if !strings.HasSuffix(text, englishOutputDirective) {
+		t.Fatalf("directive is not the tail of the text segment:\n%s", text)
+	}
+	d := strings.Index(text, englishOutputDirective)
+	for _, g := range []string{def.FindingGuidance, def.CaseGuidance, def.IntelligenceGuidance} {
+		if i := strings.Index(text, g); i < 0 || i > d {
+			t.Errorf("guidance %q not before the directive", g)
+		}
+	}
+	if strings.Contains(sys[1], "Output language") {
+		t.Errorf("directive leaked into the deferred-tools block")
+	}
+	zh, _ := deferredSystemWithLang("系统提示", def, "zh")
+	if strings.Contains(zh[0], englishOutputDirective) {
+		t.Errorf("zh task got the English directive")
+	}
+}

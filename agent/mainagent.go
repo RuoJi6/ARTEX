@@ -135,7 +135,7 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), WorkDir: mainDir})
 	tools, def, cleanup := AugmentTools(ctx, "mainagent", base)
 	defer cleanup()
-	system, boundary := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir)+OutputLangDirective(m.outputLang), def)
+	system, boundary := deferredSystemWithLang(mainAgentSystem(goal, m.workDir, mainDir), def, m.outputLang)
 	proxyAddr := m.proxyAddr
 	if m.proxyAddrFn != nil {
 		proxyAddr = m.proxyAddrFn()
