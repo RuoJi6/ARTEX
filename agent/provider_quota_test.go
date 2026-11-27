@@ -25,6 +25,11 @@ func TestIsQuotaExhaustedMessage(t *testing.T) {
 		`billing_not_active`,
 		`credit balance is too low`,
 		`账户余额不足，请充值`,
+		`{"type":"error","error":{"type":"GoUsageLimitError","message":"OpenCode Go usage limit reached (5-hour, resets in 2h 9m). To keep going now, turn on Extra Usage or upgrade to Go Plus at https://opencode.ai/console/wrk_01KZNXXXXXXXXXXXXXXXDJFJH/go."},"metadata":{"workspace":"wrk_01KZNXXXXXXXXXXXXXXXXTEDJFJH","limitName":"5 hour"}}`,
+		`{"error":{"code":"usage_limit_reached","message":"plan window exhausted"}}`,
+		`monthly usage limit exceeded`,
+		`You have exceeded your usage limit`,
+		`You have reached your usage limit`,
 	}
 	for _, message := range positive {
 		if !IsQuotaExhaustedMessage(message) {
@@ -40,6 +45,10 @@ func TestIsQuotaExhaustedMessage(t *testing.T) {
 		`RESOURCE_EXHAUSTED: TPM quota exceeded`,
 		`tokens per minute quota exceeded`,
 		`rate_limit_exceeded: requests per second`,
+		`rate_limit_error: usage limit reached`,
+		`too many requests: usage limit exceeded`,
+		`RPM usage limit exceeded`,
+		`requests per minute usage limit reached`,
 		`status 401: invalid api key`,
 		`status 401: insufficient_quota`,
 		`HTTP 403: billing_hard_limit_reached`,
@@ -63,6 +72,12 @@ func TestQuotaAwareTransportOnlyNormalizesExplicitQuota429(t *testing.T) {
 		wantStatus int
 	}{
 		{name: "quota", status: http.StatusTooManyRequests, body: `{"code":"insufficient_quota"}`, wantStatus: http.StatusPaymentRequired},
+		{
+			name:       "opencode go usage limit",
+			status:     http.StatusTooManyRequests,
+			body:       `{"type":"error","error":{"type":"GoUsageLimitError","message":"OpenCode Go usage limit reached (5-hour, resets in 2h 9m)."},"metadata":{"limitName":"5 hour"}}`,
+			wantStatus: http.StatusPaymentRequired,
+		},
 		{name: "ordinary rate limit", status: http.StatusTooManyRequests, body: `{"message":"rate limit exceeded"}`, wantStatus: http.StatusTooManyRequests},
 		{name: "server error", status: http.StatusInternalServerError, body: `insufficient_quota`, wantStatus: http.StatusInternalServerError},
 	}
@@ -127,5 +142,34 @@ func TestProviderDoesNotRetryExplicitQuota429(t *testing.T) {
 	}
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("explicit quota request retried %d times, want exactly one request", got)
+	}
+}
+
+func TestProviderCompleteDoesNotRetryOpenCodeGoUsageLimit429(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"GoUsageLimitError","message":"OpenCode Go usage limit reached (5-hour, resets in 2h 9m). To keep going now, turn on Extra Usage or upgrade to Go Plus at https://opencode.ai/console/wrk_01KZNXXXXXXXXXXXXXXXDJFJH/go."},"metadata":{"workspace":"wrk_01KZNXXXXXXXXXXXXXXXXTEDJFJH","limitName":"5 hour"}}`)
+	}))
+	defer upstream.Close()
+
+	provider, err := ConfigFrom("openai", "test-model", upstream.URL, "test-key", "").NewProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = provider.Complete(context.Background(), llm.CompletionRequest{
+		Messages: []llm.Message{llm.UserText("ping")},
+	})
+	if err == nil || !IsQuotaExhaustedMessage(err.Error()) {
+		t.Fatalf("expected explicit quota error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "status 402") {
+		t.Fatalf("expected 429 normalized to status 402, got %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("OpenCode Go usage limit 429 retried %d times, want 1", got)
 	}
 }

@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,6 +123,8 @@ func TestIsQuotaExhaustedError(t *testing.T) {
 		`HTTP status 402 Payment Required`,
 		`账户余额不足，请充值`,
 		`credit balance is too low`,
+		`openai: status 429: {"type":"error","error":{"type":"GoUsageLimitError","message":"OpenCode Go usage limit reached (5-hour, resets in 2h 9m)."}}`,
+		`openai: status 402: {"error":{"code":"usage_limit_reached"}}`,
 	}
 	for _, message := range positive {
 		if !isQuotaExhaustedError(errors.New(message)) {
@@ -131,6 +137,8 @@ func TestIsQuotaExhaustedError(t *testing.T) {
 		`RESOURCE_EXHAUSTED: rate limit exceeded`,
 		`HTTP status 429: quota exceeded for quota metric GenerateRequestsPerMinutePerProjectPerBaseModel`,
 		`RESOURCE_EXHAUSTED: TPM quota exceeded`,
+		`HTTP status 429: rate_limit_error: usage limit reached`,
+		`HTTP status 429: too many requests: usage limit exceeded`,
 		`HTTP status 401: invalid api key`,
 		`HTTP status 401: insufficient_quota`,
 		`HTTP status 403: forbidden`,
@@ -272,6 +280,73 @@ func TestTaskLLMStreamRetriesPreStreamQuotaOnNextProfile(t *testing.T) {
 	}
 	if first.calls != 1 || second.calls != 1 || transitions != 1 {
 		t.Fatalf("calls first=%d second=%d transitions=%d", first.calls, second.calls, transitions)
+	}
+}
+
+func TestTaskLLMCompleteFailsOverOnOpenCodeGoUsageLimit(t *testing.T) {
+	t.Parallel()
+	var firstCalls, secondCalls atomic.Int32
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		firstCalls.Add(1)
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"GoUsageLimitError","message":"OpenCode Go usage limit reached (5-hour, resets in 2h 9m). To keep going now, turn on Extra Usage or upgrade to Go Plus at https://opencode.ai/console/wrk_01KZNXXXXXXXXXXXXXXXDJFJH/go."},"metadata":{"workspace":"wrk_01KZNXXXXXXXXXXXXXXXXTEDJFJH","limitName":"5 hour"}}`)
+	}))
+	defer firstServer.Close()
+
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		secondCalls.Add(1)
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"fallback-ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer secondServer.Close()
+
+	firstProv, err := agent.ConfigFrom("openai", "test-model", firstServer.URL, "key-1", "").NewProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondProv, err := agent.ConfigFrom("openai", "test-model", secondServer.URL, "key-2", "").NewProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	active := int64(11)
+	transitions := 0
+	var exhaustCause error
+	hooks := taskLLMStreamHooks{
+		current: func() (taskLLMSelection, error) {
+			if active == 11 {
+				return taskLLMSelection{profileID: 11, provider: firstProv}, nil
+			}
+			return taskLLMSelection{profileID: 22, provider: secondProv}, nil
+		},
+		exhaust: func(selection taskLLMSelection, cause error) (db.TaskLLMTransition, error) {
+			if selection.profileID != 11 {
+				t.Fatalf("unexpected exhausted profile %d", selection.profileID)
+			}
+			exhaustCause = cause
+			active = 22
+			next := active
+			return db.TaskLLMTransition{PreviousProfileID: 11, NextProfileID: &next, Advanced: true}, nil
+		},
+		transition: func(taskLLMSelection, db.TaskLLMTransition, error) { transitions++ },
+	}
+
+	msg, _, _, err := completeTaskLLM(context.Background(), "9", llm.CompletionRequest{
+		Messages: []llm.Message{llm.UserText("ping")},
+	}, hooks)
+	if err != nil {
+		t.Fatalf("expected failover to succeed, got %v", err)
+	}
+	if got := msg.Text(); got != "fallback-ok" {
+		t.Fatalf("reply=%q, want fallback-ok", got)
+	}
+	if firstCalls.Load() != 1 || secondCalls.Load() != 1 || transitions != 1 {
+		t.Fatalf("calls first=%d second=%d transitions=%d, want 1/1/1", firstCalls.Load(), secondCalls.Load(), transitions)
+	}
+	if exhaustCause == nil || !strings.Contains(exhaustCause.Error(), "status 402") {
+		t.Fatalf("exhaustCause=%v, want normalized status 402", exhaustCause)
 	}
 }
 
