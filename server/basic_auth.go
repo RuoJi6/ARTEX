@@ -83,7 +83,7 @@ func validBasicUsername(username string) bool {
 
 // A separate signing key prevents a gate cookie from being used as an admin JWT.
 func (s *Server) basicAuthSigningKey() []byte {
-	m := hmac.New(sha256.New, s.jwtKey)
+	m := hmac.New(sha256.New, s.jwtKeyBytes())
 	m.Write([]byte("artex/http-basic-auth/session/v1"))
 	return m.Sum(nil)
 }
