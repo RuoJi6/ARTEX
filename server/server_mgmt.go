@@ -840,9 +840,22 @@ func (s *Server) pgResetTool(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true})
 		return
 	}
-	// orchestration/platform tools (auto agent) — default-bind to "auto".
+	// orchestration tools use per-tool default bindings (auto / auto+mainagent / reporter).
+	for _, t := range s.orchestrationTools() {
+		if t.Name() != key {
+			continue
+		}
+		schema, _ := json.Marshal(t.InputSchema())
+		if err := pg.UpsertToolForce(t.Name(), t.Description(), schema, defaultOrchestrationToolBindings(t.Name())); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	// platform tools (auto agent) — default-bind to "auto".
 	autoAgents, _ := json.Marshal([]string{"auto"})
-	for _, t := range append(s.orchestrationTools(), s.platformTools()...) {
+	for _, t := range s.platformTools() {
 		if t.Name() != key {
 			continue
 		}

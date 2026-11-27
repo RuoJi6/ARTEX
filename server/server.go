@@ -910,6 +910,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/tasks/{id}/constraints/{cid}", s.editConstraint)    // 约束管理:修改约束
 	mux.HandleFunc("DELETE /api/tasks/{id}/constraints/{cid}", s.deleteConstraint) // 约束管理:删除约束
 	mux.HandleFunc("POST /api/tasks/{id}/control", s.control)
+	mux.HandleFunc("POST /api/tasks/{id}/resume", s.resumeTask)
 	mux.HandleFunc("PUT /api/tasks/{id}/llm", s.updateTaskLLMProfiles)
 	mux.HandleFunc("GET /api/tasks/{id}/llm/resolution", s.taskLLMResolutionHandler)
 	mux.HandleFunc("POST /api/tasks/{id}/intents/{iid}/control", s.controlIntent)
@@ -1382,6 +1383,22 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.applyTaskControl(t, req.Action)
+	if err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
+	writeJSON(w, 200, result)
+}
+
+// resumeTask resumes a paused task or reopens a terminal task (done/failed/timeout)
+// in place when it still has open goals or open intents.
+func (s *Server) resumeTask(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.lookupTask(r.PathValue("id"))
+	if !ok {
+		writeErr(w, 404, "task not found")
+		return
+	}
+	result, err := s.resumeOrReopenTask(t, agent.AbortPausedByUser)
 	if err != nil {
 		writeErr(w, 409, err.Error())
 		return

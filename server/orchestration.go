@@ -69,9 +69,12 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 		s.toolListLLMProfiles(),
 		s.toolSpawnTask(),
 		s.toolPauseTask(),
+		s.toolResumeTask(),
 		s.toolGetTaskGraph(),
 		s.toolListTaskFindings(),
 		s.toolAddHint(),
+		s.toolSetTaskGoals(),
+		s.toolAddTaskIntent(),
 		s.toolGetWorkerTrace(),
 		s.toolListWorkerTraces(),
 		s.toolSearchWorkerTraces(),
@@ -147,6 +150,20 @@ func wrTool(name, desc string, schema map[string]any, run func(context.Context, 
 // delegateToTask resolves the `task_id` in the input, builds a ToolSet bound to
 // that task's store, strips task_id, and calls the chosen per-task tool — so the
 // cross-task read reuses the exact in-task logic against another task.
+func (s *Server) lookupTask(raw string) (*Task, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, false
+	}
+	if t, ok := s.m.Task(trimmed); ok {
+		return t, true
+	}
+	if id, ok := canonicalTaskID(trimmed); ok {
+		return s.m.Task(id)
+	}
+	return nil, false
+}
+
 func (s *Server) delegateToTask(ctx context.Context, in json.RawMessage, pick func(*agent.ToolSet) actool.CoreTool) (actool.Result, error) {
 	var head struct {
 		TaskID string `json:"task_id"`
@@ -155,20 +172,31 @@ func (s *Server) delegateToTask(ctx context.Context, in json.RawMessage, pick fu
 	if strings.TrimSpace(head.TaskID) == "" {
 		return actool.Errorf("task_id 为必填"), nil
 	}
-	t, ok := s.m.Task(head.TaskID)
+	t, ok := s.lookupTask(head.TaskID)
 	if !ok {
 		return actool.Errorf("task 不存在: " + head.TaskID), nil
+	}
+	if s.engine != nil {
+		if !s.engine.beginTaskOperation(t.ID) {
+			return actool.Errorf("任务正在删除，无法操作: " + t.ID), nil
+		}
+		defer s.engine.decInflight(t.ID)
 	}
 	var m map[string]json.RawMessage
 	_ = json.Unmarshal(in, &m)
 	delete(m, "task_id")
 	inner, _ := json.Marshal(m)
 	tsx := agent.NewToolSet(t.Store, "orchestrator")
+	if taskIDInt, err := strconv.ParseInt(t.ID, 10, 64); err == nil && taskIDInt > 0 {
+		tsx.SetTaskID(taskIDInt)
+	}
 	if s.m.Assets() != nil {
 		tsx.SetAssetStore(s.m.Assets(), s.m.Assets().Companies())
 	}
-	tsx.SetNotify(t.Notify)         // 通用唤醒（无专用回调的写操作走它；读工具为 no-op）
-	tsx.SetNotifyHint(t.NotifyHint) // add_hint → 记一条「人新增了 N 条战略提示：…」触发并唤醒 planner
+	tsx.SetNotify(t.Notify)                  // 通用唤醒（无专用回调的写操作走它；读工具为 no-op）
+	tsx.SetResumeTask(func() { s.reviveTask(t) }) // set_task_goals / add_task_intent → 把已完成/暂停的任务拉回 running
+	tsx.SetNotifyGoal(t.NotifyGoal)          // set_task_goals → 记一条「人新增了 N 个目标：…」触发并唤醒 planner
+	tsx.SetNotifyHint(t.NotifyHint)          // add_hint → 记一条「人新增了 N 条战略提示：…」触发并唤醒 planner
 	return pick(tsx).Call(ctx, inner, nil)
 }
 
@@ -379,6 +407,39 @@ func (s *Server) toolPauseTask() actool.CoreTool {
 		})
 }
 
+func (s *Server) toolResumeTask() actool.CoreTool {
+	return wrTool("resume_task",
+		"恢复已暂停的任务，或原地重新打开已结束(done/failed/timeout)且仍有未完成目标或待执行(open)意图的任务继续运行（保留已有探索图、发现与 frontier，不新建重复任务）。当用户要求继续/重开已有任务时，优先使用本工具（或 set_task_goals / add_task_intent），不要用 spawn_task 另起重复任务。",
+		objSchema(map[string]any{"task_id": strParam("要恢复/重新打开的任务 id；在任务内主 Agent 对话中可省略（默认当前任务）")}),
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			var a struct {
+				TaskID string `json:"task_id"`
+			}
+			_ = json.Unmarshal(in, &a)
+			rawID := strings.TrimSpace(a.TaskID)
+			if info := agent.RunInfoFrom(ctx); info.TaskID > 0 {
+				curID := strconv.FormatInt(info.TaskID, 10)
+				if rawID == "" {
+					rawID = curID
+				} else if canon, ok := canonicalTaskID(rawID); !ok || canon != curID {
+					return actool.Errorf(fmt.Sprintf("当前在任务 #%s 上下文中，只能恢复当前任务", curID)), nil
+				}
+			}
+			if rawID == "" {
+				return actool.Errorf("task_id 为必填"), nil
+			}
+			t, ok := s.lookupTask(rawID)
+			if !ok {
+				return actool.Errorf("task 不存在: " + rawID), nil
+			}
+			res, err := s.resumeOrReopenTask(t, agent.AbortPausedByOrchestrator)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			return jsonResult(map[string]any{"task_id": t.ID, "status": res.Status, "queued": res.Queued})
+		})
+}
+
 func (s *Server) toolGetTaskGraph() actool.CoreTool {
 	return roTool("get_task_graph", "读指定任务的探索图总览(同 graph_overview：资产计数/frontier/发现/覆盖等)，用 task_id 指定任务。",
 		objSchema(map[string]any{"task_id": strParam("任务 id")}, "task_id"),
@@ -407,6 +468,38 @@ func (s *Server) toolAddHint() actool.CoreTool {
 		}, "task_id"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			return s.delegateToTask(ctx, in, (*agent.ToolSet).AddHintTool)
+		})
+}
+
+func (s *Server) toolSetTaskGoals() actool.CoreTool {
+	return wrTool("set_task_goals",
+		"给指定任务新增探索目标(goal)，写入任务图并自动把已完成/暂停的任务拉回运行态继续规划执行（保留已有图谱与发现，无需另起新任务）。\n"+
+			"★优先批量：多个目标放进 goals 数组一次提交（返回 ids 与之等长同序，失败项 id=0，详情见 errors）；单条则省略 goals 直接给顶层 text。",
+		objSchema(map[string]any{
+			"task_id":   strParam("任务 id"),
+			"goals":     map[string]any{"type": "array", "description": "【优先用这个】要新增的目标数组，按顺序处理。每个元素：text（必填，一个独立可验证的最终目标）+ vulnclass（可选）。", "items": objSchema(map[string]any{"text": strParam("一个独立可验证的最终目标"), "vulnclass": strParam("可选：对应漏洞类，如 SQLi/IDOR")}, "text")},
+			"text":      strParam("[单条] 一个独立可验证的最终目标"),
+			"vulnclass": strParam("[单条] 对应漏洞类(若明确)，如 SQLi/IDOR；业务逻辑目标可留空"),
+		}, "task_id"),
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			return s.delegateToTask(ctx, in, (*agent.ToolSet).SetGoalsTool)
+		})
+}
+
+func (s *Server) toolAddTaskIntent() actool.CoreTool {
+	return wrTool("add_task_intent",
+		"给指定任务直接下发探索意图(intent)写入 frontier，并自动把已完成/暂停的任务拉回运行态让 worker 领取执行（保留已有图谱与发现，无需另起新任务）。\n"+
+			"★优先批量：多个方向放进 intents 数组一次提交（返回 ids 与之等长同序，失败项 id=0，详情见 errors）；单条则省略 intents 直接给顶层 summary。",
+		objSchema(map[string]any{
+			"task_id":    strParam("任务 id"),
+			"intents":    map[string]any{"type": "array", "description": "【优先用这个】要新增的探索方向数组，每个元素字段同顶层（summary/asset_ids/parent_ids/priority）。", "items": objSchema(map[string]any{"summary": strParam("探索方向摘要"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}}, "parent_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}}, "priority": map[string]any{"type": "integer"}}, "summary")},
+			"summary":    strParam("[单条] 一句话描述这个探索方向：做什么+为什么"),
+			"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "目标资产 id（可选，0/1/多个）"},
+			"parent_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "上游锚点 fact/finding 节点 id（可选，0/1/多个；顶层全新方向请留空）"},
+			"priority":   map[string]any{"type": "integer", "description": "优先级 0-10，默认 5；直投紧急意图建议 8-10"},
+		}, "task_id"),
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			return s.delegateToTask(ctx, in, (*agent.ToolSet).AddIntentTool)
 		})
 }
 
@@ -521,17 +614,24 @@ func (s *Server) deriveTaskStatus(t *Task) string {
 // orchestrationToolSeeds seeds the cross-task tools into the tools table so they
 // are bindable per-agent (default: bound to nobody — opt-in for orchestration
 // agents). First-insert only, like the traffic seeds.
+func defaultOrchestrationToolBindings(name string) json.RawMessage {
+	switch {
+	case name == "resume_task":
+		return json.RawMessage(`["auto","mainagent"]`)
+	case name == "bind_finding_traffic" || strings.Contains(name, "finding_case") || name == "search_finding_duplicates" || name == "get_finding_record" || name == "merge_finding_records" || name == "suggest_finding_merge":
+		return json.RawMessage(`["reporter"]`)
+	default:
+		return json.RawMessage(`["auto"]`)
+	}
+}
+
 func (s *Server) seedOrchestrationTools() {
 	// task-op + platform tools default-bind to the built-in Auto agent (它天生用来
 	// 操作平台)。SeedTool 首插入生效;老库已 seed 的行由 seedAutoDefaultBindings 补绑。
 	autoAgents, _ := json.Marshal([]string{"auto"})
 	for _, t := range s.orchestrationTools() {
 		schema, _ := json.Marshal(t.InputSchema())
-		bindings := autoAgents
-		if t.Name() == "bind_finding_traffic" || strings.Contains(t.Name(), "finding_case") || t.Name() == "search_finding_duplicates" || t.Name() == "get_finding_record" || t.Name() == "merge_finding_records" || t.Name() == "suggest_finding_merge" {
-			bindings = json.RawMessage(`["reporter"]`)
-		}
-		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, bindings)
+		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, defaultOrchestrationToolBindings(t.Name()))
 	}
 	for _, t := range s.platformTools() {
 		schema, _ := json.Marshal(t.InputSchema())
@@ -539,6 +639,7 @@ func (s *Server) seedOrchestrationTools() {
 	}
 	s.refreshBuiltinToolSchemas()
 	s.seedAutoDefaultBindings()
+	s.seedTaskReopenBindings()
 	s.seedPlannerDefaultBindings()
 	s.seedPlannerListAssetsBinding()
 	s.seedCompanyScopeRebind()
@@ -547,7 +648,8 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedAutoReportFindingBinding()
 	s.unbindGoalMetDefault()
 	s.reseedGoalsPrompt()             // goals 提示词加入「抽操作约束」步 → 旧库追加一版新默认(一次性)
-	s.reseedMainAgentPrompt()         // mainagent 提示词加入「目标达成后 add_intent 反问是否建目标」(一次性)
+	s.reseedAutoPrompt()              // auto 提示词加入 resume_task/set_task_goals/add_task_intent 与原地继续原则(一次性)
+	s.reseedMainAgentPrompt()         // mainagent 提示词加入 resume_task 引导(一次性)
 	s.reseedPlannerPrompt()           // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
 	s.reseedWorkerPrompt()            // worker 提示词:加否定结论证据门槛(一次性)
 	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
@@ -629,7 +731,7 @@ func (s *Server) migrateReporterWorkflow() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v8_finding_case_tools"
+	const flag = "tool_schema_refresh_v9_task_reopen_tools"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
@@ -714,7 +816,7 @@ func (s *Server) reseedGoalsPrompt() {
 // 保留在历史里,用户若自定义过可从版本记录找回。settings flag 守卫 → 只做一次。全新库无需处理
 // (SeedPromptIfEmpty 已 seed 最新默认)。与 reseedGoalsPrompt 完全同构。
 func (s *Server) reseedMainAgentPrompt() {
-	const flag = "mainagent_prompt_goalless_intent_v1"
+	const flag = "mainagent_prompt_task_reopen_v2"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
@@ -736,6 +838,32 @@ func (s *Server) reseedMainAgentPrompt() {
 		return
 	}
 	log.Printf("[prompts] mainagent 提示词已追加新默认版本(加入目标达成后反问建目标,一次性)")
+}
+
+// reseedAutoPrompt 把 auto 提示词刷成【当前代码默认】——加入 resume_task /
+// set_task_goals / add_task_intent 以及「原地继续优先于新建任务」原则。
+func (s *Server) reseedAutoPrompt() {
+	const flag = "auto_prompt_task_reopen_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	defer func() { _ = s.m.pg.SetSetting(flag, "true") }()
+	a, err := s.m.pg.GetAgentByKey("auto")
+	if err != nil || a == nil {
+		return
+	}
+	tmpl := agent.BuiltinPromptSeeds()["auto"]
+	if tmpl == "" {
+		return
+	}
+	if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur == tmpl {
+		return
+	}
+	if _, err := s.m.pg.ResetPromptToDefault(a.ID, tmpl); err != nil {
+		log.Printf("[prompts] auto 提示词重刷为新默认失败: %v", err)
+		return
+	}
+	log.Printf("[prompts] auto 提示词已追加新默认版本(加入 resume_task/set_task_goals/add_task_intent,一次性)")
 }
 
 // reseedPlannerPrompt 把 planner 提示词刷成【当前代码默认】——默认正文做了精简重构,并把「克制」降级为
@@ -1029,6 +1157,25 @@ func (s *Server) seedAutoDefaultBindings() {
 	keys = append(keys, "insert_assets", "add_company_scope", "list_assets")
 	if err := s.m.pg.AddAgentToToolBinding("auto", keys); err != nil {
 		log.Printf("[auto] 默认绑定失败: %v", err)
+		return
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedTaskReopenBindings adds the task reopen/steering orchestration tools to
+// existing DBs ONCE (guarded by a settings flag), without re-adding unrelated
+// tools a user may have deliberately unbound.
+func (s *Server) seedTaskReopenBindings() {
+	const flag = "task_reopen_bindings_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	if err := s.m.pg.AddAgentToToolBinding("auto", []string{"resume_task", "set_task_goals", "add_task_intent"}); err != nil {
+		log.Printf("[auto] 任务重开/操舵工具默认绑定失败: %v", err)
+		return
+	}
+	if err := s.m.pg.AddAgentToToolBinding("mainagent", []string{"resume_task"}); err != nil {
+		log.Printf("[mainagent] resume_task 默认绑定失败: %v", err)
 		return
 	}
 	_ = s.m.pg.SetSetting(flag, "true")

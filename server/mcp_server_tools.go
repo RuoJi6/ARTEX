@@ -140,8 +140,8 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name: "resume_task", Scope: db.APIScopeTaskControl,
-			Description: "恢复已暂停的任务。并发已满时任务会进入排队(status=queued)。",
-			Schema:      objSchema(map[string]any{"task_id": strParam("要恢复的任务 id")}, "task_id"),
+			Description: "恢复已暂停的任务，或原地重新打开已结束(done/failed/timeout)且仍有未完成目标或待执行(open)意图的任务。并发已满时任务会进入排队(status=queued)。",
+			Schema:      objSchema(map[string]any{"task_id": strParam("要恢复/重新打开的任务 id")}, "task_id"),
 			Run: func(_ context.Context, token *db.APIToken, in json.RawMessage) (actool.Result, error) {
 				return s.mcpControlTask(token, in, "resume")
 			},
@@ -524,7 +524,15 @@ func (s *Server) mcpControlTask(token *db.APIToken, in json.RawMessage, action s
 	if t == nil {
 		return failure, nil
 	}
-	out, err := s.applyTaskControlWithCause(t, action, agent.AbortPausedByOrchestrator)
+	var (
+		out taskControlResult
+		err error
+	)
+	if action == "resume" {
+		out, err = s.resumeOrReopenTask(t, agent.AbortPausedByOrchestrator)
+	} else {
+		out, err = s.applyTaskControlWithCause(t, action, agent.AbortPausedByOrchestrator)
+	}
 	if err != nil {
 		return actool.Errorf(err.Error()), nil
 	}
