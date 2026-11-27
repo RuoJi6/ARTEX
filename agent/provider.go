@@ -313,6 +313,10 @@ func (c Config) newProvider(client *http.Client, limiter *RequestLimiter) (llm.P
 	if c.Format == FormatGemini {
 		return newGeminiProvider(c, client)
 	}
+	// First-party Claude models opt into server-side refusal fallback (see claude_fallback.go).
+	if serverFallbackEligible(c.Format, c.Model, c.BaseURL) {
+		client.Transport = claudeFallbackTransport{base: client.Transport}
+	}
 	lc := llm.Config{
 		Format:     c.Format,
 		BaseURL:    c.BaseURL,
