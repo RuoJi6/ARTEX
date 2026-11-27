@@ -354,7 +354,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				} else if prov, _, providerOK := s.providerForProfile(active.ID); providerOK {
 					titleCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 					defer cancel()
-					generated, titleErr := agent.GenerateAutoTitle(titleCtx, prov, a.Description+"\n"+a.Goal)
+					generated, titleErr := agent.GenerateAutoTitle(agent.WithOutputLang(titleCtx, outputLang), prov, a.Description+"\n"+a.Goal)
 					if err := ctx.Err(); err != nil {
 						return actool.Errorf(err.Error()), nil
 					}

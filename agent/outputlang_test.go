@@ -104,3 +104,22 @@ func TestDeferredSystemPutsOutputLangDirectiveLast(t *testing.T) {
 		t.Errorf("zh task got the English directive")
 	}
 }
+
+// A Chat turn (how the reporter agent runs) follows the language on its context: a
+// plain or zh context keeps the prompt byte-identical, an en one ends with the
+// English directive.
+func TestChatSystemPromptFollowsContextLanguage(t *testing.T) {
+	def := DeferredInfo{FindingGuidance: "\n漏洞记录指引"}
+	plain, _ := chatSystemPrompt(context.Background(), "reporter", "/data", "/work", def)
+	zh, _ := chatSystemPrompt(WithOutputLang(context.Background(), "zh"), "reporter", "/data", "/work", def)
+	en, _ := chatSystemPrompt(WithOutputLang(context.Background(), "en"), "reporter", "/data", "/work", def)
+	if strings.Join(plain, "") != strings.Join(zh, "") {
+		t.Fatal("zh context changed the chat system prompt")
+	}
+	if strings.Contains(plain[0], "Output language") {
+		t.Fatal("default chat prompt has the English directive")
+	}
+	if !strings.HasSuffix(en[0], OutputLangDirective("en")) || !strings.HasPrefix(en[0], plain[0]) {
+		t.Fatalf("en chat prompt does not end with the directive: %q", en[0])
+	}
+}

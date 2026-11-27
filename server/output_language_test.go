@@ -159,3 +159,19 @@ func TestCreateTaskHTTPOutputLanguage(t *testing.T) {
 		}
 	}
 }
+
+// Trigger fires (the reporter writing a finding report) take their source task's
+// output language; fires with no task or an unknown task stay Chinese.
+func TestTriggerOutputLanguage(t *testing.T) {
+	s := &Server{m: &Manager{tasks: map[string]*Task{
+		"7": {OutputLanguage: "en"},
+		"8": {OutputLanguage: "zh"},
+		"9": {OutputLanguage: ""},
+	}}}
+	cases := map[int64]string{7: "en", 8: "zh", 9: "zh", 0: "zh", -1: "zh", 404: "zh"}
+	for id, want := range cases {
+		if got := s.triggerOutputLanguage(id); got != want {
+			t.Errorf("triggerOutputLanguage(%d) = %q, want %q", id, got, want)
+		}
+	}
+}

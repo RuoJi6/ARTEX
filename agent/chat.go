@@ -89,6 +89,14 @@ func chatSystem(agentKey, dataDir, workDir string) string {
 	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir)
 }
 
+// chatSystemPrompt is the full system prompt for one Chat turn. The output language
+// comes from ctx (see WithOutputLang): a run fired for an English task, such as the
+// reporter writing that task's finding report, gets the English directive appended;
+// every other run, including a plain chat, stays Chinese and byte-identical.
+func chatSystemPrompt(ctx context.Context, agentKey, dataDir, workDir string, def DeferredInfo) (system []string, boundary int) {
+	return deferredSystemWithLang(chatSystem(agentKey, dataDir, workDir), def, outputLangFrom(ctx))
+}
+
 // chatVars carries the runtime variables a custom agent's prompt may reference.
 // DataDir (server data root) + Now (server wall-clock, refreshed each turn) are the
 // universal ones; any other {{.X}} fails to render and falls back to
@@ -125,7 +133,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
 
-	system, boundary := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir), def)
+	system, boundary := chatSystemPrompt(ctx, agentKey, c.workDir, sessionWorkDir, def)
 	proxyAddr := c.proxyAddr
 	if c.proxyAddrFn != nil {
 		proxyAddr = c.proxyAddrFn()

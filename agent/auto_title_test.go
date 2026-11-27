@@ -58,3 +58,35 @@ func TestGenerateAutoTitleProviderError(t *testing.T) {
 		t.Fatal("expected provider error")
 	}
 }
+
+// A zh title request is unchanged; an "en" one appends the English directive and
+// keeps a longer title, cut at a word boundary.
+func TestGenerateAutoTitleOutputLanguage(t *testing.T) {
+	zh := &autoTitleProvider{reply: "整理项目设置"}
+	if _, err := GenerateAutoTitle(WithOutputLang(t.Context(), "zh"), zh, "内容"); err != nil {
+		t.Fatal(err)
+	}
+	if len(zh.req.System) != 1 || zh.req.System[0] != autoTitleSystemPrompt {
+		t.Fatalf("zh system prompt changed: %q", zh.req.System)
+	}
+
+	long := "Title: \"Penetration test of the example.com login portal and password reset flow for authentication bypass\"\nextra"
+	en := &autoTitleProvider{reply: long}
+	got, err := GenerateAutoTitle(WithOutputLang(t.Context(), "en"), en, "pentest example.com login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys := strings.Join(en.req.System, "")
+	if !strings.HasPrefix(sys, autoTitleSystemPrompt) || !strings.Contains(sys, OutputLangDirective("en")) || !strings.HasSuffix(sys, autoTitleENHint) {
+		t.Fatalf("en system prompt = %q", sys)
+	}
+	if strings.HasPrefix(got, "Title:") || strings.ContainsAny(got, "\"\n") || len([]rune(got)) > autoTitleMaxRunesEN {
+		t.Fatalf("unclean en title %q", got)
+	}
+	if !strings.HasPrefix(long[len("Title: \""):], got) || strings.HasSuffix(got, " ") {
+		t.Fatalf("en title %q is not a whole-word prefix of the reply", got)
+	}
+	if got != "Penetration test of the example.com login portal and password reset flow for" {
+		t.Fatalf("en title = %q", got)
+	}
+}
