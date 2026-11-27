@@ -337,8 +337,9 @@ func (c Config) newProvider(client *http.Client, limiter *RequestLimiter) (llm.P
 }
 
 // IsQuotaExhaustedMessage deliberately recognizes only explicit balance,
-// billing, credit, or quota-exhaustion signals. Generic 429/rate-limit text,
-// authentication failures, network errors, and server failures are excluded.
+// billing, credit, quota, or account/plan usage-limit exhaustion signals.
+// Generic 429/rate-limit text, authentication failures, network errors, and
+// server failures are excluded.
 var nonFailoverHTTPStatus = regexp.MustCompile(`(?:status(?:\s+code)?|http(?:\s+status)?)\s*[=:]?\s*(?:401|403|5\d\d)\b`)
 var transientQuotaLimit = regexp.MustCompile(`(?i)(?:\b(?:rpm|tpm|rpd|qps)\b|quota[_\s-]*metric|rate[_\s-]*limit|too many requests|(?:requests?|tokens?)\s+(?:per|/)\s*(?:second|minute)|(?:per|/)\s*(?:second|minute)\s+(?:requests?|tokens?)|generate[_\s-]*requests[_\s-]*per[_\s-]*(?:minute|second)|tokens?[_\s-]*per[_\s-]*(?:minute|second))`)
 
@@ -360,6 +361,8 @@ func IsQuotaExhaustedMessage(message string) bool {
 		"exceeded your current quota", "billing_hard_limit_reached",
 		"billing hard limit", "billing_not_active", "credit balance", "insufficient credit",
 		"insufficient balance", "balance is too low", "payment required", "status 402",
+		"gousagelimiterror", "usage limit reached", "usage_limit_reached",
+		"usage limit exceeded", "exceeded your usage limit", "reached your usage limit",
 		"余额不足", "额度不足", "额度已用尽", "欠费",
 	}
 	for _, marker := range markers {
