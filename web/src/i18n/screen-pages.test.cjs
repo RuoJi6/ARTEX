@@ -253,8 +253,8 @@ test("populated findings translate actions and headers while retaining original 
     name: "Original title",
     vulnclass: "SQL Injection",
     summary: "原始 AI 发现内容",
+    remark: "人工排查备注",
     ts: "2026-11-10T12:30:00Z",
-    assets: [],
   };
   const props = {
     items: [finding],
@@ -279,9 +279,9 @@ test("populated findings translate actions and headers while retaining original 
     props[k] = noop;
   await i18n.changeLanguage("en");
   const english = visible(render(FindingsTable, props));
-  for (const word of ["Finding name", "Retest", "Investigate", "Original title", "原始 AI 发现内容"])
+  for (const word of ["Finding name", "Retest", "Investigate", "Original title", "原始 AI 发现内容", "人工排查备注"])
     assert.ok(english.includes(word), word);
-  assert.doesNotMatch(english.replaceAll("原始 AI 发现内容", ""), /[\p{Script=Han}]/u);
+  assert.doesNotMatch(english.replaceAll("原始 AI 发现内容", "").replaceAll("人工排查备注", ""), /[\p{Script=Han}]/u);
   await i18n.changeLanguage("zh-CN");
   assert.match(visible(render(FindingsTable, props)), /漏洞名称/);
 });

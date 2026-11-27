@@ -1010,10 +1010,19 @@ export const api = {
   findingLineage: (id: string) => get<{ nodes: TaskNode[]; edges: Edge[] }>(`/exploration/findings/${id}/lineage`),
   setFindingStatus: (id: string, status: FindingStatus) => patch<Finding>(`/exploration/findings/${id}`, { status }),
   setFindingSeverity: (id: string, severity: Severity) => patch<Finding>(`/exploration/findings/${id}`, { severity }),
-  // 一次保存漏洞的名称/类别/严重等级(发现列表行内编辑用),只传出现的字段。
+  // 保存漏洞的可编辑字段(列表行内编辑与详情页编辑/备注共用),只传出现的字段。
   updateFinding: (
     id: string,
-    fields: { name?: string; vulnclass?: string; severity?: Severity; status?: FindingStatus },
+    fields: {
+      name?: string;
+      vulnclass?: string;
+      severity?: Severity;
+      status?: FindingStatus;
+      summary?: string;
+      evidence?: string;
+      report?: string;
+      remark?: string;
+    },
   ) => patch<Finding>(`/exploration/findings/${id}`, fields),
   // 删除漏洞:移除 findings 记录 + 来源探索节点(从发现列表/任务发现 Tab/探索图一并消失)。
   deleteFinding: (id: string) => del<{ deleted: boolean; id: number }>(`/exploration/findings/${id}`),

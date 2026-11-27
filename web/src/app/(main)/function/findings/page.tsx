@@ -747,7 +747,7 @@ export default function FindingsPage() {
         setEdit(null);
         return;
       }
-      setEdit({ name: f.name ?? "", vulnclass: f.vulnclass, severity: f.severity });
+      setEdit({ name: f.name ?? "", vulnclass: f.vulnclass, severity: f.severity, remark: f.remark ?? "" });
       if (!f.finding_id || reports[key]) return;
       const fid = f.finding_id;
       setReports((r) => ({ ...r, [key]: { status: "loading", text: "" } }));
@@ -769,11 +769,18 @@ export default function FindingsPage() {
           name: edit.name.trim(),
           vulnclass: edit.vulnclass.trim(),
           severity: edit.severity,
+          remark: edit.remark.trim(),
         });
         setFindings((cur) =>
           cur.map((x) =>
             isSameFinding(x, f)
-              ? { ...x, name: updated.name, vulnclass: updated.vulnclass, severity: updated.severity }
+              ? {
+                  ...x,
+                  name: updated.name,
+                  vulnclass: updated.vulnclass,
+                  severity: updated.severity,
+                  remark: updated.remark,
+                }
               : x,
           ),
         );

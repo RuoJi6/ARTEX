@@ -17,7 +17,7 @@ export function filterAndSortFindings(
       (finding) =>
         (severity === "all" || finding.severity === severity) &&
         (!keyword ||
-          [finding.name, finding.vulnclass, finding.summary, finding.evidence].some((value) =>
+          [finding.name, finding.vulnclass, finding.summary, finding.evidence, finding.remark].some((value) =>
             (value ?? "").toLowerCase().includes(keyword),
           )),
     )

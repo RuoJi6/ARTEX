@@ -80,6 +80,9 @@ func normalizeArchivedFindingVersions(raw json.RawMessage) (json.RawMessage, err
 				row[key] = 0
 			}
 		}
+		if row["remark"] == nil {
+			row["remark"] = ""
+		}
 	}
 	return json.Marshal(rows)
 }

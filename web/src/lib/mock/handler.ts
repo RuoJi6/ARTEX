@@ -520,10 +520,11 @@ function mockFilterFindings(q: URLSearchParams): (typeof mockFindings)[number][]
 function mockFindingMatchesQuery(finding: (typeof mockFindings)[number], query: string | null): boolean {
   const needle = query?.trim().toLowerCase();
   if (!needle) return true;
-  return [finding.name, finding.vulnclass, finding.summary, finding.evidence, finding.report].some((value) =>
-    String(value ?? "")
-      .toLowerCase()
-      .includes(needle),
+  return [finding.name, finding.vulnclass, finding.summary, finding.evidence, finding.remark, finding.report].some(
+    (value) =>
+      String(value ?? "")
+        .toLowerCase()
+        .includes(needle),
   );
 }
 
@@ -2360,8 +2361,12 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     if (m === "PATCH") {
       if (typeof b.status === "string") f.status = b.status as typeof f.status;
       if (typeof b.severity === "string") f.severity = b.severity as typeof f.severity;
-      if (typeof b.name === "string") f.name = b.name;
-      if (typeof b.vulnclass === "string") f.vulnclass = b.vulnclass;
+      if (typeof b.name === "string") f.name = b.name.trim();
+      if (typeof b.vulnclass === "string") f.vulnclass = b.vulnclass.trim();
+      if (typeof b.summary === "string") f.summary = b.summary.trim();
+      if (typeof b.evidence === "string") f.evidence = b.evidence.trim() ? b.evidence : "";
+      if (typeof b.report === "string") f.report = b.report.trim() ? b.report : "";
+      if (b.remark !== undefined) f.remark = mockRemark(b.remark);
     }
     const contextTaskId = q.get("context_task");
     const contextTask = contextTaskId ? mockTasks.find((item) => item.id === contextTaskId) : undefined;

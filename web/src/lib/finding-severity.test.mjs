@@ -102,7 +102,7 @@ test("filtering and sorting preserve the polling snapshot", () => {
 });
 
 test("keywords match each searchable field as a trimmed, case-insensitive substring", () => {
-  for (const field of ["name", "vulnclass", "summary", "evidence"]) {
+  for (const field of ["name", "vulnclass", "summary", "evidence", "remark"]) {
     const match = finding("match", "high", rows[0].ts, { [field]: "prefix NeEdLe suffix" });
     assert.deepEqual(
       filterAndSortFindings([rows[0], match], "all", { field: "severity", direction: "desc" }, "  nEEdle  "),
