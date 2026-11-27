@@ -5,5 +5,10 @@ package server
 import "time"
 
 func systemMetricsSnapshot(_ *Server) systemMetricsResponse {
-	return systemMetricsResponse{Scope: "unsupported", Supported: false, Timestamp: time.Now().UTC()}
+	return systemMetricsResponse{
+		Scope:     "unsupported",
+		Supported: false,
+		Timestamp: time.Now().UTC(),
+		Limits:    toolResourceLimits(),
+	}
 }

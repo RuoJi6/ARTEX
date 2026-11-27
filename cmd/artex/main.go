@@ -18,6 +18,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/config"
+	"github.com/Autumn-27/artex/internal/toolguard"
 	"github.com/Autumn-27/artex/selfupdate"
 	"github.com/Autumn-27/artex/server"
 )
@@ -47,6 +48,9 @@ func printBanner(addr string) {
 // whether to relaunch us (see selfupdate.ExitRestart) — so the body has to live
 // in a function that can *return* rather than os.Exit past its own defers.
 func main() {
+	if code, handled := toolguard.BackgroundHelper(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	os.Exit(run())
 }
 
@@ -120,6 +124,7 @@ func run() int {
 	defer settle.Stop()
 
 	log.Printf("[config] skill 目录: %s", skillDir)
+	log.Printf("[config] 工具资源限制: %s", toolguard.FromEnv().Summary())
 	srv := server.New(ctx, mgr, skillDir, *dataDir, config.BaseDir())
 	defer srv.Close()
 	httpSrv := &http.Server{

@@ -148,14 +148,14 @@ func NewWorker(prov llm.Provider, model, workDir string, tx *transcript.Store, w
 	return &Worker{prov: prov, model: model, workDir: workDir, tx: tx, window: window, maxTurns: maxTurns, extraTools: extra}
 }
 
-// defaultToolsExcept returns actool.DefaultTools() minus the named tools (by
+// defaultToolsExcept returns guardedDefaultTools() minus the named tools (by
 // CoreTool.Name()). Used to trim SDK default tools an agent shouldn't have.
 func defaultToolsExcept(exclude ...string) []actool.CoreTool {
 	drop := make(map[string]bool, len(exclude))
 	for _, n := range exclude {
 		drop[n] = true
 	}
-	all := actool.DefaultTools()
+	all := guardedDefaultTools()
 	out := make([]actool.CoreTool, 0, len(all))
 	for _, t := range all {
 		if !drop[t.Name()] {

@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/internal/httpidentity"
+	"github.com/Autumn-27/artex/internal/toolguard"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -336,15 +338,14 @@ func (s *Server) runCommandTool(ctx context.Context, execRaw json.RawMessage, pa
 		return actool.Errorf("command 为空"), nil
 	}
 	cmd := renderTemplate(spec.Command, params, shellQuote)
-	// 复用 Bash 也在用的底层 run(经 Bash CoreTool.Call):自动继承安全 floor/超时/
-	// 代理 env/输出溢出。工具与 Bash 平级、共用底层,不经过 Bash 这个工具让模型调。
-	bashIn, _ := json.Marshal(map[string]any{"command": cmd})
+	// 复用受资源上限保护的 Bash 底层 run：自动继承安全 floor / 内存与超时限制 /
+	// 代理 env / 输出溢出。工具与 Bash 平级、共用底层，不经过 Bash 这个工具让模型调。
+	payload := map[string]any{"command": cmd}
 	if spec.TimeoutMs > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeoutOr(spec.TimeoutMs, 120000))
-		defer cancel()
+		payload["timeout_ms"] = spec.TimeoutMs
 	}
-	return actool.NewBash().Call(ctx, bashIn, tc)
+	bashIn, _ := json.Marshal(payload)
+	return toolguard.NewBash().Call(ctx, bashIn, tc)
 }
 
 // ---------- script(仅 Python):临时文件 + stdin JSON + env ----------
@@ -367,16 +368,20 @@ func (s *Server) runScriptTool(ctx context.Context, key string, execRaw json.Raw
 		}
 		sessionEnv = tc.Env
 	}
-	body, err := execPython(ctx, interp, key, spec.Code, params, workDir, sessionEnv, timeoutOr(spec.TimeoutMs, 120000))
+	body, err := execPython(ctx, interp, key, spec.Code, params, workDir, sessionEnv, toolguard.FromEnv().ResolveTimeout(spec.TimeoutMs))
 	if err != nil {
-		return actool.Errorf(maskSecrets(err.Error())), nil
+		out := actool.Capture(tc, body)
+		if out != "" {
+			out += "\n\n"
+		}
+		return actool.Errorf(out + maskSecrets(err.Error())), nil
 	}
 	return actool.Text(actool.Capture(tc, body)), nil
 }
 
 // execPython writes the code to a temp .py under workDir/.tools, runs it via interp
 // with the params JSON on stdin + scalar params mirrored to TOOL_<NAME> env, and
-// returns combined stdout+stderr (with a timeout/exit note). Standalone + testable.
+// returns combined stdout+stderr and any termination error.
 func execPython(ctx context.Context, interp, key, code string, params map[string]any, workDir string, sessionEnv []string, timeout time.Duration) (string, error) {
 	toolsDir := filepath.Join(workDir, ".tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
@@ -396,7 +401,7 @@ func execPython(ctx context.Context, interp, key, code string, params map[string
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	c := exec.CommandContext(runCtx, interp, tmp)
+	c := exec.Command(interp, tmp)
 	c.Dir = workDir
 	c.Env = append(os.Environ(), sessionEnv...) // 会话代理 env
 	for k, v := range params {                  // 标量参数镜像成 TOOL_<NAME>
@@ -406,12 +411,19 @@ func execPython(ctx context.Context, interp, key, code string, params map[string
 	}
 	pj, _ := json.Marshal(params)
 	c.Stdin = bytes.NewReader(pj) // 参数 JSON 走 stdin
-	out, err := c.CombinedOutput()
-	body := string(out)
-	if runCtx.Err() == context.DeadlineExceeded {
-		body += "\n... [超时终止] ..."
-	} else if err != nil {
-		body += "\n[exit: " + err.Error() + "]"
+	res := toolguard.Run(runCtx, toolguard.FromEnv(), c)
+	body := res.Output
+	if res.OutputTruncated {
+		body += "\n\n[output truncated at capture limit]"
+	}
+	if res.MemoryKilled {
+		return body, errors.New(toolguard.FormatMemoryKilled(res.PeakMemoryBytes, res.MemoryLimitBytes, res.KilledByCgroup))
+	}
+	if res.TimedOut {
+		return body, fmt.Errorf("[command timed out (configured limit %s)]", timeout)
+	}
+	if res.Err != nil {
+		return body, fmt.Errorf("[exit: %w]", res.Err)
 	}
 	return body, nil
 }

@@ -145,6 +145,13 @@ docker compose up -d          # 拉取 ruoji6/artex 镜像 + postgres
 
 `.env` 中默认 `ARTEX_IMAGE=ruoji6/artex`，`ARTEX_TAG=latest` 使用最新镜像，也可固定为 `v0.3.17`（完整镜像地址 `ruoji6/artex:v0.3.17`）。镜像支持 `linux/amd64` 和 `linux/arm64`，Docker 会自动选择与宿主机匹配的架构，ARM64 Kali 无需自行编译。初次部署请修改 `POSTGRES_PASSWORD`；运行服务无需配置 Docker Hub 发布 Token。
 
+#### 内存与进程保护
+
+- **Compose 容器**：`artex` 默认最多使用 **4 GiB 内存、512 个进程/线程**，并禁用容器 swap；PostgreSQL 不受这两个上限限制。通过 `.env` 的 `ARTEX_MEMORY_LIMIT`、`ARTEX_PIDS_LIMIT` 调整。小内存 VPS 应调低内存上限，给宿主机、数据库和其他服务留出余量。更新 Compose 或 `.env` 后，运行 `docker compose up -d artex` 重建容器；只热更新程序不会改变容器限制。
+- **单条工具命令**：前台/后台 Bash 和自定义命令、Python 脚本默认使用 **2048 MiB** 内存和 **120 秒**超时。显式 `timeout_ms` 最多为 600 秒（如果运营者将默认值调得更长，则以该默认值为上限）。用 `ARTEX_TOOL_MEMORY_LIMIT_MB`、`ARTEX_TOOL_TIMEOUT_S` 调整；内存上限设为 `0` 时关闭单命令内存保护。超时的前台命令会被终止，不再自动转入后台。内存超限会返回明确错误；显式后台任务可用 `TaskOutput` 查看原因。
+- **执行方式**：可委托的 Linux cgroup v2 使用内核内存上限，启用 PID 控制器时还应用 `ARTEX_TOOL_PIDS_LIMIT`（默认 256，`0` 表示关闭）。默认只在服务自身 cgroup 内创建子组；本地部署可通过 `ARTEX_TOOL_CGROUP_PARENT` 指定由管理员委托且包含服务的父组，容器/服务限制应设在该组或其上层。普通 Docker 中 cgroup 往往不可写，无需加特权：Linux 使用进程树 RSS 加换出内存采样兜底，macOS 使用 RSS 采样。采样不是硬上限，某些尖峰可能只被容器限制挡住；Windows 不支持单命令内存采样。SDK 的 `Monitor` 和交互式 PTY 不应用单命令限制，在 Compose 中仍受容器限制。
+- **查看配置**：启动日志和登录后的 `GET /api/system/metrics` 的 `limits` 字段显示工具限制与执行方式；Linux 对可识别的容器 cgroup 同时报告内存和 PID 上限。
+
 远程 MCP 可在系统设置中选择 `http`（Streamable HTTP）或 `sse`（旧版 SSE）。
 旧版 SSE 服务通常使用 `GET /sse` 建立事件流，再通过服务返回的
 `/message?sessionId=...` 接收 JSON-RPC 请求；配置时将 URL 填为 `/sse`，请求头按

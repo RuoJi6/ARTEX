@@ -29,6 +29,9 @@ services:
       ARTEX_LLM_BASE_URL: ${ARTEX_LLM_BASE_URL:-}
       ARTEX_LLM_PROXY: ${ARTEX_LLM_PROXY:-}
       ARTEX_HTTP_USER_AGENT: ${ARTEX_HTTP_USER_AGENT:-}
+      ARTEX_TOOL_MEMORY_LIMIT_MB: ${ARTEX_TOOL_MEMORY_LIMIT_MB:-}
+      ARTEX_TOOL_TIMEOUT_S: ${ARTEX_TOOL_TIMEOUT_S:-}
+      ARTEX_TOOL_PIDS_LIMIT: ${ARTEX_TOOL_PIDS_LIMIT:-}
     ports:
       - "8787:8787"
       - "127.0.0.1:8788:8788"
@@ -39,6 +42,11 @@ services:
       # 把项目根目录的 skills 挂进容器（覆盖镜像内置的 /app/skills）；
       # 改 skill 无需重建镜像，容器读的就是宿主机这份。
       - ./skills:/app/skills
+    # 容器级内存/进程上限，防止单个重工具（如 innoextract/7z/playwright/ffuf）打满宿主机内存并触发 swap 抖动。
+    # memswap_limit 与 mem_limit 保持一致以禁止容器吃宿主机 swap；可通过 .env 中的 ARTEX_MEMORY_LIMIT / ARTEX_PIDS_LIMIT 调整。
+    mem_limit: ${ARTEX_MEMORY_LIMIT:-4g}
+    memswap_limit: ${ARTEX_MEMORY_LIMIT:-4g}
+    pids_limit: ${ARTEX_PIDS_LIMIT:-512}
     restart: unless-stopped
 
 volumes:
