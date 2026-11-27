@@ -233,6 +233,21 @@ export const messages = {
   "findingsCleanup.success": ["已清理 {{count}} 条漏洞", "Deleted {{count}} finding(s)"],
   "findingsCleanup.empty": ["没有符合条件的漏洞可清理", "No matching findings to delete"],
   "findingsCleanup.failed": ["清理失败：{{message}}", "Cleanup failed: {{message}}"],
+  "findingsAutoMerge.button": ["AI 自动合并", "AI auto-merge"],
+  "findingsAutoMerge.running": ["提交中…", "Submitting…"],
+  "findingsAutoMerge.started": [
+    "已启动 AI 自动合并（{{count}} 个任务），将自动判断并完成合并",
+    "Started AI auto-merge for {{count}} task(s); AI will judge and merge automatically",
+  ],
+  "findingsAutoMerge.startedWithSkipped": [
+    "已启动 {{count}} 个任务的 AI 自动合并，另有 {{skipped}} 个任务正在合并中",
+    "Started AI auto-merge for {{count}} task(s); {{skipped}} task(s) already running",
+  ],
+  "findingsAutoMerge.empty": [
+    "没有可由 AI 自动合并的漏洞（同一任务需至少 2 条记录）",
+    "No findings eligible for AI auto-merge (at least 2 findings per task required)",
+  ],
+  "findingsAutoMerge.failed": ["启动 AI 自动合并失败：{{message}}", "Failed to start AI auto-merge: {{message}}"],
 } satisfies Record<string, readonly [string, string]>;
 
 const statuses: Record<string, readonly (readonly [string, string, string])[]> = {

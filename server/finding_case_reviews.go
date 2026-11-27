@@ -32,10 +32,10 @@ func (s *Server) isHistoricalFindingReview(conv int64) (bool, error) {
 func (s *Server) toolCompleteFindingCaseReview() actool.CoreTool {
 	decision := objSchema(map[string]any{
 		"finding_id":          idParam("所选独立漏洞记录 ID"),
-		"verdict":             map[string]any{"type": "string", "enum": []string{"independent", "merged", "suggested"}},
+		"verdict":             map[string]any{"type": "string", "enum": []string{"independent", "merged"}},
 		"reason":              strParam("判断理由，引用已证据化的共同点或不同代码路径；仅类型、标题或资产相同不足以证明共同根因"),
-		"root_cause_evidence": strParam("原始报告/证据中支持实际共同或不同根因的具体材料；suggested 须说明具体共同点、缺失的关键证据及已保存分组；没有具体共同点应判 independent")}, "finding_id", "verdict", "reason", "root_cause_evidence")
-	return wrTool("complete_finding_case_review", "历史整理结束前提交每条所选记录的根因判断并验收：必须已读取全部记录，疑似必须已有待确认分组建议；归并只需已在活动文件夹中，统一报告可稍后补齐。验收失败不能宣布完成。", objSchema(map[string]any{"summary": strParam("整理结果总结"), "decisions": map[string]any{"type": "array", "items": decision}}, "summary", "decisions"), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
+		"root_cause_evidence": strParam("原始报告/证据中支持同一根因或不同根因的具体材料；无法确认同一根因时判 independent 并说明依据")}, "finding_id", "verdict", "reason", "root_cause_evidence")
+	return wrTool("complete_finding_case_review", "历史/自动合并整理结束前提交每条待判断记录的根因结论并验收：必须已读取全部记录；归并只需已在活动文件夹中，统一报告可稍后补齐。验收失败不能宣布完成。", objSchema(map[string]any{"summary": strParam("整理结果总结"), "decisions": map[string]any{"type": "array", "items": decision}}, "summary", "decisions"), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
 		var a findingReviewConclusion
 		if err := json.Unmarshal(raw, &a); err != nil {
 			return actool.Errorf(err.Error()), nil
@@ -98,16 +98,6 @@ func (s *Server) saveFindingReviewConclusion(ctx context.Context, conv int64, a 
 			case "merged":
 				if !cid.Valid {
 					return fmt.Errorf("记录 #%d 尚未归并", id)
-				}
-			case "suggested":
-				var pending bool
-				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM finding_case_suggestions s
-                    JOIN finding_case_suggestion_members sm ON sm.suggestion_id=s.id
-                    WHERE s.state='pending' AND sm.finding_id=$1)`, id).Scan(&pending); err != nil {
-					return err
-				}
-				if !pending {
-					return fmt.Errorf("记录 #%d 须先保存待确认建议", id)
 				}
 			case "independent":
 				if cid.Valid {

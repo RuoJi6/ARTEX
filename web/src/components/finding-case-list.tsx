@@ -4,16 +4,14 @@ import * as React from "react";
 import Link from "next/link";
 
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon } from "lucide-react";
-import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
 import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
@@ -23,7 +21,6 @@ import type {
   FindingCaseListRow,
   FindingCasePage,
   FindingCaseReviewRun,
-  FindingCaseSuggestion,
   FindingQuery,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -207,107 +204,6 @@ export function FindingCaseMembers({
   );
 }
 
-function FindingMergeSuggestionCard({
-  suggestion: s,
-  onResolve,
-}: {
-  suggestion: FindingCaseSuggestion;
-  onResolve: (s: FindingCaseSuggestion, accept: boolean, excludeIds?: string[]) => Promise<void>;
-}) {
-  const { ui } = useUITranslation();
-
-  const [expanded, setExpanded] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
-  const ids = React.useMemo(
-    () => (Array.isArray(s.finding_ids) && s.finding_ids.length > 0 ? s.finding_ids : [s.left_id, s.right_id]),
-    [s.finding_ids, s.left_id, s.right_id],
-  );
-  const [excluded, setExcluded] = React.useState<string[]>([]);
-  React.useEffect(() => {
-    setExcluded((current) => {
-      const next = current.filter((id) => ids.includes(id));
-      return next.length === current.length ? current : next;
-    });
-  }, [ids]);
-  const validExcluded = excluded.filter((id) => ids.includes(id));
-  const included = ids.filter((id) => !validExcluded.includes(id));
-  async function resolve(accept: boolean) {
-    if (busy) return;
-    if (accept && included.length < 2) return;
-    setBusy(true);
-    try {
-      await onResolve(s, accept, accept ? validExcluded : []);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <Card size="sm" className="min-w-0">
-      <CardHeader>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">
-            {ui("screen.046b2f635c11ed")}
-            {ids.length} {ui("screen.96a8de35964937")}
-          </Badge>
-          <CardDescription>
-            {ui("screen.e5b1cc0dc459e5")}
-            {s.task_id}
-          </CardDescription>
-        </div>
-        <CardTitle className="break-words">{s.title}</CardTitle>
-        <CardDescription className="flex flex-col gap-1">
-          {ids.map((id) => (
-            <span key={id} className="flex items-center gap-2">
-              <Checkbox
-                checked={!excluded.includes(id)}
-                disabled={busy}
-                onCheckedChange={(value) =>
-                  setExcluded((current) =>
-                    value === true
-                      ? current.filter((item) => item !== id)
-                      : [...current.filter((item) => item !== id), id],
-                  )
-                }
-                aria-label={ui("screen.2ea99060e9cc28", { v0: id })}
-              />
-              <Link className="underline underline-offset-4" href={`/function/findings/detail/?id=${id}`}>
-                {ui("screen.9b8fd53005c92b")}
-                {id}
-              </Link>
-            </span>
-          ))}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Collapsible open={expanded} onOpenChange={setExpanded}>
-          {!expanded ? (
-            <p className="line-clamp-2 whitespace-pre-wrap break-words text-muted-foreground text-sm">{s.reason}</p>
-          ) : null}
-          <CollapsibleContent className="whitespace-pre-wrap break-words text-muted-foreground text-sm">
-            {s.reason}
-          </CollapsibleContent>
-          <CollapsibleTrigger asChild>
-            <Button variant="link" size="sm">
-              {expanded ? ui("screen.d4585da0edd72c") : ui("screen.71717465a2f0fc")}
-            </Button>
-          </CollapsibleTrigger>
-        </Collapsible>
-      </CardContent>
-      <CardFooter className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" disabled={busy || included.length < 2} onClick={() => resolve(true)}>
-          {busy ? <Spinner /> : null}
-          {included.length === ids.length
-            ? ui("screen.09484600542d8e")
-            : ui("screen.eb666ee37bde81", { v0: included.length })}
-        </Button>
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => resolve(false)}>
-          {ui("screen.04dd946ef358b7")}
-        </Button>
-      </CardFooter>
-    </Card>
-  );
-}
-
 function FindingReviewRunRow({ run: r }: { run: FindingCaseReviewRun }) {
   const { ui } = useUITranslation();
 
@@ -337,38 +233,59 @@ function FindingReviewRunRow({ run: r }: { run: FindingCaseReviewRun }) {
   );
 }
 
-export function FindingCaseReviewPanel({ taskId, onChange }: { taskId?: string; onChange?: () => void }) {
+export function FindingCaseReviewPanel({
+  taskId,
+  onChange,
+  refreshKey = 0,
+}: {
+  taskId?: string;
+  onChange?: () => void;
+  refreshKey?: number;
+}) {
   const { ui } = useUITranslation();
 
-  const [suggestions, setSuggestions] = React.useState<FindingCaseSuggestion[]>([]);
   const [runs, setRuns] = React.useState<FindingCaseReviewRun[]>([]);
   const [error, setError] = React.useState("");
-  const [reload, setReload] = React.useState(0);
   const requestSeq = React.useRef(0);
   const taskKey = taskId ?? "";
   const taskKeyRef = React.useRef(taskKey);
   taskKeyRef.current = taskKey;
   const previousTaskKey = React.useRef(taskKey);
+  const prevActiveIdsRef = React.useRef<Set<number>>(new Set());
+  const onChangeRef = React.useRef(onChange);
+  onChangeRef.current = onChange;
   React.useEffect(() => {
     if (previousTaskKey.current === taskKey) return;
     previousTaskKey.current = taskKey;
-    setSuggestions([]);
+    prevActiveIdsRef.current = new Set();
     setRuns([]);
     setError("");
   }, [taskKey]);
   React.useEffect(() => {
     const seq = ++requestSeq.current;
     const requestedTask = taskKey;
-    void reload;
+    void refreshKey;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     async function load() {
       try {
-        const [s, r] = await Promise.all([api.findingCaseSuggestions(taskId), api.findingCaseReviewRuns()]);
+        const r = await api.findingCaseReviewRuns();
         if (active && seq === requestSeq.current && requestedTask === taskKeyRef.current) {
-          setSuggestions(s);
-          setRuns(r.filter((x) => !taskId || x.task_id === taskId));
+          const filtered = r.filter((x) => !taskId || x.task_id === taskId);
+          const activeIds = new Set(
+            filtered.filter((x) => x.state === "queued" || x.state === "running").map((x) => x.conversation_id),
+          );
+          let finishedAny = false;
+          for (const id of prevActiveIdsRef.current) {
+            if (!activeIds.has(id)) {
+              finishedAny = true;
+              break;
+            }
+          }
+          prevActiveIdsRef.current = activeIds;
+          setRuns(filtered);
           setError("");
+          if (finishedAny) onChangeRef.current?.();
         }
       } catch (e) {
         if (active && seq === requestSeq.current && requestedTask === taskKeyRef.current)
@@ -383,31 +300,9 @@ export function FindingCaseReviewPanel({ taskId, onChange }: { taskId?: string; 
       active = false;
       clearTimeout(timer);
     };
-  }, [reload, taskId, taskKey]);
-  async function resolve(s: FindingCaseSuggestion, accept: boolean, excludeIds?: string[]) {
-    const seq = ++requestSeq.current;
-    const requestedTask = taskKey;
-    try {
-      const result = await api.resolveFindingCaseSuggestion(s.id, accept, excludeIds);
-      if (requestedTask === taskKeyRef.current) {
-        setReload((v) => v + 1);
-        if (seq === requestSeq.current) {
-          setSuggestions((v) => v.filter((x) => x.id !== s.id));
-          if (accept && result.case_id !== "0") {
-            toast.success(ui("screen.f8341bc19ac543"));
-          } else {
-            toast.success(ui("screen.a3c1bdd20d1cf1"));
-          }
-          onChange?.();
-        }
-      }
-    } catch (e) {
-      if (requestedTask === taskKeyRef.current) {
-        setReload((v) => v + 1);
-        if (seq === requestSeq.current) toast.error((e as Error).message);
-      }
-    }
-  }
+  }, [refreshKey, taskId, taskKey]);
+  const activeRuns = runs.filter((r) => r.state === "queued" || r.state === "running");
+  if (!error && activeRuns.length === 0) return null;
   return (
     <div className="flex flex-col gap-2">
       {error ? (
@@ -418,23 +313,11 @@ export function FindingCaseReviewPanel({ taskId, onChange }: { taskId?: string; 
           </AlertDescription>
         </Alert>
       ) : null}
-      {suggestions.length > 0 ? (
-        <p className="text-muted-foreground text-sm">
-          {ui("screen.2ab1badc66393b")}
-          {suggestions.length}
-          {ui("screen.abf1d4dab0b7ab")}
-        </p>
-      ) : null}
-      {suggestions.map((s) => (
-        <FindingMergeSuggestionCard key={s.id} suggestion={s} onResolve={resolve} />
-      ))}
-      {runs.some((r) => r.state === "queued" || r.state === "running") ? (
+      {activeRuns.length > 0 ? (
         <div className="flex flex-col gap-2">
-          {runs
-            .filter((r) => r.state === "queued" || r.state === "running")
-            .map((r) => (
-              <FindingReviewRunRow key={r.conversation_id} run={r} />
-            ))}
+          {activeRuns.map((r) => (
+            <FindingReviewRunRow key={r.conversation_id} run={r} />
+          ))}
         </div>
       ) : null}
     </div>
@@ -447,16 +330,20 @@ export function FindingCaseList({
   onSelect,
   contextTask,
   readOnly = false,
+  showReviewPanel = true,
   onTotal,
   refreshKey = 0,
+  reviewRefreshKey = 0,
 }: {
   query: Omit<FindingQuery, "page" | "pageSize">;
   selectedIds?: Set<string>;
   onSelect?: (id: string, checked: boolean) => void;
   contextTask?: string;
   readOnly?: boolean;
+  showReviewPanel?: boolean;
   onTotal?: (total: number) => void;
   refreshKey?: number;
+  reviewRefreshKey?: number;
 }) {
   const { ui } = useUITranslation();
 
@@ -498,9 +385,10 @@ export function FindingCaseList({
   }, [data, onTotal]);
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      {!readOnly ? (
+      {showReviewPanel && !readOnly ? (
         <FindingCaseReviewPanel
           taskId={query.task === "all" ? undefined : query.task}
+          refreshKey={reviewRefreshKey}
           onChange={() => setRefresh((v) => v + 1)}
         />
       ) : null}
