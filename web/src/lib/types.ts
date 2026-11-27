@@ -41,6 +41,7 @@ export interface Task {
   no_result_min_findings?: number;
   no_result_min_severity?: "" | "low" | "medium" | "high" | "critical";
   stop_reason?: string;
+  output_language?: "zh" | "en"; // Language the task's LLM agents write in.
   created_at: string;
   created_unix?: number;
   completed_at?: string; // RFC3339 finish time (done/failed); "" if unfinished

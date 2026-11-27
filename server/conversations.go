@@ -549,8 +549,10 @@ func (s *Server) runConversation(c *db.Conversation, msg, busyKey string, userMe
 // run ends (clearing busyKey). runConversation wraps it in a goroutine for the
 // fire-and-forget chat path; the P3 trigger queue calls it directly so it can wait
 // for completion before starting the next queued fire for the same agent.
-func (s *Server) runConversationSync(c *db.Conversation, msg, busyKey string) {
+// outputLang is the language the agent writes in for this turn ("zh" or "en").
+func (s *Server) runConversationSync(c *db.Conversation, msg, busyKey, outputLang string) {
 	ctx, cancel := s.conversationRunContext(c.ID, busyKey)
+	ctx = agent.WithOutputLang(ctx, outputLang)
 	s.runConversationTurn(ctx, cancel, c, msg, busyKey)
 }
 
@@ -958,7 +960,21 @@ func (s *Server) runTriggeredRun(item triggeredRun) {
 	s.chatMu.Lock()
 	s.chatBusy[busyKey] = true
 	s.chatMu.Unlock()
-	s.runConversationSync(c, msg, busyKey)
+	s.runConversationSync(c, msg, busyKey, s.triggerOutputLanguage(item.taskID))
+}
+
+// triggerOutputLanguage is the output language of a trigger fire: that of its source
+// task, so the reporter writes an English task's finding reports in English. Fires
+// with no task (interval/none triggers) or an unknown task stay "zh". A merge_mode
+// 'all' run that spans several tasks follows its first task.
+func (s *Server) triggerOutputLanguage(taskID int64) string {
+	if taskID <= 0 {
+		return "zh"
+	}
+	if t, ok := s.m.Task(i64s(taskID)); ok && t != nil {
+		return db.NormalizeOutputLanguage(t.OutputLanguage)
+	}
+	return "zh"
 }
 
 // firstLine returns a single-line, length-capped preview (shared with summaries).

@@ -16,7 +16,15 @@ import (
 // skill loads. Returns a single plain segment + boundary 0 when there is no global
 // block to add.
 func deferredSystem(sysText string, def DeferredInfo) (system []string, boundary int) {
-	sysText += def.FindingGuidance + def.CaseGuidance + def.IntelligenceGuidance
+	return deferredSystemWithLang(sysText, def, "")
+}
+
+// deferredSystemWithLang is deferredSystem for a task with an output language. The
+// language directive (see OutputLangDirective) goes after the Chinese finding, case
+// and intelligence guidance, so it is the last instruction text the model reads; the
+// deferred-tools block that may follow is only an English tool-name list.
+func deferredSystemWithLang(sysText string, def DeferredInfo, outputLang string) (system []string, boundary int) {
+	sysText += def.FindingGuidance + def.CaseGuidance + def.IntelligenceGuidance + OutputLangDirective(outputLang)
 	block := actool.RenderDeferredToolsBlock(def.GlobalNames)
 	if block == "" {
 		return []string{sysText}, 0

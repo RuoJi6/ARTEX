@@ -273,6 +273,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			"timeout_seconds":        map[string]any{"type": "integer", "description": "可选：任务级超时(秒)。到点后触发优雅收尾并进入 timeout 终态；留空或 0 = 不限时"},
 			"plan_heartbeat_seconds": map[string]any{"type": "integer", "description": "可选：planner 心跳触发间隔(秒)。距上轮规划结束/任务开始满该值且期间无触发 → 触发一轮规划(兜底死锁 + 唤醒去监督飞行中的 worker)。留空或 0 = 默认 600(10min)；"},
 			"seed_first_intent":      map[string]any{"type": "boolean", "description": "可选：对于简单任务可开启，创建时直接下发一条种子意图(内容=描述+目标)让 worker 免等首轮 planner 直接开跑测试；默认 false(走标准先规划再执行)。"},
+			"output_language":        outputLanguageParam(),
 		}, "description", "goal"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
@@ -287,6 +288,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				TimeoutSeconds       int             `json:"timeout_seconds"`
 				PlanHeartbeatSeconds int             `json:"plan_heartbeat_seconds"`
 				SeedFirstIntent      bool            `json:"seed_first_intent"`
+				OutputLanguage       string          `json:"output_language"`
 			}
 			_ = json.Unmarshal(in, &a)
 			if strings.TrimSpace(a.Description) == "" {
@@ -316,6 +318,13 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				sourceIDs = append(sourceIDs, id)
 			}
 			// LLM profile resolution: explicit id > inherit parent's pin > active(nil).
+			var parent *Task
+			if a.ParentRef != "" {
+				if pt, ok := s.m.Task(a.ParentRef); ok {
+					parent = pt
+				}
+			}
+			outputLang := spawnOutputLanguage(a.OutputLanguage, parent)
 			var pin *int64
 			if id := parseProfileID(a.LLMProfileID); id > 0 {
 				if _, ok := s.loadProfileConfig(id); !ok {
@@ -345,7 +354,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				} else if prov, _, providerOK := s.providerForProfile(active.ID); providerOK {
 					titleCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 					defer cancel()
-					generated, titleErr := agent.GenerateAutoTitle(titleCtx, prov, a.Description+"\n"+a.Goal)
+					generated, titleErr := agent.GenerateAutoTitle(agent.WithOutputLang(titleCtx, outputLang), prov, a.Description+"\n"+a.Goal)
 					if err := ctx.Err(); err != nil {
 						return actool.Errorf(err.Error()), nil
 					}
@@ -370,6 +379,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				NoResultSeconds: a.NoResultSeconds, NoResultMinFindings: a.NoResultMinFindings, NoResultMinSeverity: a.NoResultMinSeverity,
 				TimeoutSeconds:       a.TimeoutSeconds,
 				PlanHeartbeatSeconds: a.PlanHeartbeatSeconds,
+				OutputLanguage:       outputLang,
 			})
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
@@ -731,7 +741,7 @@ func (s *Server) migrateReporterWorkflow() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v9_task_reopen_tools"
+	const flag = "tool_schema_refresh_v10_spawn_output_language"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
