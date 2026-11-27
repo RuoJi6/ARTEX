@@ -193,6 +193,88 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 	return out, nil
 }
 
+// resumeOrReopenTask resumes a paused task or reopens a terminal
+// (done/failed/timeout) task in place when it still has open goals or open
+// intents to execute. Unlike applyTaskControl("resume"), which stays strictly
+// paused-only for schedule/proxy/batch control callers, this is the explicit
+// operator/agent reopen path (POST /api/tasks/{id}/resume and resume_task).
+func (s *Server) resumeOrReopenTask(t *Task, cause error) (taskControlResult, error) {
+	if t == nil {
+		return taskControlResult{}, fmt.Errorf("task not found")
+	}
+	out := taskControlResult{ID: t.ID}
+	lifecycle := t.lifecycleSnapshot()
+	if !isTerminalStatus(lifecycle.Status) {
+		if lifecycle.Paused || s.engine.IsPaused(t.ID) {
+			return s.applyTaskControlWithCause(t, "resume", cause)
+		}
+		if lifecycle.Queued {
+			return out, fmt.Errorf("任务当前已在排队等待运行，无需恢复")
+		}
+		if s.engine.Started(t.ID) {
+			return out, fmt.Errorf("任务当前正在运行，无需恢复")
+		}
+		mode := s.resumeAdmissionMode(t)
+		queued, err := s.admitTask(t, mode)
+		if err != nil {
+			return out, err
+		}
+		out.Queued = queued
+		out.Status = map[bool]string{true: "queued", false: "running"}[queued]
+		return out, nil
+	}
+
+	if !s.engine.beginTaskOperation(t.ID) {
+		return out, fmt.Errorf("任务正在删除，无法恢复")
+	}
+	defer s.engine.decInflight(t.ID)
+
+	current, exists := s.m.Task(t.ID)
+	if !exists || current != t || s.engine.IsDeleting(t.ID) {
+		return out, fmt.Errorf("任务正在删除，无法恢复")
+	}
+	lifecycle = t.lifecycleSnapshot()
+	if !isTerminalStatus(lifecycle.Status) {
+		if lifecycle.Paused || s.engine.IsPaused(t.ID) {
+			return s.applyTaskControlWithCause(t, "resume", cause)
+		}
+		out.Queued = lifecycle.Queued
+		out.Status = s.deriveTaskStatus(t)
+		return out, nil
+	}
+
+	hasOpenGoal, err := t.Store.HasOpenGoal()
+	if err != nil {
+		return out, err
+	}
+	hasActiveIntent, err := t.Store.HasActiveIntent()
+	if err != nil {
+		return out, err
+	}
+	mode := "resume"
+	if !hasOpenGoal && !hasActiveIntent {
+		goals, gErr := t.Store.ListByKind(db.KindGoal, 1)
+		if gErr == nil && len(goals) == 0 && lifecycle.FirstRunAt == 0 {
+			mode = "bootstrap"
+		} else {
+			return out, fmt.Errorf("任务所有目标均已达成且没有待执行(open)的意图，无法直接恢复；请先通过 set_goals/set_task_goals 新增目标，或通过 add_intent/add_task_intent 下发新意图（系统会自动将任务拉回运行态）")
+		}
+	}
+	queued, err := s.admitTask(t, mode)
+	if err != nil {
+		return out, err
+	}
+	out.Queued = queued
+	out.Status = map[bool]string{true: "queued", false: "running"}[queued]
+	summary := "任务已重新打开，继续执行剩余探索任务"
+	if queued {
+		summary = "任务已重新打开并进入排队，等待运行槽位"
+	}
+	s.engine.emitActivity(t, db.Activity{Worker: "system", Kind: "text", Summary: summary})
+	log.Printf("[task] #%s 已重新打开继续运行 (from=%s status=%s)", t.ID, lifecycle.Status, out.Status)
+	return out, nil
+}
+
 // intentSummaryOf 取意图 payload 里的 summary,供删除通知在意图节点消失(真删除)前留档。
 func intentSummaryOf(n *db.Node) string {
 	if n == nil {
