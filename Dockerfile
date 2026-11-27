@@ -21,14 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
-# 预装 Playwright MCP 与 CLI（全局），运行时不再 npx 联网下载。
-# @playwright/mcp：browser MCP 直接 `npx @playwright/mcp`（已全局装好，无需 -y/@latest）。
-# @playwright/cli：提供 playwright-cli，装完顺带 --help 验证可执行。
-# 再装 playwright（提供浏览器管理），装完用 --with-deps 预置 chromium 及其系统依赖，
-# 这样容器内 MCP/CLI 首次启动即可用，不再联网下载浏览器。
-RUN npm install -g @playwright/mcp@latest @playwright/cli@latest playwright@latest \
+# 预装 Playwright MCP 与 CLI（全局），运行时优先直接调用 playwright-mcp，无需 npx 联网下载。
+# 必须通过 playwright-mcp 自身的 install-browser 安装对应版本的 chromium 及其系统依赖，
+# 避免全局 playwright 与 @playwright/mcp 内置 playwright-core 版本不一致导致找不到浏览器可执行文件。
+RUN npm install -g @playwright/mcp@latest @playwright/cli@latest \
+    && playwright-mcp --version \
     && playwright-cli --help \
-    && playwright install --with-deps chromium \
+    && playwright-mcp install-browser --with-deps chromium \
+    && playwright-cli install-browser chromium \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV TZ=Asia/Shanghai

@@ -986,18 +986,18 @@ export interface TrafficHost {
 // ---- App settings (runtime toggles) ----
 export interface Settings {
   traffic_capture: boolean;
-  /** 是否向可见 Agent 暴露浏览器 MCP 的截图工具。默认关闭。 */
+  /** 是否向可见 Agent 暴露浏览器 MCP 的截图工具。默认开启。 */
   browser_screenshot_enabled?: boolean;
-  /** 是否在报告截图右上角显示截图保存时间。默认关闭。 */
+  /** 是否在报告截图右上角显示截图保存时间。默认开启。 */
   browser_screenshot_timestamp_enabled?: boolean;
   /** 是否向 Agent 注入统一 OPSEC 准则。默认关闭。 */
   opsec_enabled?: boolean;
   credential_agent_enabled: boolean;
   credential_traffic_binding: boolean;
-  task_intelligence_enabled: boolean; // 默认关闭；关闭不注入情报工具或提示
+  task_intelligence_enabled: boolean; // 默认开启；关闭不注入情报工具或提示
   task_auto_title_enabled: boolean; // Agent 创建任务时自动生成任务名称
   chat_auto_title_enabled: boolean; // 对话首条消息后自动生成会话标题
-  agent_traffic_binding: boolean; // Agent 自动绑定流量证据，默认关闭；不影响人工绑定
+  agent_traffic_binding: boolean; // Agent 自动绑定流量证据，默认开启；不影响人工绑定
   llm_record: boolean; // LLM 录制开关（默认关）；关闭时不记录任何 LLM 调用
   // Web search. brave_key_set / tavily_key_set reflect whether a key is stored
   // (the values are never returned). On PUT, send the corresponding field to set/clear.

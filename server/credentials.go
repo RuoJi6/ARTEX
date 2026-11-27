@@ -53,7 +53,7 @@ func (s *Server) runCredentialProcessor() {
 		case <-ticker.C:
 		case <-s.credentialWake:
 		}
-		if !s.m.pg.GetBool(db.SettingTaskIntelligence, false) || !s.m.pg.GetBool(db.SettingCredentialAgent, false) {
+		if !s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence) || !s.m.pg.GetBool(db.SettingCredentialAgent, false) {
 			continue
 		}
 		a, err := s.m.pg.GetAgentByKey(db.CredentialAgentKey)
@@ -74,7 +74,7 @@ func (s *Server) runCredentialProcessor() {
 	}
 }
 func (s *Server) processCredentialJob(parent context.Context, item *db.Intelligence) {
-	if !s.m.pg.GetBool(db.SettingTaskIntelligence, false) || !s.m.pg.GetBool(db.SettingCredentialAgent, false) {
+	if !s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence) || !s.m.pg.GetBool(db.SettingCredentialAgent, false) {
 		_ = s.m.pg.FinishCredentialJob(parent, item, *item.Credentials)
 		return
 	}
@@ -89,7 +89,7 @@ func (s *Server) processCredentialJob(parent context.Context, item *db.Intellige
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				if !s.m.pg.GetBool(db.SettingTaskIntelligence, false) || !s.m.pg.GetBool(db.SettingCredentialAgent, false) {
+				if !s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence) || !s.m.pg.GetBool(db.SettingCredentialAgent, false) {
 					cancel()
 					return
 				}
@@ -401,7 +401,7 @@ func (s *Server) matchCredentialTraffic(ctx context.Context, item *db.Intelligen
 }
 
 func (s *Server) retryCredentials(w http.ResponseWriter, r *http.Request) {
-	if !s.m.pg.GetBool(db.SettingTaskIntelligence, false) || !s.m.pg.GetBool(db.SettingCredentialAgent, false) {
+	if !s.m.pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence) || !s.m.pg.GetBool(db.SettingCredentialAgent, false) {
 		writeErr(w, 409, "请先开启 Agent 开关")
 		return
 	}

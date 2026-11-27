@@ -187,8 +187,8 @@ export const settingsMessages = {
   "settings.captureOff": ["已关闭 · 不记录、不注入代理", "Disabled · No recording or proxy settings"],
   "settings.trafficBinding": ["Agent 自动绑定流量", "Automatic Agent traffic binding"],
   "settings.trafficBindingHelp": [
-    "默认关闭。开启后，漏洞入库时触发的报告 Agent 会核对已有 HTTP 请求/响应，关联对应流量后再编写报告。",
-    "Disabled by default. When a finding is saved, the report Agent reviews existing HTTP requests and responses and links matching traffic before writing the report. ",
+    "默认开启。开启后，漏洞入库时触发的报告 Agent 会核对已有 HTTP 请求/响应，关联对应流量后再编写报告。",
+    "Enabled by default. When a finding is saved, the report Agent reviews existing HTTP requests and responses and links matching traffic before writing the report. ",
   ],
   "settings.trafficBindingCost": [
     "查阅数据包及额外的工具调用会增加 Token 消耗。",
@@ -389,8 +389,8 @@ export const settingsMessages = {
   ],
   "settings.autoRecord": ["Agent 自动记录", "Automatic Agent recording"],
   "settings.autoRecordHelp": [
-    "默认关闭。任务执行时上报凭据、重要线索和敏感数据，会增加任务 Agent 的提示与上报 Token。仅负责记录，不启动凭据整理。关闭后同时停用下方 Agent 与流量绑定，已有情报和整理结果仍可查看。",
-    "Disabled by default. Reporting credentials, leads and sensitive data uses additional Agent instruction and reporting tokens. This only records data; it does not start credential processing. Disabling it also disables the Agent and traffic binding below. Existing intelligence and processed results remain available.",
+    "默认开启。任务执行时上报凭据、重要线索和敏感数据，会增加任务 Agent 的提示与上报 Token。仅负责记录，不启动凭据整理。关闭后同时停用下方 Agent 与流量绑定，已有情报和整理结果仍可查看。",
+    "Enabled by default. Reporting credentials, leads and sensitive data uses additional Agent instruction and reporting tokens. This only records data; it does not start credential processing. Disabling it also disables the Agent and traffic binding below. Existing intelligence and processed results remain available.",
   ],
   "settings.autoRecordEnabled": ["任务情报自动记录已开启", "Automatic intelligence recording enabled"],
   "settings.autoRecordDisabled": ["任务情报自动记录已关闭", "Automatic intelligence recording disabled"],

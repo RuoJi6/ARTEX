@@ -12,7 +12,7 @@ func TestCredentialSwitchDependencyAndLeases(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	oldRecording := d.GetBool(SettingTaskIntelligence, false)
+	oldRecording := d.GetBool(SettingTaskIntelligence, DefaultTaskIntelligence)
 	oldAgent, oldBinding := d.GetBool(SettingCredentialAgent, false), d.GetBool(SettingCredentialTraffic, false)
 	defer func() {
 		_ = d.SetBool(SettingTaskIntelligence, oldRecording)

@@ -23,7 +23,7 @@ import (
 // hostTools, if set, returns runtime host tools (currently the traffic tools when
 // capture is on) to add to EVERY agent's base list — the DB tools table then
 // filters them per-agent binding. Empty/nil → no host tools this run (capture off).
-func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.CoreTool, map[string][]string)) {
+func wireAgentAugment(pg *db.DB, skillDir, defaultWorkDir string, hostTools func() ([]actool.CoreTool, map[string][]string)) {
 	agent.ToolAugment = func(ctx context.Context, agentKey string) ([]actool.CoreTool, agent.DeferredInfo, func()) {
 		a, err := pg.GetAgentByKey(agentKey)
 		if err != nil || a == nil {
@@ -84,7 +84,11 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				if !directVisible && !skillGated {
 					continue // neither directly visible nor referenced by a visible skill
 				}
-				cl, err := connectMCP(ctx, m)
+				mcpWorkDir := agent.RunInfoFrom(ctx).WorkDir
+				if mcpWorkDir == "" {
+					mcpWorkDir = defaultWorkDir
+				}
+				cl, err := connectMCP(ctx, m, mcpWorkDir)
 				if err != nil {
 					log.Printf("[mcp] %s 连接失败: %v", m.Name, err)
 					continue
@@ -100,7 +104,7 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					// it opt-in so a normal browser MCP session does not unexpectedly send
 					// image payloads to the model or consume extra tokens.
 					if m.Name == browserMCPName && isBrowserScreenshotTool(t.Name()) &&
-						(agentKey != "reporter" || !pg.GetBool(settingBrowserScreenshot, false)) {
+						(agentKey != "reporter" || !pg.GetBool(settingBrowserScreenshot, defaultBrowserScreenshot)) {
 						continue
 					}
 					extra = append(extra, t)
@@ -223,10 +227,10 @@ func seedPrompts(pg *db.DB) {
 // flag and, if kept, wrapped so the model sees the DB-overridden description/schema
 // and缺省入参 get injected. MCP/skill/host tools have no row and pass through.
 func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
-	agent.FindingTrafficBindingEnabled = func() bool { return pg.GetBool(settingAgentTrafficBinding, false) }
-	agent.IntelligenceEnabled = func() bool { return pg.GetBool(db.SettingTaskIntelligence, false) }
+	agent.FindingTrafficBindingEnabled = func() bool { return pg.GetBool(settingAgentTrafficBinding, defaultAgentTrafficBinding) }
+	agent.IntelligenceEnabled = func() bool { return pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence) }
 	agent.IntelligenceRecord = func(ctx context.Context, taskID, nodeID int64, worker string, input db.IntelligenceInput) (int64, error) {
-		if !pg.GetBool(db.SettingTaskIntelligence, false) {
+		if !pg.GetBool(db.SettingTaskIntelligence, db.DefaultTaskIntelligence) {
 			return 0, fmt.Errorf("任务情报自动记录已关闭")
 		}
 		item, err := pg.RecordIntelligence(ctx, taskID, nodeID, worker, input)
