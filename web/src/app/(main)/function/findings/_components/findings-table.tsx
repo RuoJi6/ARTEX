@@ -12,6 +12,7 @@ import {
   FolderOpenIcon,
   RotateCcwIcon,
   ShieldAlertIcon,
+  StickyNoteIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -67,11 +68,12 @@ export const FINDING_STATUSES: FindingStatus[] = [
 
 export const UNASSIGNED_TASK = "__unassigned__";
 
-// 行内编辑缓冲:当前展开行的名称/类别/严重等级。
+// 行内编辑缓冲:当前展开行的名称/类别/严重等级/备注。
 export interface FindingEdit {
   name: string;
   vulnclass: string;
   severity: Severity;
+  remark: string;
 }
 
 export type FindingReport = { status: "loading" | "done" | "error"; text: string };
@@ -287,6 +289,15 @@ export function FindingsTable({
                       </span>
                     )}
                     <span className="truncate text-xs text-muted-foreground">{f.summary}</span>
+                    {f.remark ? (
+                      <span
+                        className="inline-flex min-w-0 items-center gap-1 truncate text-xs text-amber-700 dark:text-amber-400"
+                        title={f.remark}
+                      >
+                        <StickyNoteIcon className="size-3 shrink-0" />
+                        <span className="truncate">{f.remark}</span>
+                      </span>
+                    ) : null}
                     {matchedIds && !matchedIds.includes(Number(f.finding_id)) ? (
                       <Badge variant="outline" className="w-fit">
                         {ui("screen.7852ff0b787df8")}
@@ -434,6 +445,14 @@ export function FindingsTable({
                                 ))}
                               </SelectContent>
                             </Select>
+                          </div>
+                          <div className="flex min-w-[14rem] flex-1 flex-col gap-1">
+                            <Label className="text-xs text-muted-foreground">{ui("findingDetail.remark")}</Label>
+                            <Input
+                              value={edit.remark}
+                              onChange={(e) => onEditChange((s) => (s ? { ...s, remark: e.target.value } : s))}
+                              placeholder={ui("findingDetail.remarkPlaceholder")}
+                            />
                           </div>
                           <Button size="sm" disabled={saving} onClick={() => onSave(f)}>
                             {saving ? ui("screen.ff509c9ba052a2") : ui("screen.a3030bf8f16dc6")}

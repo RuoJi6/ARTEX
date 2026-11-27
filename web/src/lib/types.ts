@@ -6,6 +6,7 @@ export type EngineMode = "exploring" | "paused" | "stalled" | "idle";
 
 // Keep these limits aligned with db.MaxTaskRemarkRunes and db.MaxTaskWorkerCount.
 export const MAX_TASK_REMARK_RUNES = 2000;
+export const MAX_FINDING_REMARK_RUNES = 2000;
 export const MAX_TASK_WORKER_COUNT = 50;
 
 // Parse the optional worker-count input without silently changing invalid values.
@@ -538,6 +539,7 @@ export interface Finding {
   status: FindingStatus;
   summary: string;
   evidence: string;
+  remark?: string; // 人工备注
   report?: string; // 详细报告(Markdown);仅详情接口返回,列表为空
   report_conversation_id?: number;
   intent_id?: string;

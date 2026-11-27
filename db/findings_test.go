@@ -644,3 +644,97 @@ func TestDeleteFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFindingRemarkAndManualEdit(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+
+	vc := fmt.Sprintf("__test_finding_remark_%d__", time.Now().UnixNano())
+	tk, err := d.CreateTask("remark test", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM findings WHERE vulnclass=$1`, vc)
+		_ = d.DeleteTask(tk.ID)
+	})
+
+	es := d.Exploration(tk.ExplorationID)
+	nodeID, err := es.AddNode(KindFinding, map[string]any{
+		"vulnclass": vc,
+		"name":      "old title",
+		"severity":  SeverityMedium,
+		"summary":   "old summary",
+		"evidence":  "old proof",
+	}, 5, "confirmed", "tester", nil)
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	fid, err := d.AddFinding(tk.ID, nodeID, vc, "old title", SeverityMedium, "old summary", "old proof", "tester", nil)
+	if err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+
+	if n, err := d.SetFindingRemark(fid, "  已人工复核，需要内网 Cookie  "); err != nil || n != 1 {
+		t.Fatalf("SetFindingRemark: n=%d err=%v", n, err)
+	}
+	if n, err := d.SetFindingSummary(fid, "updated summary"); err != nil || n != 1 {
+		t.Fatalf("SetFindingSummary: n=%d err=%v", n, err)
+	}
+	if n, err := d.SetFindingEvidence(fid, "GET /admin HTTP/1.1"); err != nil || n != 1 {
+		t.Fatalf("SetFindingEvidence: n=%d err=%v", n, err)
+	}
+	if n, err := d.SetFindingReport(fid, "## 手工报告\n已确认"); err != nil || n != 1 {
+		t.Fatalf("SetFindingReport: n=%d err=%v", n, err)
+	}
+
+	got, err := d.GetFinding(fid)
+	if err != nil || got == nil {
+		t.Fatalf("GetFinding: got=%+v err=%v", got, err)
+	}
+	if got.Remark != "已人工复核，需要内网 Cookie" || got.Summary != "updated summary" || got.Evidence != "GET /admin HTTP/1.1" || got.Report != "## 手工报告\n已确认" {
+		t.Fatalf("unexpected updated finding: %+v", got)
+	}
+
+	// Search must match remark.
+	matches, total, err := d.ListFindingsPage(FindingFilter{VulnClass: vc, Query: "内网 Cookie"}, 1, 20)
+	if err != nil || total != 1 || len(matches) != 1 || matches[0].ID != fid || matches[0].Remark != got.Remark {
+		t.Fatalf("search by remark failed: matches=%+v total=%d err=%v", matches, total, err)
+	}
+
+	// Per-task metadata must expose remark and updated evidence.
+	meta, err := d.FindingMetaByNodeID(tk.ID)
+	if err != nil {
+		t.Fatalf("FindingMetaByNodeID: %v", err)
+	}
+	if m := meta[nodeID]; m.Remark != got.Remark || m.Evidence != "GET /admin HTTP/1.1" {
+		t.Fatalf("FindingMetaByNodeID mismatch: %+v", m)
+	}
+
+	// Over-limit remark must be rejected without modifying stored value.
+	tooLong := strings.Repeat("备", MaxFindingRemarkRunes+1)
+	if _, err := d.SetFindingRemark(fid, tooLong); err == nil {
+		t.Fatal("expected over-limit remark to fail")
+	}
+	afterErr, _ := d.GetFinding(fid)
+	if afterErr.Remark != got.Remark {
+		t.Fatalf("remark mutated on error: %q", afterErr.Remark)
+	}
+
+	// Clearing remark to empty string must succeed.
+	if n, err := d.SetFindingRemark(fid, "   "); err != nil || n != 1 {
+		t.Fatalf("clear remark: n=%d err=%v", n, err)
+	}
+	cleared, _ := d.GetFinding(fid)
+	if cleared.Remark != "" {
+		t.Fatalf("expected empty remark, got %q", cleared.Remark)
+	}
+
+	// Unknown IDs return 0 affected rows.
+	if n, err := d.SetFindingRemark(-1, "x"); err != nil || n != 0 {
+		t.Fatalf("SetFindingRemark(-1): n=%d err=%v", n, err)
+	}
+}

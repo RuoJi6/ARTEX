@@ -4,8 +4,16 @@ import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
-import { ArrowLeftIcon, ArrowUpRightIcon, BotIcon, FileTextIcon, Loader2Icon, ShieldAlertIcon } from "lucide-react";
-import { useTranslation } from "react-i18next";
+import {
+  ArrowLeftIcon,
+  ArrowUpRightIcon,
+  BotIcon,
+  FileTextIcon,
+  Loader2Icon,
+  PencilIcon,
+  ShieldAlertIcon,
+  StickyNoteIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
@@ -23,11 +31,16 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { taskError } from "@/i18n/task-runtime";
+import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import { statusMeta } from "@/lib/status";
-import type { Finding, FindingStatus, Severity } from "@/lib/types";
+import { type Finding, type FindingStatus, MAX_FINDING_REMARK_RUNES, type Severity } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
+import { FindingEditDialog } from "./finding-edit-dialog";
 import { FindingLineageView } from "./lineage";
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
@@ -66,7 +79,7 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
 function FindingDetailInner() {
   const { ui, liveUI } = useUITranslation();
 
-  const { t } = useTranslation();
+  const { t, liveT } = useLiveTranslation();
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
   const contextTaskId = searchParams.get("context_task") ?? "";
@@ -77,6 +90,10 @@ function FindingDetailInner() {
   const [reportGenerating, setReportGenerating] = React.useState(false);
   const [autoChatOpen, setAutoChatOpen] = React.useState(false);
   const [reportChatOpen, setReportChatOpen] = React.useState(false);
+  const [editOpen, setEditOpen] = React.useState(false);
+  const [remarkEditing, setRemarkEditing] = React.useState(false);
+  const [remarkDraft, setRemarkDraft] = React.useState("");
+  const [remarkSaving, setRemarkSaving] = React.useState(false);
   const title = finding?.name || finding?.vulnclass || ui("screen.54b89f90127458");
 
   const load = React.useCallback(() => {
@@ -93,6 +110,12 @@ function FindingDetailInner() {
   React.useEffect(() => {
     load();
   }, [load]);
+
+  React.useEffect(() => {
+    if (!remarkEditing) {
+      setRemarkDraft(finding?.remark ?? "");
+    }
+  }, [finding?.remark, remarkEditing]);
 
   const changeSeverity = React.useCallback(
     async (next: Severity) => {
@@ -144,6 +167,43 @@ function FindingDetailInner() {
       setReportGenerating(false);
     }
   }, [finding, id, load, reportGenerating, liveUI]);
+
+  const trimmedRemarkDraft = remarkDraft.trim();
+  const remarkRunes = Array.from(trimmedRemarkDraft).length;
+  const remarkTooLong = remarkRunes > MAX_FINDING_REMARK_RUNES;
+
+  const startRemarkEdit = React.useCallback(() => {
+    if (!finding || finding.inherited) return;
+    setRemarkDraft(finding.remark ?? "");
+    setRemarkEditing(true);
+  }, [finding]);
+
+  const cancelRemarkEdit = React.useCallback(() => {
+    if (remarkSaving) return;
+    setRemarkDraft(finding?.remark ?? "");
+    setRemarkEditing(false);
+  }, [finding?.remark, remarkSaving]);
+
+  const saveRemark = React.useCallback(async () => {
+    if (!finding || finding.inherited || remarkSaving || remarkTooLong) return;
+    const next = remarkDraft.trim();
+    if (next === (finding.remark ?? "").trim()) {
+      setRemarkEditing(false);
+      return;
+    }
+    setRemarkSaving(true);
+    try {
+      const updated = await api.updateFinding(id, { remark: next });
+      setFinding(updated);
+      setRemarkDraft(updated.remark ?? "");
+      setRemarkEditing(false);
+      toast.success(next ? liveUI("findingDetail.remarkSaved") : liveUI("findingDetail.remarkCleared"));
+    } catch (e) {
+      toast.error(liveUI("screen.20e1b0f2590bc7", { v0: taskError(e, liveT) }));
+    } finally {
+      setRemarkSaving(false);
+    }
+  }, [finding, id, liveT, liveUI, remarkDraft, remarkSaving, remarkTooLong]);
 
   if (!finding) {
     return (
@@ -213,6 +273,17 @@ function FindingDetailInner() {
               >
                 <FileTextIcon data-icon="inline-start" />
                 {ui("screen.552b1bc6b1d807")}
+              </Button>
+            ) : null}
+            {!finding.inherited ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEditOpen(true)}
+                title={ui("findingDetail.editTitle")}
+              >
+                <PencilIcon data-icon="inline-start" />
+                {ui("findingDetail.editButton")}
               </Button>
             ) : null}
             {finding.inherited && finding.source_task_id && (
@@ -426,6 +497,110 @@ function FindingDetailInner() {
                     </FieldRow>
                   </CardContent>
                 </Card>
+                <Card className="h-fit">
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                    <CardTitle className="flex items-center gap-1.5 text-sm">
+                      <StickyNoteIcon className="size-4 text-muted-foreground" />
+                      {ui("findingDetail.remark")}
+                    </CardTitle>
+                    {!finding.inherited && !remarkEditing ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={startRemarkEdit}
+                      >
+                        <PencilIcon data-icon="inline-start" className="size-3.5" />
+                        {finding.remark ? ui("findingDetail.editRemark") : ui("findingDetail.addRemark")}
+                      </Button>
+                    ) : null}
+                  </CardHeader>
+                  <CardContent>
+                    {remarkEditing && !finding.inherited ? (
+                      <div className="flex flex-col gap-2">
+                        <Textarea
+                          autoFocus
+                          rows={4}
+                          value={remarkDraft}
+                          disabled={remarkSaving}
+                          aria-label={ui("findingDetail.remark")}
+                          aria-invalid={remarkTooLong}
+                          placeholder={ui("findingDetail.remarkPlaceholder")}
+                          onChange={(e) => setRemarkDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.nativeEvent.isComposing) return;
+                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                              e.preventDefault();
+                              void saveRemark();
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              cancelRemarkEdit();
+                            }
+                          }}
+                        />
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="text-muted-foreground">{ui("findingDetail.remarkHint")}</span>
+                          <span
+                            className={cn(
+                              "shrink-0 tabular-nums",
+                              remarkTooLong ? "text-destructive" : "text-muted-foreground",
+                            )}
+                          >
+                            {remarkRunes} / {MAX_FINDING_REMARK_RUNES}
+                          </span>
+                        </div>
+                        {remarkTooLong ? (
+                          <p role="alert" className="text-xs text-destructive">
+                            {ui("findingDetail.remarkTooLong", { max: MAX_FINDING_REMARK_RUNES })}
+                          </p>
+                        ) : null}
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={cancelRemarkEdit}
+                            disabled={remarkSaving}
+                          >
+                            {ui("common.cancel")}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => void saveRemark()}
+                            disabled={remarkSaving || remarkTooLong}
+                          >
+                            {remarkSaving ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : null}
+                            {remarkSaving ? ui("screen.ff509c9ba052a2") : ui("screen.a3030bf8f16dc6")}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : finding.remark ? (
+                      finding.inherited ? (
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{finding.remark}</p>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={startRemarkEdit}
+                          className="w-full rounded-md text-left text-sm leading-relaxed whitespace-pre-wrap break-words hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          {finding.remark}
+                        </button>
+                      )
+                    ) : finding.inherited ? (
+                      <p className="text-xs text-muted-foreground">{ui("findingDetail.remarkEmptyReadOnly")}</p>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={startRemarkEdit}
+                        className="w-full rounded-md border border-dashed px-3 py-2.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {ui("findingDetail.remarkEmpty")}
+                      </button>
+                    )}
+                  </CardContent>
+                </Card>
                 <FindingRetestPanel
                   key={`retest:${id}`}
                   findingId={id}
@@ -454,6 +629,17 @@ function FindingDetailInner() {
         open={reportChatOpen}
         onOpenChange={setReportChatOpen}
       />
+      {!finding.inherited ? (
+        <FindingEditDialog
+          finding={finding}
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          onSaved={(updated) => {
+            setFinding(updated);
+            if (!remarkEditing) setRemarkDraft(updated.remark ?? "");
+          }}
+        />
+      ) : null}
     </>
   );
 }

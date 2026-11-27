@@ -1,5 +1,6 @@
 import { chatUIMessages } from "./chat-ui-messages";
 import { errorMessages } from "./error-messages";
+import { findingMessages } from "./finding-messages";
 import { inlineEditorMessages } from "./inline-editor-messages";
 import { notifyMessages } from "./notify-messages";
 import { overviewMessages } from "./overview-messages";
@@ -16,6 +17,7 @@ export const messages = {
   ...termsMessages,
   ...taskMessages,
   ...notifyMessages,
+  ...findingMessages,
   ...inlineEditorMessages,
   ...scheduleMessages,
   ...chatUIMessages,

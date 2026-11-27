@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
@@ -2620,10 +2621,10 @@ func (s *Server) findingLineage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"nodes": taskNodeDTOs(nodes), "edges": edgeDTOs(edges)})
 }
 
-// patchFinding partially updates a finding: any subset of {status, severity}.
-// The id is the standalone findings-table id (DTO finding_id). Severity edits are
-// mirrored onto the originating exploration node so the per-task view stays in
-// sync. Returns the updated finding DTO.
+// patchFinding partially updates a finding: any subset of {status, severity, name, vulnclass,
+// summary, evidence, report, remark}. The id is the standalone findings-table id (DTO finding_id).
+// Core text fields are mirrored onto the originating exploration node so the per-task view stays
+// in sync. Returns the updated finding DTO.
 func (s *Server) patchFinding(w http.ResponseWriter, r *http.Request) {
 	id := int64(atoiDefault(r.PathValue("id"), 0))
 	if id <= 0 {
@@ -2635,20 +2636,38 @@ func (s *Server) patchFinding(w http.ResponseWriter, r *http.Request) {
 		Severity  *string `json:"severity"`
 		Name      *string `json:"name"`
 		VulnClass *string `json:"vulnclass"`
+		Summary   *string `json:"summary"`
+		Evidence  *string `json:"evidence"`
+		Report    *string `json:"report"`
+		Remark    *string `json:"remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, 400, "bad json: "+err.Error())
 		return
 	}
-	if body.Status == nil && body.Severity == nil && body.Name == nil && body.VulnClass == nil {
-		writeErr(w, 400, "nothing to update: provide status/severity/name/vulnclass")
+	if body.Status == nil && body.Severity == nil && body.Name == nil && body.VulnClass == nil &&
+		body.Summary == nil && body.Evidence == nil && body.Report == nil && body.Remark == nil {
+		writeErr(w, 400, "nothing to update: provide status/severity/name/vulnclass/summary/evidence/report/remark")
 		return
 	}
-	if body.Status != nil {
-		if !db.ValidFindingStatus(*body.Status) {
-			writeErr(w, 400, "bad status: "+*body.Status)
+	// Validate all fields before mutating so invalid input never leaves partial writes.
+	if body.Status != nil && !db.ValidFindingStatus(*body.Status) {
+		writeErr(w, 400, "bad status: "+*body.Status)
+		return
+	}
+	if body.Severity != nil && !db.ValidSeverity(*body.Severity) {
+		writeErr(w, 400, "bad severity: "+*body.Severity)
+		return
+	}
+	var remark string
+	if body.Remark != nil {
+		remark = strings.TrimSpace(*body.Remark)
+		if utf8.RuneCountInString(remark) > db.MaxFindingRemarkRunes {
+			writeErr(w, 400, fmt.Sprintf("备注最多 %d 个字符", db.MaxFindingRemarkRunes))
 			return
 		}
+	}
+	if body.Status != nil {
 		// 走带通知的版本：状态更新与「状态变更推送事件」在同一事务里落库，
 		// 避免出现状态已改而推送事件丢失的窗口。事件登记失败不影响状态更新，
 		// 所以只记日志、不向调用方报错。
@@ -2666,10 +2685,6 @@ func (s *Server) patchFinding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.Severity != nil {
-		if !db.ValidSeverity(*body.Severity) {
-			writeErr(w, 400, "bad severity: "+*body.Severity)
-			return
-		}
 		n, err := s.m.pg.SetFindingSeverity(id, *body.Severity)
 		if err != nil {
 			writeErr(w, 500, err.Error())
@@ -2702,6 +2717,58 @@ func (s *Server) patchFinding(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if body.Summary != nil {
+		n, err := s.m.pg.SetFindingSummary(id, strings.TrimSpace(*body.Summary))
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		if n == 0 {
+			writeErr(w, 404, "finding not found")
+			return
+		}
+	}
+	if body.Evidence != nil {
+		ev := *body.Evidence
+		if strings.TrimSpace(ev) == "" {
+			ev = ""
+		}
+		n, err := s.m.pg.SetFindingEvidence(id, ev)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		if n == 0 {
+			writeErr(w, 404, "finding not found")
+			return
+		}
+	}
+	if body.Report != nil {
+		rep := *body.Report
+		if strings.TrimSpace(rep) == "" {
+			rep = ""
+		}
+		n, err := s.m.pg.SetFindingReport(id, rep)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		if n == 0 {
+			writeErr(w, 404, "finding not found")
+			return
+		}
+	}
+	if body.Remark != nil {
+		n, err := s.m.pg.SetFindingRemark(id, remark)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		if n == 0 {
+			writeErr(w, 404, "finding not found")
+			return
+		}
+	}
 	f, err := s.m.pg.GetFinding(id)
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -2711,7 +2778,16 @@ func (s *Server) patchFinding(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "finding not found")
 		return
 	}
-	writeJSON(w, 200, findingFromDB(f, s.resolveAssetIDs(f.AssetIDs)))
+	dto := findingFromDB(f, s.resolveAssetIDs(f.AssetIDs))
+	cid, err := s.m.pg.FindingCaseID(f.ID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if cid > 0 {
+		dto.CaseID = i64s(cid)
+	}
+	writeJSON(w, 200, dto)
 }
 
 // deleteFinding removes a finding (findings row + originating exploration node).

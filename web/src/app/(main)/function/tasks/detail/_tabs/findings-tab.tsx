@@ -3,7 +3,14 @@ import * as React from "react";
 
 import Link from "next/link";
 
-import { ArrowDownIcon, ArrowUpIcon, ArrowUpRightIcon, ChevronRightIcon, SearchIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  ArrowUpRightIcon,
+  ChevronRightIcon,
+  SearchIcon,
+  StickyNoteIcon,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
@@ -80,6 +87,15 @@ function Row({
               )}
             </div>
             <span className="truncate text-xs text-muted-foreground">{f.summary}</span>
+            {f.remark ? (
+              <span
+                className="inline-flex min-w-0 items-center gap-1 truncate text-xs text-amber-700 dark:text-amber-400"
+                title={f.remark}
+              >
+                <StickyNoteIcon className="size-3 shrink-0" />
+                <span className="truncate">{f.remark}</span>
+              </span>
+            ) : null}
           </div>
         </button>
         <Badge variant="outline">
