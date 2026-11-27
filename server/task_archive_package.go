@@ -577,11 +577,13 @@ func writeTaskArchivePackage(path, payloadDir string, snapshot *pgdb.TaskArchive
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
+		if !info.IsDir() && !info.Mode().IsRegular() {
 			// 归档格式端到端只支持普通文件与目录（解包端对其它类型直接报错），
-			// 无法还原符号链接。跳过而非整包失败：不读取链接目标(lstat，不越出目录树)，
-			// 也不写入 symlink 条目；链接指向树内时目标文件本身仍会被单独遍历归档。
-			log.Printf("[task-archive] 跳过符号链接（归档不支持，不影响其它文件）：%s", current)
+			// 无法还原符号链接、Unix socket、命名管道等特殊文件。跳过而非整包失败：
+			// 不跟随符号链接（lstat，不越出目录树），避免 tar.FileInfoHeader 对 socket
+			// 报错或 os.Open 对 FIFO 阻塞，也不写入不支持的条目；符号链接指向树内时目标
+			// 文件本身仍会被单独遍历归档。
+			log.Printf("[task-archive] 跳过%s（归档不支持，不影响其它文件）：%s", unsupportedArchiveEntryKind(info.Mode()), filepath.ToSlash(relative))
 			return nil
 		}
 		header, err := tar.FileInfoHeader(info, "")
@@ -636,6 +638,21 @@ func writeTaskArchivePackage(path, payloadDir string, snapshot *pgdb.TaskArchive
 	}
 	committed = true
 	return originalSize, compressedSize, checksum, nil
+}
+
+func unsupportedArchiveEntryKind(mode fs.FileMode) string {
+	switch {
+	case mode&fs.ModeSymlink != 0:
+		return "符号链接"
+	case mode&fs.ModeSocket != 0:
+		return "Unix socket"
+	case mode&fs.ModeNamedPipe != 0:
+		return "命名管道"
+	case mode&fs.ModeDevice != 0:
+		return "设备文件"
+	default:
+		return fmt.Sprintf("特殊文件(%s)", mode.Type())
+	}
 }
 
 func extractTaskArchivePackage(path, expectedSHA, destination string) error {
