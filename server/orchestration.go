@@ -70,6 +70,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 		s.toolSpawnTask(),
 		s.toolPauseTask(),
 		s.toolGetTaskGraph(),
+		s.toolGetTaskReview(),
 		s.toolListTaskFindings(),
 		s.toolAddHint(),
 		s.toolGetWorkerTrace(),
