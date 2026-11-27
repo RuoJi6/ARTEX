@@ -127,6 +127,7 @@ func (s *Server) mcpTools() []mcpTool {
 				"parent_ref":        strParam("可选：父任务 id，做父子关联"),
 				"timeout_seconds":   intParam("可选：任务级超时(秒)，到点后收尾并结束；省略或 0 = 不限时"),
 				"seed_first_intent": map[string]any{"type": "boolean", "description": "可选：简单任务可开启，跳过首轮规划直接开始测试；默认 false"},
+				"output_language":   outputLanguageParam(),
 			}, "goal"),
 			Run: s.mcpSpawnTask,
 		},
@@ -396,6 +397,7 @@ func (s *Server) mcpSpawnTask(_ context.Context, token *db.APIToken, in json.Raw
 		ParentRef       json.RawMessage `json:"parent_ref"`
 		TimeoutSeconds  int             `json:"timeout_seconds"`
 		SeedFirstIntent bool            `json:"seed_first_intent"`
+		OutputLanguage  string          `json:"output_language"`
 	}
 	if err := json.Unmarshal(in, &a); err != nil {
 		return actool.Errorf("参数无效: " + err.Error()), nil
@@ -407,12 +409,14 @@ func (s *Server) mcpSpawnTask(_ context.Context, token *db.APIToken, in json.Raw
 		a.CategoryID = nil
 	}
 	parentRef := ""
+	var parentTask *Task
 	if raw := mcpIDString(a.ParentRef); raw != "" {
 		parent, ok := s.mcpLookupTask(token, raw)
 		if !ok {
 			return actool.Errorf("父任务不存在: " + raw), nil
 		}
 		parentRef = parent.ID
+		parentTask = parent
 	}
 	if msg := s.mcpCheckCompanyScope(token, a.CompanyIDs, a.Description+" "+a.Goal); msg != "" {
 		return actool.Errorf(msg), nil
@@ -423,6 +427,7 @@ func (s *Server) mcpSpawnTask(_ context.Context, token *db.APIToken, in json.Raw
 		TimeoutSeconds:  a.TimeoutSeconds,
 		SeedFirstIntent: &a.SeedFirstIntent,
 		Remark:          "通过 MCP 创建（访问令牌：" + token.Name + "）",
+		OutputLanguage:  spawnOutputLanguage(a.OutputLanguage, parentTask),
 	}
 	if id := parseProfileID(a.LLMProfileID); id > 0 {
 		req.LLMProfileIDs = []int64{id}

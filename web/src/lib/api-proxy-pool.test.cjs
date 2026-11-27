@@ -20,6 +20,7 @@ function client(payload) {
     require: (id) => {
       if (id === "@/lib/mock/enabled") return { MOCK: false };
       if (id === "@/lib/mock/handler") return { mockHandle: () => assert.fail("unexpected demo request") };
+      if (id === "@/i18n/config") return require("../i18n/config.ts");
       throw new Error(`Unexpected runtime import: ${id}`);
     },
     fetch: async () => ({ ok: true, status: 200, json: async () => payload }),

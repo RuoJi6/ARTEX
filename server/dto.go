@@ -78,6 +78,7 @@ type TaskDTO struct {
 	NoResultMinFindings int    `json:"no_result_min_findings"`
 	NoResultMinSeverity string `json:"no_result_min_severity"`
 	StopReason          string `json:"stop_reason"`
+	OutputLanguage      string `json:"output_language"` // "zh" or "en": the language the task's LLM agents write in
 }
 
 type ProxyReconnectDTO struct {
@@ -178,6 +179,7 @@ func taskDTO(t *Task, status string) TaskDTO {
 		NoResultMinFindings: t.NoResultMinFindings,
 		NoResultMinSeverity: t.NoResultMinSeverity,
 		StopReason:          lifecycle.StopReason,
+		OutputLanguage:      db.NormalizeOutputLanguage(t.OutputLanguage),
 	}
 }
 

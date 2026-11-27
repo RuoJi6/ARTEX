@@ -24,6 +24,7 @@ vm.runInNewContext(
     require: (id) => {
       if (id === "@/lib/mock/enabled") return { MOCK: true };
       if (id === "@/lib/mock/handler") return { mockHandle };
+      if (id === "@/i18n/config") return require("../i18n/config.ts");
       throw new Error(`Unexpected import: ${id}`);
     },
     fetch: () => {

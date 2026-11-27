@@ -328,6 +328,7 @@ func restoreTaskStub(tx *sql.Tx, row map[string]any, taskID, remaining int64) er
  no_result_min_severity=COALESCE(archived.no_result_min_severity,''),
  no_result_base_seconds=COALESCE(archived.no_result_base_seconds,0),
  no_result_checked_at=archived.no_result_checked_at,stop_reason=COALESCE(archived.stop_reason,''),
+ output_language=COALESCE(archived.output_language,'zh'),
  coverage_enabled=archived.coverage_enabled,share_global_assets=COALESCE(archived.share_global_assets,false),worker_count=COALESCE(archived.worker_count,0),pinned_at=archived.pinned_at,first_run_at=archived.first_run_at,
  deadline_at=CASE WHEN archived.paused AND $3>0 THEN now()+make_interval(secs=>$3::double precision)
                   ELSE archived.deadline_at END,
